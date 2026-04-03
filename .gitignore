@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Project Specific Caches
+cache/
+final_scripts/cache/
+core_data/*.npy
+core_data/*.graphml
+core_data/weather_status.json
+core_data/benchmark_results.json
+
+# Production Outputs
+production_output/*.json
+production_output/*.html
+daily_reports/
+
+# LaTeX temporary files (already handled by purge script but good for git)
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.pdf
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo

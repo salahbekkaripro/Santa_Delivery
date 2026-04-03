@@ -1,0 +1,2103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_75c90a0a6a156fd1535bf1454c57eafb {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-ant-path@1.1.2/dist/leaflet-ant-path.min.js"></script>
+</head>
+<body>
+    
+    
+     <div style="position: fixed; 
+                 bottom: 50px; left: 50px; width: 250px; height: auto; 
+                 border:2px solid grey; z-index:9999; font-size:14px;
+                 background-color:white; opacity: 0.9; padding: 10px;">
+     <b>Récapitulatif Noël 🎅</b><br>
+     <i class="fa fa-truck" style="color:black"></i> Total: 22.96 km<br>
+     <i class="fa fa-gift" style="color:black"></i> Livré: 497.0 kg<br>
+     <i class="fa fa-times-circle" style="color:grey"></i> Non livrés: 9<br>
+     <hr>
+    <i class="fa fa-circle" style="color:red"></i> Tournée 1: 6.34km<br><i class="fa fa-circle" style="color:blue"></i> Tournée 2: 4.26km<br><i class="fa fa-circle" style="color:green"></i> Tournée 3: 4.74km<br><i class="fa fa-circle" style="color:purple"></i> Tournée 4: 2.77km<br><i class="fa fa-circle" style="color:orange"></i> Tournée 5: 4.85km<br></div>
+    
+            <div class="folium-map" id="map_75c90a0a6a156fd1535bf1454c57eafb" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_75c90a0a6a156fd1535bf1454c57eafb = L.map(
+                "map_75c90a0a6a156fd1535bf1454c57eafb",
+                {
+                    center: [48.8448, 2.3471],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 14,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_5d41b823d60d36f55d77fcfe1713d223 = L.tileLayer(
+                "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 20,
+  "maxNativeZoom": 20,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors \u0026copy; \u003ca href=\"https://carto.com/attributions\"\u003eCARTO\u003c/a\u003e",
+  "subdomains": "abcd",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_5d41b823d60d36f55d77fcfe1713d223.addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var circle_marker_bfadc83faf24b812e3a6283a45589aca = L.circleMarker(
+                [48.84410183416117, 2.347895466662728],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_05d7ba121b07d2192f412558e9056786 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_ff2ddce6440fac457e1104ed1622664d = $(`<div id="html_ff2ddce6440fac457e1104ed1622664d" style="width: 100.0%; height: 100.0%;">ID: 43<br>Lieu: Bâtiment 43 (OSM:57043464)<br>Poids: 17kg</div>`)[0];
+                popup_05d7ba121b07d2192f412558e9056786.setContent(html_ff2ddce6440fac457e1104ed1622664d);
+            
+        
+
+        circle_marker_bfadc83faf24b812e3a6283a45589aca.bindPopup(popup_05d7ba121b07d2192f412558e9056786)
+        ;
+
+        
+    
+    
+            circle_marker_bfadc83faf24b812e3a6283a45589aca.bindTooltip(
+                `<div>
+                     Point 43 (Tournée 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_da19e4782894dfbe05428b21b1a560ca = L.circleMarker(
+                [48.84361702750651, 2.3464421523747268],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_f67975c6684787f50e4c53ff39632d4c = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_667b8d73a2522df6270246cb156a2855 = $(`<div id="html_667b8d73a2522df6270246cb156a2855" style="width: 100.0%; height: 100.0%;">ID: 12<br>Lieu: Bâtiment 12 (OSM:56788051)<br>Poids: 7kg</div>`)[0];
+                popup_f67975c6684787f50e4c53ff39632d4c.setContent(html_667b8d73a2522df6270246cb156a2855);
+            
+        
+
+        circle_marker_da19e4782894dfbe05428b21b1a560ca.bindPopup(popup_f67975c6684787f50e4c53ff39632d4c)
+        ;
+
+        
+    
+    
+            circle_marker_da19e4782894dfbe05428b21b1a560ca.bindTooltip(
+                `<div>
+                     Point 12 (Tournée 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_84907705d07ca61985370878c44e983a = L.circleMarker(
+                [48.84336273261767, 2.346115215415084],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_3d1aa3eff754af55c66dca20b29dcc65 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_36f919fe6904f7bb9c1fa19017e37220 = $(`<div id="html_36f919fe6904f7bb9c1fa19017e37220" style="width: 100.0%; height: 100.0%;">ID: 9<br>Lieu: Bâtiment 9 (OSM:1414328)<br>Poids: 18kg</div>`)[0];
+                popup_3d1aa3eff754af55c66dca20b29dcc65.setContent(html_36f919fe6904f7bb9c1fa19017e37220);
+            
+        
+
+        circle_marker_84907705d07ca61985370878c44e983a.bindPopup(popup_3d1aa3eff754af55c66dca20b29dcc65)
+        ;
+
+        
+    
+    
+            circle_marker_84907705d07ca61985370878c44e983a.bindTooltip(
+                `<div>
+                     Point 9 (Tournée 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_3ac95f48c5e7ea84c17946748c05da8e = L.circleMarker(
+                [48.84128524832819, 2.3480501758453864],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_2c48ec92f57ab5a702ec45865b2deaac = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_9d86ac2fe581290822dec4e7bf425dda = $(`<div id="html_9d86ac2fe581290822dec4e7bf425dda" style="width: 100.0%; height: 100.0%;">ID: 49<br>Lieu: Bâtiment 49 (OSM:56693756)<br>Poids: 6kg</div>`)[0];
+                popup_2c48ec92f57ab5a702ec45865b2deaac.setContent(html_9d86ac2fe581290822dec4e7bf425dda);
+            
+        
+
+        circle_marker_3ac95f48c5e7ea84c17946748c05da8e.bindPopup(popup_2c48ec92f57ab5a702ec45865b2deaac)
+        ;
+
+        
+    
+    
+            circle_marker_3ac95f48c5e7ea84c17946748c05da8e.bindTooltip(
+                `<div>
+                     Point 49 (Tournée 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_4fc5ce7a34274bd344d2c90eca36753f = L.circleMarker(
+                [48.83958167983912, 2.347419944149364],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_d5522e4beecab4f76424c3986de39e3d = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_3bce166eb52031f0a131898542f27f63 = $(`<div id="html_3bce166eb52031f0a131898542f27f63" style="width: 100.0%; height: 100.0%;">ID: 5<br>Lieu: Bâtiment 5 (OSM:61285755)<br>Poids: 10kg</div>`)[0];
+                popup_d5522e4beecab4f76424c3986de39e3d.setContent(html_3bce166eb52031f0a131898542f27f63);
+            
+        
+
+        circle_marker_4fc5ce7a34274bd344d2c90eca36753f.bindPopup(popup_d5522e4beecab4f76424c3986de39e3d)
+        ;
+
+        
+    
+    
+            circle_marker_4fc5ce7a34274bd344d2c90eca36753f.bindTooltip(
+                `<div>
+                     Point 5 (Tournée 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_cb81a381d311717284f06a371a53e2ad = L.circleMarker(
+                [48.839695867810974, 2.356136377446163],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_487418e5f5f02beddd80889b330ca581 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_fbe15e319d6ef58bcf5aad5e43e01db1 = $(`<div id="html_fbe15e319d6ef58bcf5aad5e43e01db1" style="width: 100.0%; height: 100.0%;">ID: 18<br>Lieu: Bâtiment 18 (OSM:59544126)<br>Poids: 17kg</div>`)[0];
+                popup_487418e5f5f02beddd80889b330ca581.setContent(html_fbe15e319d6ef58bcf5aad5e43e01db1);
+            
+        
+
+        circle_marker_cb81a381d311717284f06a371a53e2ad.bindPopup(popup_487418e5f5f02beddd80889b330ca581)
+        ;
+
+        
+    
+    
+            circle_marker_cb81a381d311717284f06a371a53e2ad.bindTooltip(
+                `<div>
+                     Point 18 (Tournée 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_b4bc4b106fe05d3df35a40d501513d54 = L.circleMarker(
+                [48.84022778642223, 2.3610310637422445],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_c951674395e1530774bb3de1e3e75730 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_bf335927bc6fe7dc6035da4ff0a13d68 = $(`<div id="html_bf335927bc6fe7dc6035da4ff0a13d68" style="width: 100.0%; height: 100.0%;">ID: 38<br>Lieu: Bâtiment 38 (OSM:60892766)<br>Poids: 9kg</div>`)[0];
+                popup_c951674395e1530774bb3de1e3e75730.setContent(html_bf335927bc6fe7dc6035da4ff0a13d68);
+            
+        
+
+        circle_marker_b4bc4b106fe05d3df35a40d501513d54.bindPopup(popup_c951674395e1530774bb3de1e3e75730)
+        ;
+
+        
+    
+    
+            circle_marker_b4bc4b106fe05d3df35a40d501513d54.bindTooltip(
+                `<div>
+                     Point 38 (Tournée 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_93736181703c3281d43cc8aff5c079c5 = L.circleMarker(
+                [48.840654233821176, 2.3611289939463287],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_b5c31719be8077a2266b3308ccdbe8db = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_f5fe7863b31ef34ab8f05af77bc8b609 = $(`<div id="html_f5fe7863b31ef34ab8f05af77bc8b609" style="width: 100.0%; height: 100.0%;">ID: 22<br>Lieu: Bâtiment 22 (OSM:59292446)<br>Poids: 17kg</div>`)[0];
+                popup_b5c31719be8077a2266b3308ccdbe8db.setContent(html_f5fe7863b31ef34ab8f05af77bc8b609);
+            
+        
+
+        circle_marker_93736181703c3281d43cc8aff5c079c5.bindPopup(popup_b5c31719be8077a2266b3308ccdbe8db)
+        ;
+
+        
+    
+    
+            circle_marker_93736181703c3281d43cc8aff5c079c5.bindTooltip(
+                `<div>
+                     Point 22 (Tournée 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            ant_path_b086ffea744c78db0a6c88a97c5ab04a = L.polyline.antPath(
+              [[48.8564, 2.3522], [48.84410183416117, 2.347895466662728], [48.84361702750651, 2.3464421523747268], [48.84336273261767, 2.346115215415084], [48.84128524832819, 2.3480501758453864], [48.83958167983912, 2.347419944149364], [48.839695867810974, 2.356136377446163], [48.84022778642223, 2.3610310637422445], [48.840654233821176, 2.3611289939463287], [48.8564, 2.3522]],
+              {
+  "stroke": true,
+  "color": "red",
+  "weight": 4,
+  "opacity": 0.7,
+  "lineCap": "round",
+  "lineJoin": "round",
+  "dashArray": [
+10,
+20,
+],
+  "dashOffset": null,
+  "fill": false,
+  "fillColor": "red",
+  "fillOpacity": 0.2,
+  "fillRule": "evenodd",
+  "bubblingMouseEvents": true,
+  "smoothFactor": 1.0,
+  "noClip": false,
+  "paused": false,
+  "reverse": false,
+  "hardwareAcceleration": false,
+  "delay": 400,
+  "pulseColor": "white",
+}
+        ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            ant_path_b086ffea744c78db0a6c88a97c5ab04a.bindTooltip(
+                `<div>
+                     Tournée 1: 6.34km, 101.0kg
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_f76d10036c002f05bcc44ebc2b9b794d = L.circleMarker(
+                [48.84575002333232, 2.34965628050038],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_1c0b81f73beb5da9565c875d8cdc3330 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_4fc4706febcffb79637c66140f544d75 = $(`<div id="html_4fc4706febcffb79637c66140f544d75" style="width: 100.0%; height: 100.0%;">ID: 36<br>Lieu: Bâtiment 36 (OSM:55597758)<br>Poids: 5kg</div>`)[0];
+                popup_1c0b81f73beb5da9565c875d8cdc3330.setContent(html_4fc4706febcffb79637c66140f544d75);
+            
+        
+
+        circle_marker_f76d10036c002f05bcc44ebc2b9b794d.bindPopup(popup_1c0b81f73beb5da9565c875d8cdc3330)
+        ;
+
+        
+    
+    
+            circle_marker_f76d10036c002f05bcc44ebc2b9b794d.bindTooltip(
+                `<div>
+                     Point 36 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_f01edda752e646270e8611fb3b86512b = L.circleMarker(
+                [48.845597912481736, 2.349340647245404],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_b666e915d2beb6ec433c03b72239fbb1 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_73e8f2285a1a407c0397d7a9c641708f = $(`<div id="html_73e8f2285a1a407c0397d7a9c641708f" style="width: 100.0%; height: 100.0%;">ID: 10<br>Lieu: Bâtiment 10 (OSM:55597766)<br>Poids: 16kg</div>`)[0];
+                popup_b666e915d2beb6ec433c03b72239fbb1.setContent(html_73e8f2285a1a407c0397d7a9c641708f);
+            
+        
+
+        circle_marker_f01edda752e646270e8611fb3b86512b.bindPopup(popup_b666e915d2beb6ec433c03b72239fbb1)
+        ;
+
+        
+    
+    
+            circle_marker_f01edda752e646270e8611fb3b86512b.bindTooltip(
+                `<div>
+                     Point 10 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_e9644550f923c5f6c5221b241a7f333e = L.circleMarker(
+                [48.845009775447856, 2.3488050770941937],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_078b07d06a8698fd6c8ccbb14d417592 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_b5e95443442767ae2f3d6b389df4a90c = $(`<div id="html_b5e95443442767ae2f3d6b389df4a90c" style="width: 100.0%; height: 100.0%;">ID: 8<br>Lieu: Bâtiment 8 (OSM:57035859)<br>Poids: 11kg</div>`)[0];
+                popup_078b07d06a8698fd6c8ccbb14d417592.setContent(html_b5e95443442767ae2f3d6b389df4a90c);
+            
+        
+
+        circle_marker_e9644550f923c5f6c5221b241a7f333e.bindPopup(popup_078b07d06a8698fd6c8ccbb14d417592)
+        ;
+
+        
+    
+    
+            circle_marker_e9644550f923c5f6c5221b241a7f333e.bindTooltip(
+                `<div>
+                     Point 8 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_045f8ba2ee5c32795154874a8ce603c6 = L.circleMarker(
+                [48.84300593078613, 2.346761858370177],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_014409228de9083f0a1e3f3ee75823e6 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_78e414d3695416bc705d742e81e79cd9 = $(`<div id="html_78e414d3695416bc705d742e81e79cd9" style="width: 100.0%; height: 100.0%;">ID: 3<br>Lieu: Bâtiment 3 (OSM:98661856)<br>Poids: 13kg</div>`)[0];
+                popup_014409228de9083f0a1e3f3ee75823e6.setContent(html_78e414d3695416bc705d742e81e79cd9);
+            
+        
+
+        circle_marker_045f8ba2ee5c32795154874a8ce603c6.bindPopup(popup_014409228de9083f0a1e3f3ee75823e6)
+        ;
+
+        
+    
+    
+            circle_marker_045f8ba2ee5c32795154874a8ce603c6.bindTooltip(
+                `<div>
+                     Point 3 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_3cd62117764e24903aab44bf99a453e9 = L.circleMarker(
+                [48.84388118858976, 2.3473630625349524],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_220b373265ad955810de52c2743bedcf = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_b1b4c43b6d12391acc183950996bb977 = $(`<div id="html_b1b4c43b6d12391acc183950996bb977" style="width: 100.0%; height: 100.0%;">ID: 19<br>Lieu: Bâtiment 19 (OSM:57043469)<br>Poids: 20kg</div>`)[0];
+                popup_220b373265ad955810de52c2743bedcf.setContent(html_b1b4c43b6d12391acc183950996bb977);
+            
+        
+
+        circle_marker_3cd62117764e24903aab44bf99a453e9.bindPopup(popup_220b373265ad955810de52c2743bedcf)
+        ;
+
+        
+    
+    
+            circle_marker_3cd62117764e24903aab44bf99a453e9.bindTooltip(
+                `<div>
+                     Point 19 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_06d83e44832ddea32b7eff41a45f969c = L.circleMarker(
+                [48.84528712042262, 2.345478813770914],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_b08e5d09212d92848e85faa9123a9210 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_4bc2d773a6193e366db72382f7dcad29 = $(`<div id="html_4bc2d773a6193e366db72382f7dcad29" style="width: 100.0%; height: 100.0%;">ID: 45<br>Lieu: Bâtiment 45 (OSM:56799505)<br>Poids: 5kg</div>`)[0];
+                popup_b08e5d09212d92848e85faa9123a9210.setContent(html_4bc2d773a6193e366db72382f7dcad29);
+            
+        
+
+        circle_marker_06d83e44832ddea32b7eff41a45f969c.bindPopup(popup_b08e5d09212d92848e85faa9123a9210)
+        ;
+
+        
+    
+    
+            circle_marker_06d83e44832ddea32b7eff41a45f969c.bindTooltip(
+                `<div>
+                     Point 45 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_66476938379c0c769e0fa828f7eb9d03 = L.circleMarker(
+                [48.84683077315778, 2.3466856821190567],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_d1abdeb1bdb06a83fb6dc69f016efdb5 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_53bc8e52e92a99f59cb977d5293f2f7e = $(`<div id="html_53bc8e52e92a99f59cb977d5293f2f7e" style="width: 100.0%; height: 100.0%;">ID: 47<br>Lieu: Bâtiment 47 (OSM:55346573)<br>Poids: 12kg</div>`)[0];
+                popup_d1abdeb1bdb06a83fb6dc69f016efdb5.setContent(html_53bc8e52e92a99f59cb977d5293f2f7e);
+            
+        
+
+        circle_marker_66476938379c0c769e0fa828f7eb9d03.bindPopup(popup_d1abdeb1bdb06a83fb6dc69f016efdb5)
+        ;
+
+        
+    
+    
+            circle_marker_66476938379c0c769e0fa828f7eb9d03.bindTooltip(
+                `<div>
+                     Point 47 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_0ff5eb450080a121087c608b2381d1c2 = L.circleMarker(
+                [48.84866043822751, 2.3478423125522743],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_11ce6242112a014363bbb6ab960f2a9c = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_162907de08336497c8c3fa35931fdef1 = $(`<div id="html_162907de08336497c8c3fa35931fdef1" style="width: 100.0%; height: 100.0%;">ID: 6<br>Lieu: Bâtiment 6 (OSM:55359246)<br>Poids: 12kg</div>`)[0];
+                popup_11ce6242112a014363bbb6ab960f2a9c.setContent(html_162907de08336497c8c3fa35931fdef1);
+            
+        
+
+        circle_marker_0ff5eb450080a121087c608b2381d1c2.bindPopup(popup_11ce6242112a014363bbb6ab960f2a9c)
+        ;
+
+        
+    
+    
+            circle_marker_0ff5eb450080a121087c608b2381d1c2.bindTooltip(
+                `<div>
+                     Point 6 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_3d7942f5c4281c1e0b6d014adde91dac = L.circleMarker(
+                [48.84845460570822, 2.3496406535458507],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_82af0d2592ccdcf0f1e332fb518243db = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_0c05ced385e3d9cf77ddfc7e1422bc60 = $(`<div id="html_0c05ced385e3d9cf77ddfc7e1422bc60" style="width: 100.0%; height: 100.0%;">ID: 16<br>Lieu: Bâtiment 16 (OSM:55350378)<br>Poids: 6kg</div>`)[0];
+                popup_82af0d2592ccdcf0f1e332fb518243db.setContent(html_0c05ced385e3d9cf77ddfc7e1422bc60);
+            
+        
+
+        circle_marker_3d7942f5c4281c1e0b6d014adde91dac.bindPopup(popup_82af0d2592ccdcf0f1e332fb518243db)
+        ;
+
+        
+    
+    
+            circle_marker_3d7942f5c4281c1e0b6d014adde91dac.bindTooltip(
+                `<div>
+                     Point 16 (Tournée 2)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            ant_path_ea4621921a34536fe3d66487d53ba87c = L.polyline.antPath(
+              [[48.8564, 2.3522], [48.84575002333232, 2.34965628050038], [48.845597912481736, 2.349340647245404], [48.845009775447856, 2.3488050770941937], [48.84300593078613, 2.346761858370177], [48.84388118858976, 2.3473630625349524], [48.84528712042262, 2.345478813770914], [48.84683077315778, 2.3466856821190567], [48.84866043822751, 2.3478423125522743], [48.84845460570822, 2.3496406535458507], [48.8564, 2.3522]],
+              {
+  "stroke": true,
+  "color": "blue",
+  "weight": 4,
+  "opacity": 0.7,
+  "lineCap": "round",
+  "lineJoin": "round",
+  "dashArray": [
+10,
+20,
+],
+  "dashOffset": null,
+  "fill": false,
+  "fillColor": "blue",
+  "fillOpacity": 0.2,
+  "fillRule": "evenodd",
+  "bubblingMouseEvents": true,
+  "smoothFactor": 1.0,
+  "noClip": false,
+  "paused": false,
+  "reverse": false,
+  "hardwareAcceleration": false,
+  "delay": 400,
+  "pulseColor": "white",
+}
+        ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            ant_path_ea4621921a34536fe3d66487d53ba87c.bindTooltip(
+                `<div>
+                     Tournée 2: 4.26km, 100.0kg
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_5b536863a211589543cf2cd8fb00593f = L.circleMarker(
+                [48.84490226452647, 2.3520384211866125],
+                {"bubblingMouseEvents": true, "color": "green", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "green", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_8651a982f67948179fdbaa5596c12fa9 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_6f8b7190c1a4b53eb1c0797c6db28b05 = $(`<div id="html_6f8b7190c1a4b53eb1c0797c6db28b05" style="width: 100.0%; height: 100.0%;">ID: 17<br>Lieu: Bâtiment 17 (OSM:558199)<br>Poids: 8kg</div>`)[0];
+                popup_8651a982f67948179fdbaa5596c12fa9.setContent(html_6f8b7190c1a4b53eb1c0797c6db28b05);
+            
+        
+
+        circle_marker_5b536863a211589543cf2cd8fb00593f.bindPopup(popup_8651a982f67948179fdbaa5596c12fa9)
+        ;
+
+        
+    
+    
+            circle_marker_5b536863a211589543cf2cd8fb00593f.bindTooltip(
+                `<div>
+                     Point 17 (Tournée 3)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_bfdb25d59dd0d56e793beb16830669f8 = L.circleMarker(
+                [48.8406635900845, 2.352064705126328],
+                {"bubblingMouseEvents": true, "color": "green", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "green", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_0961ee631418f349d4b52074955e0fd1 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_445daf84c72db39dcff7c5e33eb54e13 = $(`<div id="html_445daf84c72db39dcff7c5e33eb54e13" style="width: 100.0%; height: 100.0%;">ID: 33<br>Lieu: Bâtiment 33 (OSM:56032391)<br>Poids: 24kg</div>`)[0];
+                popup_0961ee631418f349d4b52074955e0fd1.setContent(html_445daf84c72db39dcff7c5e33eb54e13);
+            
+        
+
+        circle_marker_bfdb25d59dd0d56e793beb16830669f8.bindPopup(popup_0961ee631418f349d4b52074955e0fd1)
+        ;
+
+        
+    
+    
+            circle_marker_bfdb25d59dd0d56e793beb16830669f8.bindTooltip(
+                `<div>
+                     Point 33 (Tournée 3)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_92da87b2a0a137b6c01339e573efba88 = L.circleMarker(
+                [48.83996150033491, 2.352003605485306],
+                {"bubblingMouseEvents": true, "color": "green", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "green", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_c4971e4865fedf7b94dc7a997d6dc081 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_648f5c036ad18eabecf3fc88da1a210d = $(`<div id="html_648f5c036ad18eabecf3fc88da1a210d" style="width: 100.0%; height: 100.0%;">ID: 28<br>Lieu: Bâtiment 28 (OSM:59535350)<br>Poids: 12kg</div>`)[0];
+                popup_c4971e4865fedf7b94dc7a997d6dc081.setContent(html_648f5c036ad18eabecf3fc88da1a210d);
+            
+        
+
+        circle_marker_92da87b2a0a137b6c01339e573efba88.bindPopup(popup_c4971e4865fedf7b94dc7a997d6dc081)
+        ;
+
+        
+    
+    
+            circle_marker_92da87b2a0a137b6c01339e573efba88.bindTooltip(
+                `<div>
+                     Point 28 (Tournée 3)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_3405d5565e543034149aa01591907cb8 = L.circleMarker(
+                [48.841279797676805, 2.3529211074063285],
+                {"bubblingMouseEvents": true, "color": "green", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "green", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_5df9b1255a7c892b98d8044c466cda3b = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_6393da9ccd36128ce8d5a48eac6d6e82 = $(`<div id="html_6393da9ccd36128ce8d5a48eac6d6e82" style="width: 100.0%; height: 100.0%;">ID: 41<br>Lieu: Bâtiment 41 (OSM:56031211)<br>Poids: 13kg</div>`)[0];
+                popup_5df9b1255a7c892b98d8044c466cda3b.setContent(html_6393da9ccd36128ce8d5a48eac6d6e82);
+            
+        
+
+        circle_marker_3405d5565e543034149aa01591907cb8.bindPopup(popup_5df9b1255a7c892b98d8044c466cda3b)
+        ;
+
+        
+    
+    
+            circle_marker_3405d5565e543034149aa01591907cb8.bindTooltip(
+                `<div>
+                     Point 41 (Tournée 3)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_a72a09842b9f54345b7ed5c8eab02f06 = L.circleMarker(
+                [48.84246588023215, 2.3525326429623816],
+                {"bubblingMouseEvents": true, "color": "green", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "green", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_e3f6b030e0b3d0f0441e9eae5e73e5f7 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_f103f4a7c0f9f2b4954d13c9639b549c = $(`<div id="html_f103f4a7c0f9f2b4954d13c9639b549c" style="width: 100.0%; height: 100.0%;">ID: 4<br>Lieu: Bâtiment 4 (OSM:55502623)<br>Poids: 5kg</div>`)[0];
+                popup_e3f6b030e0b3d0f0441e9eae5e73e5f7.setContent(html_f103f4a7c0f9f2b4954d13c9639b549c);
+            
+        
+
+        circle_marker_a72a09842b9f54345b7ed5c8eab02f06.bindPopup(popup_e3f6b030e0b3d0f0441e9eae5e73e5f7)
+        ;
+
+        
+    
+    
+            circle_marker_a72a09842b9f54345b7ed5c8eab02f06.bindTooltip(
+                `<div>
+                     Point 4 (Tournée 3)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_9078383f8f655b6c4b88dc841889b466 = L.circleMarker(
+                [48.842266539606925, 2.35167416313833],
+                {"bubblingMouseEvents": true, "color": "green", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "green", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_d26710cd5e1859749a4fc8fede15a217 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_3b1f4668c7ac8816b37fd349d14536f1 = $(`<div id="html_3b1f4668c7ac8816b37fd349d14536f1" style="width: 100.0%; height: 100.0%;">ID: 13<br>Lieu: Bâtiment 13 (OSM:55502638)<br>Poids: 9kg</div>`)[0];
+                popup_d26710cd5e1859749a4fc8fede15a217.setContent(html_3b1f4668c7ac8816b37fd349d14536f1);
+            
+        
+
+        circle_marker_9078383f8f655b6c4b88dc841889b466.bindPopup(popup_d26710cd5e1859749a4fc8fede15a217)
+        ;
+
+        
+    
+    
+            circle_marker_9078383f8f655b6c4b88dc841889b466.bindTooltip(
+                `<div>
+                     Point 13 (Tournée 3)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_8185bb69ea3b87806369fefe9e0540f2 = L.circleMarker(
+                [48.84410544868405, 2.351721244261031],
+                {"bubblingMouseEvents": true, "color": "green", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "green", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_a0b606ecf9ef323e51da4586f7c96307 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_972b1c9423290f0da77efd78c888933d = $(`<div id="html_972b1c9423290f0da77efd78c888933d" style="width: 100.0%; height: 100.0%;">ID: 35<br>Lieu: Bâtiment 35 (OSM:55682948)<br>Poids: 15kg</div>`)[0];
+                popup_a0b606ecf9ef323e51da4586f7c96307.setContent(html_972b1c9423290f0da77efd78c888933d);
+            
+        
+
+        circle_marker_8185bb69ea3b87806369fefe9e0540f2.bindPopup(popup_a0b606ecf9ef323e51da4586f7c96307)
+        ;
+
+        
+    
+    
+            circle_marker_8185bb69ea3b87806369fefe9e0540f2.bindTooltip(
+                `<div>
+                     Point 35 (Tournée 3)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_031a9d6b657a4d1e359389d53f6ad7d7 = L.circleMarker(
+                [48.844067113854486, 2.352042781390457],
+                {"bubblingMouseEvents": true, "color": "green", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "green", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_ef8880819244eb7b38584534dce31642 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_5b565708dfa30849b7789479394b0f2f = $(`<div id="html_5b565708dfa30849b7789479394b0f2f" style="width: 100.0%; height: 100.0%;">ID: 23<br>Lieu: Bâtiment 23 (OSM:554654)<br>Poids: 12kg</div>`)[0];
+                popup_ef8880819244eb7b38584534dce31642.setContent(html_5b565708dfa30849b7789479394b0f2f);
+            
+        
+
+        circle_marker_031a9d6b657a4d1e359389d53f6ad7d7.bindPopup(popup_ef8880819244eb7b38584534dce31642)
+        ;
+
+        
+    
+    
+            circle_marker_031a9d6b657a4d1e359389d53f6ad7d7.bindTooltip(
+                `<div>
+                     Point 23 (Tournée 3)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            ant_path_3f68752d81051d656cdca1d7504baf3e = L.polyline.antPath(
+              [[48.8564, 2.3522], [48.84490226452647, 2.3520384211866125], [48.8406635900845, 2.352064705126328], [48.83996150033491, 2.352003605485306], [48.841279797676805, 2.3529211074063285], [48.84246588023215, 2.3525326429623816], [48.842266539606925, 2.35167416313833], [48.84410544868405, 2.351721244261031], [48.844067113854486, 2.352042781390457], [48.8564, 2.3522]],
+              {
+  "stroke": true,
+  "color": "green",
+  "weight": 4,
+  "opacity": 0.7,
+  "lineCap": "round",
+  "lineJoin": "round",
+  "dashArray": [
+10,
+20,
+],
+  "dashOffset": null,
+  "fill": false,
+  "fillColor": "green",
+  "fillOpacity": 0.2,
+  "fillRule": "evenodd",
+  "bubblingMouseEvents": true,
+  "smoothFactor": 1.0,
+  "noClip": false,
+  "paused": false,
+  "reverse": false,
+  "hardwareAcceleration": false,
+  "delay": 400,
+  "pulseColor": "white",
+}
+        ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            ant_path_3f68752d81051d656cdca1d7504baf3e.bindTooltip(
+                `<div>
+                     Tournée 3: 4.74km, 98.0kg
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_ce2f4cc54e7057d2ddabc04469316c94 = L.circleMarker(
+                [48.84813378950701, 2.3482532275294137],
+                {"bubblingMouseEvents": true, "color": "purple", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "purple", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_071dd06dcd111b0cdde0eb66a22f661d = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_11d923a0d22be18be088aee505f20d5a = $(`<div id="html_11d923a0d22be18be088aee505f20d5a" style="width: 100.0%; height: 100.0%;">ID: 27<br>Lieu: Bâtiment 27 (OSM:55359260)<br>Poids: 17kg</div>`)[0];
+                popup_071dd06dcd111b0cdde0eb66a22f661d.setContent(html_11d923a0d22be18be088aee505f20d5a);
+            
+        
+
+        circle_marker_ce2f4cc54e7057d2ddabc04469316c94.bindPopup(popup_071dd06dcd111b0cdde0eb66a22f661d)
+        ;
+
+        
+    
+    
+            circle_marker_ce2f4cc54e7057d2ddabc04469316c94.bindTooltip(
+                `<div>
+                     Point 27 (Tournée 4)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_b46c609c57547214aa514405a32d2b67 = L.circleMarker(
+                [48.84877234900058, 2.348757415567001],
+                {"bubblingMouseEvents": true, "color": "purple", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "purple", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_3e5badec6969e34a75a17536042433e7 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_5abd3ace8acb9b510434ee05162f10ac = $(`<div id="html_5abd3ace8acb9b510434ee05162f10ac" style="width: 100.0%; height: 100.0%;">ID: 15<br>Lieu: Bâtiment 15 (OSM:55356954)<br>Poids: 21kg</div>`)[0];
+                popup_3e5badec6969e34a75a17536042433e7.setContent(html_5abd3ace8acb9b510434ee05162f10ac);
+            
+        
+
+        circle_marker_b46c609c57547214aa514405a32d2b67.bindPopup(popup_3e5badec6969e34a75a17536042433e7)
+        ;
+
+        
+    
+    
+            circle_marker_b46c609c57547214aa514405a32d2b67.bindTooltip(
+                `<div>
+                     Point 15 (Tournée 4)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_98010d5f2a39b746c364c4677f24cd84 = L.circleMarker(
+                [48.84963364535638, 2.352661717588997],
+                {"bubblingMouseEvents": true, "color": "purple", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "purple", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_fea9093034ace2c355604cdef34efac0 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_3a5b30fdd79c97a4a40bba35c58c60c7 = $(`<div id="html_3a5b30fdd79c97a4a40bba35c58c60c7" style="width: 100.0%; height: 100.0%;">ID: 37<br>Lieu: Bâtiment 37 (OSM:97602193)<br>Poids: 17kg</div>`)[0];
+                popup_fea9093034ace2c355604cdef34efac0.setContent(html_3a5b30fdd79c97a4a40bba35c58c60c7);
+            
+        
+
+        circle_marker_98010d5f2a39b746c364c4677f24cd84.bindPopup(popup_fea9093034ace2c355604cdef34efac0)
+        ;
+
+        
+    
+    
+            circle_marker_98010d5f2a39b746c364c4677f24cd84.bindTooltip(
+                `<div>
+                     Point 37 (Tournée 4)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_bb3e2e42aa5cd5215ecb1743a6b8e446 = L.circleMarker(
+                [48.850157548709504, 2.352954169520023],
+                {"bubblingMouseEvents": true, "color": "purple", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "purple", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_16f9622b45d2bd8441b3e4bbfb62981e = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_b87b4b8ceefc927b4c16570e96c21ecb = $(`<div id="html_b87b4b8ceefc927b4c16570e96c21ecb" style="width: 100.0%; height: 100.0%;">ID: 7<br>Lieu: Bâtiment 7 (OSM:55886054)<br>Poids: 22kg</div>`)[0];
+                popup_16f9622b45d2bd8441b3e4bbfb62981e.setContent(html_b87b4b8ceefc927b4c16570e96c21ecb);
+            
+        
+
+        circle_marker_bb3e2e42aa5cd5215ecb1743a6b8e446.bindPopup(popup_16f9622b45d2bd8441b3e4bbfb62981e)
+        ;
+
+        
+    
+    
+            circle_marker_bb3e2e42aa5cd5215ecb1743a6b8e446.bindTooltip(
+                `<div>
+                     Point 7 (Tournée 4)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_e5a7f0c775c42bd5991a5743a2925e7c = L.circleMarker(
+                [48.850378209244326, 2.352816224291266],
+                {"bubblingMouseEvents": true, "color": "purple", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "purple", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_4e2322a79b89eb134ef00c64b6fdfa96 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_ca3c698f5310160b5dc307306fff2cef = $(`<div id="html_ca3c698f5310160b5dc307306fff2cef" style="width: 100.0%; height: 100.0%;">ID: 44<br>Lieu: Bâtiment 44 (OSM:55886066)<br>Poids: 9kg</div>`)[0];
+                popup_4e2322a79b89eb134ef00c64b6fdfa96.setContent(html_ca3c698f5310160b5dc307306fff2cef);
+            
+        
+
+        circle_marker_e5a7f0c775c42bd5991a5743a2925e7c.bindPopup(popup_4e2322a79b89eb134ef00c64b6fdfa96)
+        ;
+
+        
+    
+    
+            circle_marker_e5a7f0c775c42bd5991a5743a2925e7c.bindTooltip(
+                `<div>
+                     Point 44 (Tournée 4)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_f5f88b921c264d8252f578e0e957f484 = L.circleMarker(
+                [48.85058336518723, 2.350676997549481],
+                {"bubblingMouseEvents": true, "color": "purple", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "purple", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_43609d5c2317b509ef25f4b8ae600cc6 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_df04621c2022ea84bd10e72953cce93a = $(`<div id="html_df04621c2022ea84bd10e72953cce93a" style="width: 100.0%; height: 100.0%;">ID: 2<br>Lieu: Bâtiment 2 (OSM:55901638)<br>Poids: 14kg</div>`)[0];
+                popup_43609d5c2317b509ef25f4b8ae600cc6.setContent(html_df04621c2022ea84bd10e72953cce93a);
+            
+        
+
+        circle_marker_f5f88b921c264d8252f578e0e957f484.bindPopup(popup_43609d5c2317b509ef25f4b8ae600cc6)
+        ;
+
+        
+    
+    
+            circle_marker_f5f88b921c264d8252f578e0e957f484.bindTooltip(
+                `<div>
+                     Point 2 (Tournée 4)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            ant_path_a1f8e37cf735e87a03c81b995fe83f98 = L.polyline.antPath(
+              [[48.8564, 2.3522], [48.84813378950701, 2.3482532275294137], [48.84877234900058, 2.348757415567001], [48.84963364535638, 2.352661717588997], [48.850157548709504, 2.352954169520023], [48.850378209244326, 2.352816224291266], [48.85058336518723, 2.350676997549481], [48.8564, 2.3522]],
+              {
+  "stroke": true,
+  "color": "purple",
+  "weight": 4,
+  "opacity": 0.7,
+  "lineCap": "round",
+  "lineJoin": "round",
+  "dashArray": [
+10,
+20,
+],
+  "dashOffset": null,
+  "fill": false,
+  "fillColor": "purple",
+  "fillOpacity": 0.2,
+  "fillRule": "evenodd",
+  "bubblingMouseEvents": true,
+  "smoothFactor": 1.0,
+  "noClip": false,
+  "paused": false,
+  "reverse": false,
+  "hardwareAcceleration": false,
+  "delay": 400,
+  "pulseColor": "white",
+}
+        ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            ant_path_a1f8e37cf735e87a03c81b995fe83f98.bindTooltip(
+                `<div>
+                     Tournée 4: 2.77km, 100.0kg
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_d50a5467093a25c76a94b286b86ad347 = L.circleMarker(
+                [48.84737347346872, 2.341679621932467],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_eb3bc732185511317fde4484c08f418f = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_f7b20693fc36d1955cff9f349da556a8 = $(`<div id="html_f7b20693fc36d1955cff9f349da556a8" style="width: 100.0%; height: 100.0%;">ID: 24<br>Lieu: Bâtiment 24 (OSM:58099420)<br>Poids: 14kg</div>`)[0];
+                popup_eb3bc732185511317fde4484c08f418f.setContent(html_f7b20693fc36d1955cff9f349da556a8);
+            
+        
+
+        circle_marker_d50a5467093a25c76a94b286b86ad347.bindPopup(popup_eb3bc732185511317fde4484c08f418f)
+        ;
+
+        
+    
+    
+            circle_marker_d50a5467093a25c76a94b286b86ad347.bindTooltip(
+                `<div>
+                     Point 24 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_51e4edeb2fb5eca97f845b7f958bba20 = L.circleMarker(
+                [48.84702593005193, 2.3412398152260923],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_b8a1c4c2dd853608e261aaa7d24e6ec8 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_33cd46c065deada36cf1a3efd4005be1 = $(`<div id="html_33cd46c065deada36cf1a3efd4005be1" style="width: 100.0%; height: 100.0%;">ID: 32<br>Lieu: Bâtiment 32 (OSM:58531317)<br>Poids: 22kg</div>`)[0];
+                popup_b8a1c4c2dd853608e261aaa7d24e6ec8.setContent(html_33cd46c065deada36cf1a3efd4005be1);
+            
+        
+
+        circle_marker_51e4edeb2fb5eca97f845b7f958bba20.bindPopup(popup_b8a1c4c2dd853608e261aaa7d24e6ec8)
+        ;
+
+        
+    
+    
+            circle_marker_51e4edeb2fb5eca97f845b7f958bba20.bindTooltip(
+                `<div>
+                     Point 32 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_7c151d3e2f1814eeb15f8d8a3a38a599 = L.circleMarker(
+                [48.84594613527154, 2.3404821667887408],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_9dda9573623a9e346539c0bec14bd517 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_67f6e04c03a304ebbee8701f41d18c9d = $(`<div id="html_67f6e04c03a304ebbee8701f41d18c9d" style="width: 100.0%; height: 100.0%;">ID: 11<br>Lieu: Bâtiment 11 (OSM:60543176)<br>Poids: 9kg</div>`)[0];
+                popup_9dda9573623a9e346539c0bec14bd517.setContent(html_67f6e04c03a304ebbee8701f41d18c9d);
+            
+        
+
+        circle_marker_7c151d3e2f1814eeb15f8d8a3a38a599.bindPopup(popup_9dda9573623a9e346539c0bec14bd517)
+        ;
+
+        
+    
+    
+            circle_marker_7c151d3e2f1814eeb15f8d8a3a38a599.bindTooltip(
+                `<div>
+                     Point 11 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_d9ffb21eb6966ed8c3936cbb726e2b6e = L.circleMarker(
+                [48.84496346959936, 2.343082658216729],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_b02b562c12602b5bc92084f1ab222637 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_99f99a0001382d671d7ba39769090294 = $(`<div id="html_99f99a0001382d671d7ba39769090294" style="width: 100.0%; height: 100.0%;">ID: 14<br>Lieu: Bâtiment 14 (OSM:906845)<br>Poids: 5kg</div>`)[0];
+                popup_b02b562c12602b5bc92084f1ab222637.setContent(html_99f99a0001382d671d7ba39769090294);
+            
+        
+
+        circle_marker_d9ffb21eb6966ed8c3936cbb726e2b6e.bindPopup(popup_b02b562c12602b5bc92084f1ab222637)
+        ;
+
+        
+    
+    
+            circle_marker_d9ffb21eb6966ed8c3936cbb726e2b6e.bindTooltip(
+                `<div>
+                     Point 14 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_58bade295bce1551c7a3cde5367e015b = L.circleMarker(
+                [48.84527893971952, 2.342325255891601],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_3086398672c73a4023ee510cf4421896 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_e0d58fb095031292143dc711cbe1530f = $(`<div id="html_e0d58fb095031292143dc711cbe1530f" style="width: 100.0%; height: 100.0%;">ID: 26<br>Lieu: Bâtiment 26 (OSM:58734892)<br>Poids: 8kg</div>`)[0];
+                popup_3086398672c73a4023ee510cf4421896.setContent(html_e0d58fb095031292143dc711cbe1530f);
+            
+        
+
+        circle_marker_58bade295bce1551c7a3cde5367e015b.bindPopup(popup_3086398672c73a4023ee510cf4421896)
+        ;
+
+        
+    
+    
+            circle_marker_58bade295bce1551c7a3cde5367e015b.bindTooltip(
+                `<div>
+                     Point 26 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_b71828674f6bbef0ace87478a860fc45 = L.circleMarker(
+                [48.845876345307445, 2.3434405228451665],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_21eacdbae79abc3d1fc7b45baa074dd9 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_59cd89819a444a5d15572e82234c3521 = $(`<div id="html_59cd89819a444a5d15572e82234c3521" style="width: 100.0%; height: 100.0%;">ID: 46<br>Lieu: Bâtiment 46 (OSM:58649716)<br>Poids: 21kg</div>`)[0];
+                popup_21eacdbae79abc3d1fc7b45baa074dd9.setContent(html_59cd89819a444a5d15572e82234c3521);
+            
+        
+
+        circle_marker_b71828674f6bbef0ace87478a860fc45.bindPopup(popup_21eacdbae79abc3d1fc7b45baa074dd9)
+        ;
+
+        
+    
+    
+            circle_marker_b71828674f6bbef0ace87478a860fc45.bindTooltip(
+                `<div>
+                     Point 46 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_b6f2d8f38c555662a3b5690ca0d7e76c = L.circleMarker(
+                [48.85138273959083, 2.3440308914075287],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_0ce51dc97d06c65fd16ba001483f85c1 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_fcf5e5e257538633fbcd22007c9f8e58 = $(`<div id="html_fcf5e5e257538633fbcd22007c9f8e58" style="width: 100.0%; height: 100.0%;">ID: 48<br>Lieu: Bâtiment 48 (OSM:55441512)<br>Poids: 5kg</div>`)[0];
+                popup_0ce51dc97d06c65fd16ba001483f85c1.setContent(html_fcf5e5e257538633fbcd22007c9f8e58);
+            
+        
+
+        circle_marker_b6f2d8f38c555662a3b5690ca0d7e76c.bindPopup(popup_0ce51dc97d06c65fd16ba001483f85c1)
+        ;
+
+        
+    
+    
+            circle_marker_b6f2d8f38c555662a3b5690ca0d7e76c.bindTooltip(
+                `<div>
+                     Point 48 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_dd7ecb6ad7a77916101a076b73a01a99 = L.circleMarker(
+                [48.85148770097643, 2.3462836573183385],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_f2c4ce1d08ff004edbeee601650e6279 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_ebcb40282f5ddd289c104d7ab416294c = $(`<div id="html_ebcb40282f5ddd289c104d7ab416294c" style="width: 100.0%; height: 100.0%;">ID: 30<br>Lieu: Bâtiment 30 (OSM:1381612)<br>Poids: 6kg</div>`)[0];
+                popup_f2c4ce1d08ff004edbeee601650e6279.setContent(html_ebcb40282f5ddd289c104d7ab416294c);
+            
+        
+
+        circle_marker_dd7ecb6ad7a77916101a076b73a01a99.bindPopup(popup_f2c4ce1d08ff004edbeee601650e6279)
+        ;
+
+        
+    
+    
+            circle_marker_dd7ecb6ad7a77916101a076b73a01a99.bindTooltip(
+                `<div>
+                     Point 30 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_e58a31cc0bbc2f3d2f5f42280a90bb01 = L.circleMarker(
+                [48.85153142947768, 2.3480615614353098],
+                {"bubblingMouseEvents": true, "color": "orange", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "orange", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 3}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+        var popup_45be20943b5ca80fa7c64eaa177f85d1 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_7b66ff532055c79b6047e7cacd7b5ad5 = $(`<div id="html_7b66ff532055c79b6047e7cacd7b5ad5" style="width: 100.0%; height: 100.0%;">ID: 31<br>Lieu: Bâtiment 31 (OSM:55494087)<br>Poids: 8kg</div>`)[0];
+                popup_45be20943b5ca80fa7c64eaa177f85d1.setContent(html_7b66ff532055c79b6047e7cacd7b5ad5);
+            
+        
+
+        circle_marker_e58a31cc0bbc2f3d2f5f42280a90bb01.bindPopup(popup_45be20943b5ca80fa7c64eaa177f85d1)
+        ;
+
+        
+    
+    
+            circle_marker_e58a31cc0bbc2f3d2f5f42280a90bb01.bindTooltip(
+                `<div>
+                     Point 31 (Tournée 5)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            ant_path_91a46312b59f555b3a1f844d94d4ae5d = L.polyline.antPath(
+              [[48.8564, 2.3522], [48.84737347346872, 2.341679621932467], [48.84702593005193, 2.3412398152260923], [48.84594613527154, 2.3404821667887408], [48.84496346959936, 2.343082658216729], [48.84527893971952, 2.342325255891601], [48.845876345307445, 2.3434405228451665], [48.85138273959083, 2.3440308914075287], [48.85148770097643, 2.3462836573183385], [48.85153142947768, 2.3480615614353098], [48.8564, 2.3522]],
+              {
+  "stroke": true,
+  "color": "orange",
+  "weight": 4,
+  "opacity": 0.7,
+  "lineCap": "round",
+  "lineJoin": "round",
+  "dashArray": [
+10,
+20,
+],
+  "dashOffset": null,
+  "fill": false,
+  "fillColor": "orange",
+  "fillOpacity": 0.2,
+  "fillRule": "evenodd",
+  "bubblingMouseEvents": true,
+  "smoothFactor": 1.0,
+  "noClip": false,
+  "paused": false,
+  "reverse": false,
+  "hardwareAcceleration": false,
+  "delay": 400,
+  "pulseColor": "white",
+}
+        ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            ant_path_91a46312b59f555b3a1f844d94d4ae5d.bindTooltip(
+                `<div>
+                     Tournée 5: 4.85km, 98.0kg
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var marker_4a01b7a54e534c8c7fef1b13820546fc = L.marker(
+                [48.8564, 2.3522],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_e445f6aedd874f3b5ffaf9f63b9eaedd = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "black",
+  "iconColor": "white",
+  "icon": "home",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_627c627353bb64e9d25b83ae8edfdd92 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_161dffea7555a0a5a1095280917cdaee = $(`<div id="html_161dffea7555a0a5a1095280917cdaee" style="width: 100.0%; height: 100.0%;">DÉPÔT (Hôtel de Ville)</div>`)[0];
+                popup_627c627353bb64e9d25b83ae8edfdd92.setContent(html_161dffea7555a0a5a1095280917cdaee);
+            
+        
+
+        marker_4a01b7a54e534c8c7fef1b13820546fc.bindPopup(popup_627c627353bb64e9d25b83ae8edfdd92)
+        ;
+
+        
+    
+    
+                marker_4a01b7a54e534c8c7fef1b13820546fc.setIcon(icon_e445f6aedd874f3b5ffaf9f63b9eaedd);
+            
+    
+            var marker_c98e87b7fac4e808d3645ce95fd255a4 = L.marker(
+                [48.844792139113466, 2.3561686712631364],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_01402ac6513171d3b318b7c50730d4f7 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_4997bcf99979d2e0d1d9eea8b69ea06b = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_2d7917000ec1a6ea0a166847a885cadb = $(`<div id="html_2d7917000ec1a6ea0a166847a885cadb" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 1<br>Poids: 15kg</div>`)[0];
+                popup_4997bcf99979d2e0d1d9eea8b69ea06b.setContent(html_2d7917000ec1a6ea0a166847a885cadb);
+            
+        
+
+        marker_c98e87b7fac4e808d3645ce95fd255a4.bindPopup(popup_4997bcf99979d2e0d1d9eea8b69ea06b)
+        ;
+
+        
+    
+    
+            marker_c98e87b7fac4e808d3645ce95fd255a4.bindTooltip(
+                `<div>
+                     Échec livraison (ID 1)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_c98e87b7fac4e808d3645ce95fd255a4.setIcon(icon_01402ac6513171d3b318b7c50730d4f7);
+            
+    
+            var marker_a931e29357d15220ff0ded7a100df7ce = L.marker(
+                [48.85284540393997, 2.345161575208272],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_9f1dd357fa22ed510145150266341ce6 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_33c1c7eab283e57a2bef9b589fb8bccd = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_a16d17dc451981491da9609480b915c9 = $(`<div id="html_a16d17dc451981491da9609480b915c9" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 34<br>Poids: 14kg</div>`)[0];
+                popup_33c1c7eab283e57a2bef9b589fb8bccd.setContent(html_a16d17dc451981491da9609480b915c9);
+            
+        
+
+        marker_a931e29357d15220ff0ded7a100df7ce.bindPopup(popup_33c1c7eab283e57a2bef9b589fb8bccd)
+        ;
+
+        
+    
+    
+            marker_a931e29357d15220ff0ded7a100df7ce.bindTooltip(
+                `<div>
+                     Échec livraison (ID 34)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_a931e29357d15220ff0ded7a100df7ce.setIcon(icon_9f1dd357fa22ed510145150266341ce6);
+            
+    
+            var marker_2b67a68e57c6ef7a8d619725f2e6e7fe = L.marker(
+                [48.84697753451824, 2.348175916522815],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_224775c0e479469d2bcaee637ec441aa = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_2677c7b7056fd8b223c6abd9a9a309f8 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_6ff9aed0da449201772b5acf624ab1f9 = $(`<div id="html_6ff9aed0da449201772b5acf624ab1f9" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 39<br>Poids: 22kg</div>`)[0];
+                popup_2677c7b7056fd8b223c6abd9a9a309f8.setContent(html_6ff9aed0da449201772b5acf624ab1f9);
+            
+        
+
+        marker_2b67a68e57c6ef7a8d619725f2e6e7fe.bindPopup(popup_2677c7b7056fd8b223c6abd9a9a309f8)
+        ;
+
+        
+    
+    
+            marker_2b67a68e57c6ef7a8d619725f2e6e7fe.bindTooltip(
+                `<div>
+                     Échec livraison (ID 39)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_2b67a68e57c6ef7a8d619725f2e6e7fe.setIcon(icon_224775c0e479469d2bcaee637ec441aa);
+            
+    
+            var marker_f18da62e58de558cc2d154f0c2a11824 = L.marker(
+                [48.84501924415375, 2.3556939121468425],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_d680e8666f4626b8ddc9f97f988d11bc = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_a3d320bff5694bc103436083a0cc0d95 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_ae5cf8c384ae5326a13934abf5df94f5 = $(`<div id="html_ae5cf8c384ae5326a13934abf5df94f5" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 40<br>Poids: 23kg</div>`)[0];
+                popup_a3d320bff5694bc103436083a0cc0d95.setContent(html_ae5cf8c384ae5326a13934abf5df94f5);
+            
+        
+
+        marker_f18da62e58de558cc2d154f0c2a11824.bindPopup(popup_a3d320bff5694bc103436083a0cc0d95)
+        ;
+
+        
+    
+    
+            marker_f18da62e58de558cc2d154f0c2a11824.bindTooltip(
+                `<div>
+                     Échec livraison (ID 40)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_f18da62e58de558cc2d154f0c2a11824.setIcon(icon_d680e8666f4626b8ddc9f97f988d11bc);
+            
+    
+            var marker_d071a119b25c82024ffed17364228c3a = L.marker(
+                [48.83865036278205, 2.3451131123226494],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_97f618a3b0da115a0cb56c2a910683e1 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_d6c61b4947fa9063a7dad133e0ccc84e = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_d1718ed24ecb2a219f5445547dd6f69b = $(`<div id="html_d1718ed24ecb2a219f5445547dd6f69b" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 42<br>Poids: 13kg</div>`)[0];
+                popup_d6c61b4947fa9063a7dad133e0ccc84e.setContent(html_d1718ed24ecb2a219f5445547dd6f69b);
+            
+        
+
+        marker_d071a119b25c82024ffed17364228c3a.bindPopup(popup_d6c61b4947fa9063a7dad133e0ccc84e)
+        ;
+
+        
+    
+    
+            marker_d071a119b25c82024ffed17364228c3a.bindTooltip(
+                `<div>
+                     Échec livraison (ID 42)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_d071a119b25c82024ffed17364228c3a.setIcon(icon_97f618a3b0da115a0cb56c2a910683e1);
+            
+    
+            var marker_19ef8dfb8a08d3e8a661352b3b0f4392 = L.marker(
+                [48.84353659646429, 2.34215659513088],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_0b1d7079b0d71d454b0c23d3505aca99 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_97a4f85c4f1c431e5a341fabcdafa6ee = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_6815b33a60a9a09af0c195bc14e2b868 = $(`<div id="html_6815b33a60a9a09af0c195bc14e2b868" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 20<br>Poids: 12kg</div>`)[0];
+                popup_97a4f85c4f1c431e5a341fabcdafa6ee.setContent(html_6815b33a60a9a09af0c195bc14e2b868);
+            
+        
+
+        marker_19ef8dfb8a08d3e8a661352b3b0f4392.bindPopup(popup_97a4f85c4f1c431e5a341fabcdafa6ee)
+        ;
+
+        
+    
+    
+            marker_19ef8dfb8a08d3e8a661352b3b0f4392.bindTooltip(
+                `<div>
+                     Échec livraison (ID 20)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_19ef8dfb8a08d3e8a661352b3b0f4392.setIcon(icon_0b1d7079b0d71d454b0c23d3505aca99);
+            
+    
+            var marker_580844f0d227a58bd213e6b41b167e45 = L.marker(
+                [48.84096891251132, 2.357960469088344],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_f7263aa67f09357fd88211b90a496b18 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_3b1b7e84fb99955ad3aae2c4fc646601 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_47ec89e680aca8fcab37e9820b78f4c8 = $(`<div id="html_47ec89e680aca8fcab37e9820b78f4c8" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 21<br>Poids: 23kg</div>`)[0];
+                popup_3b1b7e84fb99955ad3aae2c4fc646601.setContent(html_47ec89e680aca8fcab37e9820b78f4c8);
+            
+        
+
+        marker_580844f0d227a58bd213e6b41b167e45.bindPopup(popup_3b1b7e84fb99955ad3aae2c4fc646601)
+        ;
+
+        
+    
+    
+            marker_580844f0d227a58bd213e6b41b167e45.bindTooltip(
+                `<div>
+                     Échec livraison (ID 21)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_580844f0d227a58bd213e6b41b167e45.setIcon(icon_f7263aa67f09357fd88211b90a496b18);
+            
+    
+            var marker_d6649ddb16c0c0bc212837db58513ce5 = L.marker(
+                [48.841915263904056, 2.35961165139055],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_3883ea707c1d3493a76c05a8b14a1e0e = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_85434ebd39afc1ff4f1a3cf0495daffe = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_6493fd43a2bd5b82c3480ded7c77debe = $(`<div id="html_6493fd43a2bd5b82c3480ded7c77debe" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 25<br>Poids: 24kg</div>`)[0];
+                popup_85434ebd39afc1ff4f1a3cf0495daffe.setContent(html_6493fd43a2bd5b82c3480ded7c77debe);
+            
+        
+
+        marker_d6649ddb16c0c0bc212837db58513ce5.bindPopup(popup_85434ebd39afc1ff4f1a3cf0495daffe)
+        ;
+
+        
+    
+    
+            marker_d6649ddb16c0c0bc212837db58513ce5.bindTooltip(
+                `<div>
+                     Échec livraison (ID 25)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_d6649ddb16c0c0bc212837db58513ce5.setIcon(icon_3883ea707c1d3493a76c05a8b14a1e0e);
+            
+    
+            var marker_bb318fa9b9264a74c19d819b5681f4ba = L.marker(
+                [48.83955464806989, 2.346375396819893],
+                {
+}
+            ).addTo(map_75c90a0a6a156fd1535bf1454c57eafb);
+        
+    
+            var icon_bbabaebbc0956214f3504117ba8d7cae = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "lightgray",
+  "iconColor": "white",
+  "icon": "exclamation-triangle",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_ecef97cc1fb237934f6eeb7616fd56c3 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_e7b1a571bce16366c2aa5fd27b68fbb5 = $(`<div id="html_e7b1a571bce16366c2aa5fd27b68fbb5" style="width: 100.0%; height: 100.0%;">NON LIVRÉ<br>ID: 29<br>Poids: 11kg</div>`)[0];
+                popup_ecef97cc1fb237934f6eeb7616fd56c3.setContent(html_e7b1a571bce16366c2aa5fd27b68fbb5);
+            
+        
+
+        marker_bb318fa9b9264a74c19d819b5681f4ba.bindPopup(popup_ecef97cc1fb237934f6eeb7616fd56c3)
+        ;
+
+        
+    
+    
+            marker_bb318fa9b9264a74c19d819b5681f4ba.bindTooltip(
+                `<div>
+                     Échec livraison (ID 29)
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_bb318fa9b9264a74c19d819b5681f4ba.setIcon(icon_bbabaebbc0956214f3504117ba8d7cae);
+            
+</script>
+</html>

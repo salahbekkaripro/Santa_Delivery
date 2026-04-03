@@ -1,0 +1,5 @@
+{
+    "condition": "Neige / Verglas",
+    "factor": 2.0,
+    "desc": "Alerte grand froid ! Temps de trajet doublé."
+}

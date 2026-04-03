@@ -1,0 +1,9 @@
+pandas
+numpy
+osmnx>=2.0.0
+networkx
+folium
+ortools
+requests
+scipy
+shapely
