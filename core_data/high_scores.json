@@ -1,0 +1,56 @@
+{
+  "1": [],
+  "2": [
+    {
+      "score": 49.9,
+      "rank": "C",
+      "zone": "Mitte, Berlin",
+      "time_saved_pct": 59.8,
+      "co2_saved_kg": 7.19,
+      "date": "2026-04-10 15:29"
+    }
+  ],
+  "3": [],
+  "libre": [
+    {
+      "score": 63.4,
+      "rank": "B",
+      "zone": "?",
+      "time_saved_pct": 72.8,
+      "co2_saved_kg": 9.77,
+      "date": "2026-04-10 15:22"
+    },
+    {
+      "score": 44.9,
+      "rank": "C",
+      "zone": "?",
+      "time_saved_pct": 59.8,
+      "co2_saved_kg": 7.19,
+      "date": "2026-04-10 15:49"
+    },
+    {
+      "score": 37.1,
+      "rank": "C",
+      "zone": "?",
+      "time_saved_pct": 52.0,
+      "co2_saved_kg": 4.7,
+      "date": "2026-04-10 16:11"
+    },
+    {
+      "score": 37.1,
+      "rank": "C",
+      "zone": "?",
+      "time_saved_pct": 52.0,
+      "co2_saved_kg": 4.7,
+      "date": "2026-04-10 16:16"
+    },
+    {
+      "score": 37.1,
+      "rank": "C",
+      "zone": "?",
+      "time_saved_pct": 52.0,
+      "co2_saved_kg": 4.7,
+      "date": "2026-04-10 16:19"
+    }
+  ]
+}

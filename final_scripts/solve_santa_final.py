@@ -22,7 +22,7 @@ class NpEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray): return obj.tolist()
         return super(NpEncoder, self).default(obj)
 
-def solve_vrp(num_vehicles=3, vehicle_capacity=200, speed_multiplier=1.0, forced_weather=None):
+def solve_vrp(num_vehicles=3, vehicle_capacity=200, speed_multiplier=1.0, forced_weather=None, incident_matrix_path=None):
     # 1. Chargement des données
     if not os.path.exists(DATA_PATH):
         print(f"Erreur : {DATA_PATH} introuvable.")
@@ -44,12 +44,14 @@ def solve_vrp(num_vehicles=3, vehicle_capacity=200, speed_multiplier=1.0, forced
             weather_desc = w_data.get('desc', 'Inconnue')
     
     # 3. Chargement et Ajustement Matrice de temps
-    if os.path.exists(TIME_MATRIX_PATH):
+    matrix_path = incident_matrix_path if (incident_matrix_path and os.path.exists(incident_matrix_path)) else TIME_MATRIX_PATH
+    if os.path.exists(matrix_path):
         # La vitesse réduit le temps : matrix / speed
         # La météo augmente le temps : matrix * factor
         total_factor = weather_factor / speed_multiplier
-        print(f"Chargement OSRM | Météo : {weather_desc} | Vitesse x{speed_multiplier} | Total Factor x{total_factor:.2f}")
-        matrix = np.load(TIME_MATRIX_PATH) * total_factor
+        incident_label = " | ⚠️ INCIDENTS ACTIFS" if incident_matrix_path and os.path.exists(incident_matrix_path) else ""
+        print(f"Chargement OSRM | Météo : {weather_desc} | Vitesse x{speed_multiplier} | Total Factor x{total_factor:.2f}{incident_label}")
+        matrix = np.load(matrix_path) * total_factor
     else:
         print("Erreur : Matrice OSRM manquante.")
         return

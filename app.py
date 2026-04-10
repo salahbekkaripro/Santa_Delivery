@@ -1,146 +1,227 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import json
-import os
-import pandas as pd
+import os, sys
 
-# Import des modules du projet
-from scripts.weather_engine import get_simulated_weather
-from scripts.generator_engine import generate_new_zone
-from final_scripts.solve_santa_final import solve_vrp
-from final_scripts.main_visualizer import generate_map
-from scripts.benchmark_engine import calculate_benchmark
-
-# Configuration de la page
-st.set_page_config(page_title="Santa-Route Optimizer Pro", page_icon="🎅", layout="wide")
-
-# Chemins des fichiers
+# ── Project root ──────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WEATHER_FILE = os.path.join(BASE_DIR, 'core_data', 'weather_status.json')
-RESULTS_FILE = os.path.join(BASE_DIR, 'production_output', 'resultats_finaux.json')
-MAP_FILE = os.path.join(BASE_DIR, 'production_output', 'output_final.html')
-BENCHMARK_FILE = os.path.join(BASE_DIR, 'core_data', 'benchmark_results.json')
-DATA_FILE = os.path.join(BASE_DIR, 'core_data', 'livraisons_5eme.csv')
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
-# --- Header ---
-st.title("🎅 Santa-Route Optimizer Pro")
-st.markdown("---")
+from scripts.ui_theme import apply_theme
 
-# --- Sidebar (Paramètres personnalisés) ---
-st.sidebar.header("⚙️ Configuration Totale")
+st.set_page_config(
+    page_title="🎅 Briefing Mission",
+    page_icon="🎅",
+    layout="centered"
+)
 
-# 1. Zone & Clients
-st.sidebar.subheader("📍 Zone & Clients")
-zone_name = st.sidebar.text_input("Quelle zone livrer ?", "Le Marais, Paris")
-nb_clients = st.sidebar.slider("Nombre de clients à générer", 10, 100, 30)
+# Thème visuel chaleureux (plus plaisant, moins "IA")
+apply_theme()
 
-if st.sidebar.button("🌍 GÉNÉRER LA ZONE"):
-    with st.spinner(f"🌐 Téléchargement de la carte de {zone_name}..."):
-        success = generate_new_zone(zone_name, nb_clients)
-        if success:
-            st.sidebar.success(f"✅ Zone {zone_name} prête !")
-            # On force une première optimisation pour avoir un visuel
-            solve_vrp(num_vehicles=3, vehicle_capacity=200)
-            calculate_benchmark(num_vehicles=3)
-            generate_map()
-            st.rerun()
-        else:
-            st.error("❌ Erreur lors de la génération de la zone. Vérifiez le nom.")
+# ── Navigation / state ─────────────────────────────────────────────────────────
+def start_mission(m: dict) -> None:
+    st.session_state["mission"] = m
+    st.session_state["zone_generated"] = False
 
-st.sidebar.markdown("---")
+    # Reset états de run précédents (évite bugs quand on relance une mission)
+    for k in (
+        "human_routes",
+        "assigned_clients",
+        "current_sleigh",
+        "route_sleigh_count",
+        "last_map_click",
+        "human_done",
+        "incidents_blocked",
+        "human_time_s",
+        "last_config",
+    ):
+        st.session_state.pop(k, None)
 
-# 2. Configuration de la Flotte
-st.sidebar.subheader("🚚 Flotte de Traîneaux")
-nb_traineaux = st.sidebar.slider("Nombre de traîneaux", 1, 10, 3, key="nb_v")
-capacite = st.sidebar.slider("Capacité de charge (kg)", 50, 500, 200, key="capa")
-vitesse_label = st.sidebar.selectbox("Vitesse moyenne", ["Lent", "Normal", "Rapide"], index=1, key="vitesse")
-speed_map = {"Lent": 0.7, "Normal": 1.0, "Rapide": 1.5}
-speed_val = speed_map[vitesse_label]
+    # Ne pas naviguer directement dans un callback (Streamlit: rerun() no-op)
+    st.session_state["__nav_to_qg"] = True
 
-# 3. Configuration Météo
-st.sidebar.subheader("🌦️ Conditions Météo")
-override_weather = st.sidebar.checkbox("Forcer une météo spécifique ?")
-weather_choice = None
-if override_weather:
-    weather_type = st.sidebar.selectbox("Scénario", ["Soleil", "Pluie", "Neige", "Tempête"])
-    weather_data_map = {
-        "Soleil": {"condition": "Clear", "desc": "Ciel dégagé", "factor": 1.0},
-        "Pluie": {"condition": "Rain", "desc": "Pluie modérée", "factor": 1.3},
-        "Neige": {"condition": "Snow", "desc": "Tempête de neige", "factor": 2.0},
-        "Tempête": {"condition": "Thunderstorm", "desc": "Orage violent", "factor": 2.5}
-    }
-    weather_choice = weather_data_map[weather_type]
 
-# 4. Configuration Visuelle
-st.sidebar.subheader("🎨 Personnalisation Visuelle")
-line_thickness = st.sidebar.slider("Épaisseur des traits", 1, 10, 4)
-show_names = st.sidebar.toggle("Afficher les noms des clients", value=True)
+# Navigation différée (hors callback)
+if st.session_state.pop("__nav_to_qg", False):
+    st.switch_page("pages/1_Quartier_General.py")
+    st.stop()
 
-# Choix des couleurs
-custom_colors = []
-default_colors = ['#FF0000', '#00FFFF', '#32CD32', '#FF00FF', '#FFFF00', '#FFA500', '#800080', '#0000FF', '#008000', '#A52A2A']
-for i in range(nb_traineaux):
-    color = st.sidebar.color_picker(f"Traîneau #{i+1}", default_colors[i % len(default_colors)], key=f"color_{i}")
-    custom_colors.append(color)
+# CSS Spécifique pour la neige et le titre
+st.markdown("""
+<style>
+/* Animation Neige */
+body {
+    background-color: #0b1c2c;
+    background-image: radial-gradient(white, rgba(255,255,255,.2) 2px, transparent 4px),
+                      radial-gradient(white, rgba(255,255,255,.15) 1px, transparent 30px),
+                      radial-gradient(white, rgba(255,255,255,.1) 2px, transparent 40px),
+                      radial-gradient(rgba(255,255,255,.4), rgba(255,255,255,.1) 2px, transparent 30px);
+    background-size: 550px 550px, 350px 350px, 250px 250px, 150px 150px;
+    animation: snow 10s linear infinite;
+}
+@keyframes snow {
+    0% { background-position: 0px 0px, 0px 0px, 0px 0px, 0px 0px; }
+    100% { background-position: 500px 1000px, 400px 400px, 300px 300px, 200px 200px; }
+}
 
-# --- Bouton de Recalcul ---
-if st.sidebar.button("🚀 RECALCULER L'OPTIMISATION"):
-    with st.spinner("🎅 Calcul en cours..."):
-        try:
-            if override_weather:
-                with open(WEATHER_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(weather_choice, f, indent=4, ensure_ascii=False)
-            else:
-                get_simulated_weather()
+.title-box {
+    background: linear-gradient(135deg, #c0392b, #e74c3c);
+    border-radius: 16px;
+    padding: 30px;
+    text-align: center;
+    color: white;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    margin-bottom: 30px;
+}
+.title-box h1 {
+    color: white !important;
+    margin: 0;
+    font-size: 2.8em;
+    font-weight: 900;
+}
+.level-card {
+    background: white;
+    border: 2px solid #EEE5DD;
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 15px;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.level-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+    border-color: #E74C3C;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── En-tête ───────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="title-box">
+    <h1>🎅 Opération Noël</h1>
+    <p style="font-size: 1.2em; opacity: 0.9; margin-top: 10px;">
+        Directeur Logistique, le Pôle Nord a besoin de vous.<br>
+        Choisissez votre mission et sauvez le réveillon !
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Configuration de la Mission ───────────────────────────────────────────────
+mode = st.radio("Sélectionnez un mode de jeu :", ["🏆 Mode Campagne", "🌍 Partie Libre (Sandbox)"], horizontal=True)
+
+mission = {}
+
+if mode == "🏆 Mode Campagne":
+    st.markdown("### Sélectionnez un niveau")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("""
+        <div class="level-card">
+            <h3 style="color:#27AE60;">Niveau 1</h3>
+            <h4>Paris (Le Marais)</h4>
+            <p>☀️ Beau temps<br>👥 10 clients<br>💰 Budget : 1500€<br>❌ Pas d'incidents</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.button(
+            "Jouer Niveau 1",
+            key="btn_lvl1",
+            width="stretch",
+            on_click=start_mission,
+            args=(
+                {
+                    "level": 1,
+                    "zone": "Le Marais, Paris",
+                    "num_clients": 10,
+                    "budget": 1500,
+                    "sleigh_cost": 500,
+                    "weather_key": "Clear",
+                    "random_incidents": False,
+                },
+            ),
+        )
             
-            solve_vrp(num_vehicles=nb_traineaux, vehicle_capacity=capacite, speed_multiplier=speed_val)
-            calculate_benchmark(num_vehicles=nb_traineaux)
-            generate_map(custom_colors=custom_colors, line_weight=line_thickness, show_names=show_names)
+    with col2:
+        st.markdown("""
+        <div class="level-card">
+            <h3 style="color:#F39C12;">Niveau 2</h3>
+            <h4>Berlin (Mitte)</h4>
+            <p>🌧️ Pluie<br>👥 30 clients<br>💰 Budget : 2500€<br>❌ Pas d'incidents</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.button(
+            "Jouer Niveau 2",
+            key="btn_lvl2",
+            width="stretch",
+            on_click=start_mission,
+            args=(
+                {
+                    "level": 2,
+                    "zone": "Mitte, Berlin",
+                    "num_clients": 30,
+                    "budget": 2500,
+                    "sleigh_cost": 600,
+                    "weather_key": "Rain",
+                    "random_incidents": False,
+                },
+            ),
+        )
             
-            st.sidebar.success("✅ Calcul terminé !")
-            st.rerun()
-        except Exception as e:
-            st.error(f"❌ Erreur lors de l'optimisation : {e}")
+    with col3:
+        st.markdown("""
+        <div class="level-card">
+            <h3 style="color:#E74C3C;">Niveau 3</h3>
+            <h4>Montréal (Plateau)</h4>
+            <p>❄️ Blizzard<br>👥 50 clients<br>💰 Budget : 4000€<br>🚨 Incidents routiers</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.button(
+            "Jouer Niveau 3",
+            key="btn_lvl3",
+            width="stretch",
+            on_click=start_mission,
+            args=(
+                {
+                    "level": 3,
+                    "zone": "Le Plateau-Mont-Royal, Montréal, Québec, Canada",
+                    "num_clients": 50,
+                    "budget": 4000,
+                    "sleigh_cost": 800,
+                    "weather_key": "Snow",
+                    "random_incidents": True,
+                },
+            ),
+        )
 
-if st.sidebar.button("🔄 RAZ"):
-    st.session_state.clear()
-    st.rerun()
-
-# --- Affichage des Résultats ---
-def display_weather_widget():
-    if os.path.exists(WEATHER_FILE):
-        with open(WEATHER_FILE, 'r', encoding='utf-8') as f:
-            w = json.load(f)
-            icon = "❄️" if w['factor'] >= 2.0 else ("🌧️" if w['factor'] >= 1.3 else "☀️")
-            st.info(f"**Météo actuelle :** {icon} {w['desc']} | **Impact :** x{w['factor']} | **Vitesse Saisie :** {vitesse_label}")
-
-display_weather_widget()
-
-if os.path.exists(RESULTS_FILE) and os.path.exists(BENCHMARK_FILE):
-    with open(RESULTS_FILE, 'r') as f:
-        res = json.load(f)
-    with open(BENCHMARK_FILE, 'r') as f:
-        bench = json.load(f)
-    
-    # Métriques
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Temps Total", f"{res['total_time_s'] // 60} min")
-    m2.metric("Poids Livré", f"{res['total_weight_kg']} kg")
-    m3.metric("Gain Temps", f"+{bench['savings']['time_saved_min']} min", f"{bench['savings']['time_saved_pct']}%")
-    m4.metric("CO2 Évité", f"{bench['savings']['co2_saved_kg']} kg", "🌱")
-
-    # Carte
-    if os.path.exists(MAP_FILE):
-        with open(MAP_FILE, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-            components.html(html_content, height=600)
-    
-    st.success(f"🚀 **Performance IA :** {bench['savings']['score']}% d'efficacité.")
-    
-    if res['dropped_points']:
-        st.error(f"⚠️ {len(res['dropped_points'])} colis non livrés. Ajustez la capacité ou le nombre de traîneaux.")
 else:
-    st.info("👋 Prêt pour une nouvelle tournée ? Configurez une zone et cliquez sur 'Générer la zone'.")
+    st.markdown("### Configurez votre partie libre")
+    with st.container():
+        zone_name = st.text_input("Ville ou quartier (ex: Bordeaux, Tokyo)", "Bordeaux")
+        colA, colB = st.columns(2)
+        with colA:
+            nb_clients = st.slider("Nombre de clients", 10, 100, 40)
+            budget = st.slider("Budget de départ (€)", 1000, 10000, 3000, step=500)
+        with colB:
+            weather_opts = {"Aléatoire": "random", "Soleil ☀️": "Clear", "Pluie 🌧️": "Rain", "Neige ❄️": "Snow", "Tempête ⛈️": "Thunderstorm"}
+            w_choice = st.selectbox("Météo", list(weather_opts.keys()))
+            incidents = st.toggle("Activer les incidents aléatoires (rues bloquées)", value=False)
+            
+        st.button(
+            "🚀 Créer la mission personnalisée",
+            type="primary",
+            width="stretch",
+            on_click=start_mission,
+            args=(
+                {
+                    "level": None,
+                    "zone": zone_name,
+                    "num_clients": nb_clients,
+                    "budget": budget,
+                    "sleigh_cost": 500,
+                    "weather_key": weather_opts[w_choice],
+                    "random_incidents": incidents,
+                },
+            ),
+        )
 
 st.markdown("---")
-st.caption("Santa-Route Optimizer Pro | Propulsé par OSMnx & OSRM | 2026")
+st.caption("Pôle Nord Logistics Tech | 2026")

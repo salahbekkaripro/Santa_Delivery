@@ -12,7 +12,7 @@ DIST_MATRIX = os.path.join(BASE_DIR, 'core_data', 'matrix_5eme.npy')
 OPTIMIZED_JSON = os.path.join(BASE_DIR, 'production_output', 'resultats_finaux.json')
 BENCHMARK_FILE = os.path.join(BASE_DIR, 'core_data', 'benchmark_results.json')
 
-def calculate_benchmark(num_vehicles=3):
+def calculate_benchmark(num_vehicles=3, budget_initial=0, budget_spent=0):
     # 1. Chargement
     df = pd.read_csv(DATA_PATH)
     time_matrix = np.load(TIME_MATRIX)
@@ -79,7 +79,13 @@ def calculate_benchmark(num_vehicles=3):
             "time_saved_min": int(time_saved_sec // 60),
             "time_saved_pct": round(time_saved_pct, 1),
             "co2_saved_kg": round(co2_saved_kg, 2),
-            "score": round(time_saved_pct, 1) # Le score est basé sur le temps gagné
+            "score": round(time_saved_pct, 1)
+        },
+        "budget": {
+            "initial": budget_initial,
+            "spent": budget_spent,
+            "remaining": budget_initial - budget_spent,
+            "remaining_pct": round(((budget_initial - budget_spent) / budget_initial * 100), 1) if budget_initial > 0 else 0
         }
     }
     

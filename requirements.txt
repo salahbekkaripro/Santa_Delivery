@@ -7,3 +7,5 @@ ortools
 requests
 scipy
 shapely
+plotly
+streamlit-folium
