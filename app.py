@@ -196,6 +196,7 @@ else:
     st.markdown("### Configurez votre partie libre")
     with st.container():
         zone_name = st.text_input("Ville ou quartier (ex: Bordeaux, Tokyo)", "Bordeaux")
+        st.caption("Conseil: écris `Quartier, Ville, Pays` (ex: `Trastevere, Rome, Italie` ou `Shibuya, Tokyo, Japon`).")
         colA, colB = st.columns(2)
         with colA:
             nb_clients = st.slider("Nombre de clients", 10, 100, 40)

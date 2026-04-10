@@ -22,6 +22,26 @@ def _fallback_dist_m(num_clients: int) -> int:
     # Ajusté pour fournir suffisamment de nœuds même à 50-100 clients.
     return int(min(8000, max(1500, 800 + num_clients * 40)))
 
+def _prepare_graph(G, min_nodes: int):
+    """
+    Réduit le graphe au plus grand composant connecté pour éviter des paires
+    inatteignables lors du calcul local des matrices.
+    """
+    try:
+        Gs = ox.truncate.largest_component(G, strongly=True)
+        if len(Gs.nodes) >= min_nodes:
+            return Gs
+    except Exception:
+        pass
+    try:
+        Gw = ox.truncate.largest_component(G, strongly=False)
+        if len(Gw.nodes) >= min_nodes:
+            return Gw
+    except Exception:
+        pass
+    return G
+
+
 def _compute_matrices_local(G, node_ids: list[int]) -> tuple[np.ndarray, np.ndarray]:
     """
     Calcule (durations, distances) localement à partir du graphe OSMnx/NetworkX.
@@ -69,11 +89,12 @@ def generate_new_zone(location_name, num_clients=30):
     # 1. Téléchargement du graphe
     try:
         G = ox.graph_from_place(location_name, network_type="drive")
+        G = _prepare_graph(G, int(num_clients) + 1)
         ox.save_graphml(G, GRAPH_PATH)
         print(f"✅ Graphe de '{location_name}' téléchargé.")
     except Exception as e:
         msg = str(e)
-        print(f"❌ Erreur lors du téléchargement d'OSM : {msg}")
+        print(f"⚠️ OSM (place) impossible : {msg}")
 
         # Cas fréquent: le polygon renvoyé par le géocodeur ne contient aucun nœud "drive"
         # => fallback sur un graphe autour d'un point (plus robuste).
@@ -82,6 +103,7 @@ def generate_new_zone(location_name, num_clients=30):
             dist_m = _fallback_dist_m(int(num_clients))
             print(f"↪️ Fallback: graph_from_point({center}, dist={dist_m}m)")
             G = ox.graph_from_point(center, dist=dist_m, network_type="drive")
+            G = _prepare_graph(G, int(num_clients) + 1)
             ox.save_graphml(G, GRAPH_PATH)
             print(f"✅ Graphe (fallback point) téléchargé pour '{location_name}'.")
         except Exception as e2:
@@ -135,7 +157,20 @@ def generate_new_zone(location_name, num_clients=30):
     df.to_csv(DATA_PATH, index=False)
     print(f"✅ {num_clients} clients générés dans {DATA_PATH}")
 
-    # 3. Calcul de la Matrice (Temps/Distance) via OSRM (fallback local si OSRM down)
+    # 3. Calcul de la Matrice (Temps/Distance)
+    # OSRM public peut timeouter sur de grosses matrices -> fallback local.
+    max_osrm_points = int(os.getenv("OSRM_MAX_POINTS", "40"))
+    if len(df) > max_osrm_points:
+        durations, distances = _compute_matrices_local(G, node_ids)
+        np.save(TIME_MATRIX, durations)
+        np.save(DIST_MATRIX, distances)
+        print(f"✅ Matrices locales de temps/distance ({len(df)}x{len(df)}) générées.")
+        return True, (
+            f"OSRM sauté (>{max_osrm_points} points). "
+            "Matrice calculée localement (peut être un peu plus lente)."
+        )
+
+    # OSRM (fallback local si OSRM down)
     coords = [f"{row['lon']},{row['lat']}" for _, row in df.iterrows()]
     coords_str = ";".join(coords)
     url = f"http://router.project-osrm.org/table/v1/driving/{coords_str}"
@@ -164,7 +199,7 @@ def generate_new_zone(location_name, num_clients=30):
         raise last_exc if last_exc else RuntimeError("OSRM inconnu")
     except Exception as e:
         msg = str(e)
-        print(f"❌ Erreur OSRM : {msg}")
+        print(f"⚠️ OSRM indisponible : {msg}")
 
         # Fallback local: calcule la matrice sur le graphe (plus lent mais fiable)
         try:

@@ -13,6 +13,14 @@
   "3": [],
   "libre": [
     {
+      "score": 64.5,
+      "rank": "B",
+      "zone": "Bordeaux",
+      "time_saved_pct": 71.0,
+      "co2_saved_kg": 9.51,
+      "date": "2026-04-10 17:07"
+    },
+    {
       "score": 63.4,
       "rank": "B",
       "zone": "?",
@@ -43,14 +51,6 @@
       "time_saved_pct": 52.0,
       "co2_saved_kg": 4.7,
       "date": "2026-04-10 16:16"
-    },
-    {
-      "score": 37.1,
-      "rank": "C",
-      "zone": "?",
-      "time_saved_pct": 52.0,
-      "co2_saved_kg": 4.7,
-      "date": "2026-04-10 16:19"
     }
   ]
 }

@@ -6,10 +6,12 @@ puis l'IA révèle la solution optimale.
 import streamlit as st
 import streamlit.components.v1 as components
 import os, sys, json, random
+from itertools import islice
 import numpy as np
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
+import osmnx as ox
 
 # ── Project root ──────────────────────────────────────────────────────────────
 PAGES_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +27,7 @@ MAP_FILE         = os.path.join(BASE_DIR, "production_output", "output_final.htm
 BENCHMARK_FILE   = os.path.join(BASE_DIR, "core_data", "benchmark_results.json")
 TIME_MATRIX_PATH = os.path.join(BASE_DIR, "core_data", "live_time_matrix.npy")
 INCIDENT_MATRIX  = os.path.join(BASE_DIR, "core_data", "live_time_matrix_incident.npy")
+GRAPH_PATH       = os.path.join(BASE_DIR, "core_data", "paris5.graphml")
 
 from scripts.weather_engine   import get_simulated_weather
 from scripts.generator_engine import generate_new_zone
@@ -51,6 +54,77 @@ SLEIGH_COLORS = [
     "#9B59B6", "#1ABC9C", "#E67E22", "#2C3E50",
     "#E91E63", "#795548",
 ]
+
+@st.cache_resource(show_spinner=False)
+def _load_graph(graph_path: str, mtime: float):
+    return ox.load_graphml(graph_path)
+
+
+def _route_length_m(G, route: list[int]) -> float:
+    total = 0.0
+    for u, v in zip(route[:-1], route[1:]):
+        ed = G.get_edge_data(u, v)
+        if not ed:
+            continue
+        total += float(min(d.get("length", 0.0) for d in ed.values()))
+    return total
+
+
+def _route_to_latlon_coords(G, route: list[int]) -> list[list[float]]:
+    coords: list[list[float]] = []
+    for u, v in zip(route[:-1], route[1:]):
+        ed = G.get_edge_data(u, v)
+        if not ed:
+            continue
+        data = min(ed.values(), key=lambda d: d.get("length", 1e12))
+        geom = data.get("geometry")
+        if geom is not None:
+            seg = [[float(y), float(x)] for x, y in list(geom.coords)]
+        else:
+            seg = [
+                [float(G.nodes[u]["y"]), float(G.nodes[u]["x"])],
+                [float(G.nodes[v]["y"]), float(G.nodes[v]["x"])],
+            ]
+        if coords and seg and coords[-1] == seg[0]:
+            coords.extend(seg[1:])
+        else:
+            coords.extend(seg)
+    return coords
+
+
+def _compute_route_options(
+    G,
+    from_lat: float,
+    from_lon: float,
+    to_lat: float,
+    to_lon: float,
+    k: int = 3,
+) -> list[dict]:
+    orig = ox.distance.nearest_nodes(G, X=float(from_lon), Y=float(from_lat))
+    dest = ox.distance.nearest_nodes(G, X=float(to_lon), Y=float(to_lat))
+    try:
+        routes = list(islice(ox.routing.k_shortest_paths(G, orig, dest, k, weight="length"), k))
+    except Exception:
+        routes = []
+    if not routes:
+        sp = ox.routing.shortest_path(G, orig, dest, weight="length")
+        routes = [sp] if sp else []
+    opts = []
+    for r in routes:
+        if not r:
+            continue
+        opts.append({"route": r, "dist_m": _route_length_m(G, r)})
+    # dédoublonne si les options sont identiques
+    seen = set()
+    unique = []
+    for o in opts:
+        key = tuple(o["route"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(o)
+    return unique
+
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
 if "mission" not in st.session_state:
@@ -157,6 +231,23 @@ if not st.session_state.get("zone_generated", False):
     if success:
         if gen_msg:
             st.warning(gen_msg)
+            with st.expander("Pourquoi ce message ? (OSRM / géocodage)"):
+                st.markdown(
+                    """
+**1) Panne OSRM (Fallback local)**
+
+L'API publique d'OSRM (serveur gratuit qui calcule les temps de trajet) peut renvoyer des erreurs
+`504 Gateway Time-out` quand on demande trop de points d'un coup (ex: ~50 livraisons).
+
+Dans ce cas, l'app active automatiquement un **fallback local** : on calcule la matrice directement
+à partir du graphe OSM avec NetworkX. C'est plus lent, mais ça évite de bloquer la partie.
+
+**2) Précision géographique (géocodage)**
+
+Si un quartier seul est ambigu, OSM peut renvoyer une zone trop petite (ou sans routes "drive").
+Utilise plutôt un format plus précis : `Quartier, Ville, Région, Pays` (ex: `Le Plateau-Mont-Royal, Montréal, Canada`).
+                    """.strip()
+                )
         with st.spinner("⚙️ Calcul des données de référence…"):
             solve_vrp(num_vehicles=3, vehicle_capacity=200)
             calculate_benchmark(num_vehicles=3)
@@ -167,6 +258,14 @@ if not st.session_state.get("zone_generated", False):
         st.error("❌ Génération de zone impossible.")
         if gen_msg:
             st.info(gen_msg)
+            with st.expander("Aide rapide (nom de zone)"):
+                st.markdown(
+                    """
+- Essaie un nom **plus précis** : `Quartier, Ville, Pays`
+- Ou choisis une **zone plus grande** (arrondissement/ville entière)
+- Si tu as beaucoup de clients, réduis le nombre pour un premier test
+                    """.strip()
+                )
         if st.button("← Retour"):
             st.switch_page("app.py")
         st.stop()
@@ -187,16 +286,35 @@ if (
     or st.session_state.get("route_sleigh_count") != nb_traineaux
 ):
     st.session_state["human_routes"]      = {i: [] for i in range(nb_traineaux)}
+    st.session_state["human_segments"]    = {i: [] for i in range(nb_traineaux)}
     st.session_state["assigned_clients"]  = set()
     st.session_state["current_sleigh"]    = 0
     st.session_state["route_sleigh_count"]= nb_traineaux
     st.session_state["last_map_click"]    = None
     st.session_state["human_done"]        = False
+    st.session_state.pop("pending_add", None)
+    st.session_state.pop("pending_routes", None)
+    st.session_state.pop("pending_route_choice", None)
 
 human_routes   = st.session_state["human_routes"]
+human_segments = st.session_state.get("human_segments", {i: [] for i in range(nb_traineaux)})
 assigned       = st.session_state["assigned_clients"]
 current_sleigh = min(st.session_state["current_sleigh"], nb_traineaux - 1)
 human_done     = st.session_state.get("human_done", False)
+
+def _clear_pending():
+    st.session_state.pop("pending_add", None)
+    st.session_state.pop("pending_routes", None)
+    st.session_state.pop("pending_route_choice", None)
+
+
+def _get_point_latlon(pid: int) -> tuple[float, float]:
+    if pid == 0:
+        return float(depot_row["lat"]), float(depot_row["lon"])
+    r = df[df["id"] == pid]
+    if r.empty:
+        return float(depot_row["lat"]), float(depot_row["lon"])
+    return float(r.iloc[0]["lat"]), float(r.iloc[0]["lon"])
 
 # Alerte incidents
 if st.session_state.get("incidents_blocked", 0) > 0:
@@ -224,6 +342,7 @@ if not human_done:
       &nbsp;—&nbsp;
       <span style="color:#555;">
         Cliquez sur les cercles de la carte pour les ajouter à votre traîneau actif.
+        À chaque ajout, choisissez la rue (le chemin) que vous voulez emprunter.
         Changez de traîneau avec le sélecteur. Quand vous avez terminé, cliquez sur
         <em>« Voir la solution IA »</em> pour comparer vos itinéraires.
       </span>
@@ -250,6 +369,7 @@ if not human_done:
         if new_sel != current_sleigh:
             st.session_state["current_sleigh"] = new_sel
             current_sleigh = new_sel
+            active_col = custom_colors[current_sleigh % len(custom_colors)]
 
     with prog_col:
         col_p = "#27AE60" if pct_done == 100 else ("#F39C12" if pct_done > 50 else "#E74C3C")
@@ -276,6 +396,85 @@ if not human_done:
         </div>
         """, unsafe_allow_html=True)
 
+    # ── Graphe routier (pour tracer les rues) ───────────────────────────────
+    G = None
+    graph_error = None
+    if os.path.exists(GRAPH_PATH):
+        try:
+            G = _load_graph(GRAPH_PATH, os.path.getmtime(GRAPH_PATH))
+        except Exception as e:
+            graph_error = str(e)
+    else:
+        graph_error = "Graphe routier introuvable (graphml)."
+
+    # ── Choix de rue (chemin) pour le prochain segment ─────────────────────
+    pending_add = st.session_state.get("pending_add")
+    if pending_add and pending_add.get("sleigh") != current_sleigh:
+        st.info(
+            f"Un choix de chemin est en attente pour 🛷 Traîneau #{pending_add.get('sleigh', 0) + 1}."
+            " Sélectionnez-le dans le menu pour valider ou annuler."
+        )
+
+    if pending_add and pending_add.get("sleigh") == current_sleigh:
+        if graph_error:
+            st.error(f"Impossible de proposer des rues : {graph_error}")
+            _clear_pending()
+        else:
+            if "pending_routes" not in st.session_state:
+                from_id = int(pending_add["from_id"])
+                to_id = int(pending_add["to_id"])
+                flt, fln = _get_point_latlon(from_id)
+                tlt, tln = _get_point_latlon(to_id)
+                options = _compute_route_options(G, flt, fln, tlt, tln, k=3)
+                if not options:
+                    st.error("Aucun chemin routier trouvé entre ces points.")
+                    _clear_pending()
+                else:
+                    st.session_state["pending_routes"] = {
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "options": options,
+                    }
+                    st.session_state.setdefault("pending_route_choice", 0)
+
+            pr = st.session_state.get("pending_routes")
+            if pr and pr.get("to_id") is not None:
+                to_id = int(pr["to_id"])
+                r = df[df["id"] == to_id]
+                name = str(r.iloc[0].get("nom_client", f"Client {to_id}")) if not r.empty else f"Client {to_id}"
+                opts = pr["options"]
+                labels = [f"Option {i+1} — {o['dist_m']/1000:.2f} km" for i, o in enumerate(opts)]
+                st.markdown("### 🧭 Choix de votre rue (chemin)")
+                choice = st.radio(
+                    f"Chemin vers #{to_id} · {name}",
+                    range(len(labels)),
+                    format_func=lambda i: labels[i],
+                    index=int(st.session_state.get("pending_route_choice", 0)),
+                    key="pending_route_choice",
+                    horizontal=True,
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("✅ Valider ce chemin", type="primary", width="stretch"):
+                        seg = opts[int(choice)]
+                        human_routes[current_sleigh].append(to_id)
+                        st.session_state["assigned_clients"].add(to_id)
+                        human_segments.setdefault(current_sleigh, []).append(
+                            {
+                                "from_id": int(pr["from_id"]),
+                                "to_id": to_id,
+                                "route": seg["route"],
+                                "dist_m": float(seg["dist_m"]),
+                            }
+                        )
+                        st.session_state["human_segments"] = human_segments
+                        _clear_pending()
+                        st.rerun()
+                with c2:
+                    if st.button("✖️ Annuler", width="stretch"):
+                        _clear_pending()
+                        st.rerun()
+
     # ── Construction de la carte Folium ───────────────────────────────────────
     center_lat = float(depot_row["lat"])
     center_lon = float(depot_row["lon"])
@@ -290,103 +489,156 @@ if not human_done:
     for sid, route_ids in human_routes.items():
         if route_ids:
             col_r = custom_colors[sid % len(custom_colors)]
-            coords = [[center_lat, center_lon]]
-            for rid in route_ids:
-                r = df[df["id"] == rid]
-                if not r.empty:
-                    coords.append([float(r.iloc[0]["lat"]), float(r.iloc[0]["lon"])])
-            if len(coords) > 1:
-                folium.PolyLine(
-                    coords,
-                    color=col_r,
-                    weight=5,
-                    opacity=0.85,
-                    tooltip=f"🛷 Traîneau #{sid + 1}",
-                ).add_to(m)
+            segs = human_segments.get(sid, [])
+            if G and segs:
+                for seg in segs:
+                    coords = _route_to_latlon_coords(G, seg["route"])
+                    if coords:
+                        folium.PolyLine(
+                            coords,
+                            color=col_r,
+                            weight=5,
+                            opacity=0.9,
+                            tooltip=f"🛷 Traîneau #{sid + 1} · {seg['dist_m']/1000:.2f} km",
+                        ).add_to(m)
+                last_id = int(route_ids[-1])
+                flt, fln = _get_point_latlon(last_id)
+                try:
+                    ret_opts = _compute_route_options(G, flt, fln, center_lat, center_lon, k=1)
+                    if ret_opts:
+                        ret = ret_opts[0]
+                        coords = _route_to_latlon_coords(G, ret["route"])
+                        if coords:
+                            folium.PolyLine(
+                                coords,
+                                color=col_r,
+                                weight=4,
+                                opacity=0.35,
+                                dash_array="6 10",
+                                tooltip=f"↩︎ Retour dépôt (auto) · {ret['dist_m']/1000:.2f} km",
+                            ).add_to(m)
+                except Exception:
+                    pass
+            else:
+                coords = [[center_lat, center_lon]]
+                for rid in route_ids:
+                    r = df[df["id"] == rid]
+                    if not r.empty:
+                        coords.append([float(r.iloc[0]["lat"]), float(r.iloc[0]["lon"])])
+                if len(coords) > 1:
+                    folium.PolyLine(
+                        coords,
+                        color=col_r,
+                        weight=5,
+                        opacity=0.85,
+                        tooltip=f"🛷 Traîneau #{sid + 1}",
+                    ).add_to(m)
 
-    # Dépôt
+    # Prévisualisation des options (si un choix est en attente)
+    pr = st.session_state.get("pending_routes")
+    if G and pr and pending_add and pending_add.get("sleigh") == current_sleigh:
+        opts = pr.get("options", [])
+        sel_i = int(st.session_state.get("pending_route_choice", 0))
+        for i, o in enumerate(opts):
+            coords = _route_to_latlon_coords(G, o["route"])
+            if not coords:
+                continue
+            folium.PolyLine(
+                coords,
+                color=active_col if i == sel_i else "#6B7280",
+                weight=6 if i == sel_i else 4,
+                opacity=0.65 if i == sel_i else 0.25,
+                dash_array=None if i == sel_i else "4 10",
+                tooltip=f"Option {i+1} · {o['dist_m']/1000:.2f} km",
+            ).add_to(m)
+
+# Dépôt
+folium.CircleMarker(
+    location=[center_lat, center_lon],
+    radius=18,
+    color="white",
+    weight=3,
+    fill=True,
+    fill_color="#2C3E50",
+    fill_opacity=1.0,
+    tooltip="🏠 DÉPÔT CENTRAL — départ et retour de tous les traîneaux",
+    popup=folium.Popup("🏠 <b>Dépôt Central</b>", max_width=160),
+).add_to(m)
+# Emoji home sur le dépôt (non-interactif)
+folium.Marker(
+    location=[center_lat, center_lon],
+    icon=folium.DivIcon(
+        html='<div style="font-size:14px;line-height:1;pointer-events:none;'
+             'margin-top:-6px;margin-left:-5px;">🏠</div>',
+        icon_size=(20, 20),
+        icon_anchor=(10, 10),
+    ),
+).add_to(m)
+
+# Marqueurs clients
+for _, row in clients_df.iterrows():
+    cid    = int(row["id"])
+    lat    = float(row["lat"])
+    lon    = float(row["lon"])
+    name   = str(row.get("nom_client", f"Client {cid}"))
+    weight = int(row.get("poids_colis", 0))
+
+    if cid in assigned:
+        # Trouver le traîneau propriétaire
+        owner_sid, order_n = current_sleigh, 0
+        for sid, route in human_routes.items():
+            if cid in route:
+                owner_sid = sid
+                order_n   = route.index(cid) + 1
+                break
+        fill_c    = custom_colors[owner_sid % len(custom_colors)]
+        tooltip_t = f"✅ Stop #{order_n} — {name} (Traîneau #{owner_sid + 1})"
+        radius    = 13
+    else:
+        fill_c    = "#E74C3C"
+        tooltip_t = f"📦 #{cid} · {name} · {weight} kg  — cliquer pour ajouter"
+        radius    = 11
+
     folium.CircleMarker(
-        location=[center_lat, center_lon],
-        radius=18,
+        location=[lat, lon],
+        radius=radius,
         color="white",
-        weight=3,
+        weight=2,
         fill=True,
-        fill_color="#2C3E50",
-        fill_opacity=1.0,
-        tooltip="🏠 DÉPÔT CENTRAL — départ et retour de tous les traîneaux",
-        popup=folium.Popup("🏠 <b>Dépôt Central</b>", max_width=160),
-    ).add_to(m)
-    # Emoji home sur le dépôt (non-interactif)
-    folium.Marker(
-        location=[center_lat, center_lon],
-        icon=folium.DivIcon(
-            html='<div style="font-size:14px;line-height:1;pointer-events:none;'
-                 'margin-top:-6px;margin-left:-5px;">🏠</div>',
-            icon_size=(20, 20),
-            icon_anchor=(10, 10),
+        fill_color=fill_c,
+        fill_opacity=0.92,
+        tooltip=tooltip_t,
+        popup=folium.Popup(
+            f"<b>#{cid} {name}</b><br>📦 {weight} kg", max_width=180
         ),
     ).add_to(m)
 
-    # Marqueurs clients
-    for _, row in clients_df.iterrows():
-        cid    = int(row["id"])
-        lat    = float(row["lat"])
-        lon    = float(row["lon"])
-        name   = str(row.get("nom_client", f"Client {cid}"))
-        weight = int(row.get("poids_colis", 0))
-
-        if cid in assigned:
-            # Trouver le traîneau propriétaire
-            owner_sid, order_n = current_sleigh, 0
-            for sid, route in human_routes.items():
-                if cid in route:
-                    owner_sid = sid
-                    order_n   = route.index(cid) + 1
-                    break
-            fill_c    = custom_colors[owner_sid % len(custom_colors)]
-            tooltip_t = f"✅ Stop #{order_n} — {name} (Traîneau #{owner_sid + 1})"
-            radius    = 13
-        else:
-            fill_c    = "#E74C3C"
-            tooltip_t = f"📦 #{cid} · {name} · {weight} kg  — cliquer pour ajouter"
-            radius    = 11
-
-        folium.CircleMarker(
-            location=[lat, lon],
-            radius=radius,
-            color="white",
-            weight=2,
-            fill=True,
-            fill_color=fill_c,
-            fill_opacity=0.92,
-            tooltip=tooltip_t,
-            popup=folium.Popup(
-                f"<b>#{cid} {name}</b><br>📦 {weight} kg", max_width=180
-            ),
-        ).add_to(m)
-
-        # Numéro ou icône au centre du cercle
-        if cid in assigned:
-            label_html = (
-                f'<div style="color:white;font-weight:900;font-size:11px;'
-                f'text-align:center;line-height:1;pointer-events:none;'
-                f'margin-top:-5px;margin-left:-5px;">{order_n}</div>'
-            )
-        else:
-            label_html = (
-                '<div style="font-size:11px;text-align:center;line-height:1;'
-                'pointer-events:none;margin-top:-5px;margin-left:-5px;">📦</div>'
-            )
-        folium.Marker(
-            location=[lat, lon],
-            icon=folium.DivIcon(
-                html=label_html, icon_size=(10, 10), icon_anchor=(5, 5)
-            ),
-        ).add_to(m)
+    # Numéro ou icône au centre du cercle
+    if cid in assigned:
+        label_html = (
+            f'<div style="color:white;font-weight:900;font-size:11px;'
+            f'text-align:center;line-height:1;pointer-events:none;'
+            f'margin-top:-5px;margin-left:-5px;">{order_n}</div>'
+        )
+    else:
+        label_html = (
+            '<div style="font-size:11px;text-align:center;line-height:1;'
+            'pointer-events:none;margin-top:-5px;margin-left:-5px;">📦</div>'
+        )
+    folium.Marker(
+        location=[lat, lon],
+        icon=folium.DivIcon(
+            html=label_html, icon_size=(10, 10), icon_anchor=(5, 5)
+        ),
+    ).add_to(m)
 
     # ── Affichage interactif ───────────────────────────────────────────────────
-    map_result = st_folium(m, height=540, key="human_map",
-                           returned_objects=["last_object_clicked"])
+    map_result = st_folium(
+        m,
+        height=540,
+        key="human_map",
+        returned_objects=["last_object_clicked"],
+    )
 
     # ── Traitement des clics ───────────────────────────────────────────────────
     clicked = map_result.get("last_object_clicked") if map_result else None
@@ -397,7 +649,6 @@ if not human_done:
             click_key = f"{lat_c:.5f},{lng_c:.5f}"
             if click_key != st.session_state.get("last_map_click"):
                 st.session_state["last_map_click"] = click_key
-                # Client le plus proche (distance L1 en degrés)
                 min_dist, nearest_id = float("inf"), None
                 for _, row in df.iterrows():
                     cid = int(row["id"])
@@ -406,11 +657,16 @@ if not human_done:
                     d = abs(float(row["lat"]) - lat_c) + abs(float(row["lon"]) - lng_c)
                     if d < min_dist:
                         min_dist, nearest_id = d, cid
-                # Seuil ~400 m en degrés
                 if nearest_id is not None and min_dist < 0.005:
                     if nearest_id not in assigned:
-                        st.session_state["human_routes"][current_sleigh].append(nearest_id)
-                        st.session_state["assigned_clients"].add(nearest_id)
+                        prev_id = human_routes[current_sleigh][-1] if human_routes[current_sleigh] else 0
+                        st.session_state["pending_add"] = {
+                            "sleigh": current_sleigh,
+                            "from_id": int(prev_id),
+                            "to_id": int(nearest_id),
+                        }
+                        st.session_state.pop("pending_routes", None)
+                        st.session_state["pending_route_choice"] = 0
                         st.rerun()
 
     # ── Contrôles des routes ───────────────────────────────────────────────────
@@ -420,6 +676,11 @@ if not human_done:
             if human_routes[current_sleigh]:
                 removed = human_routes[current_sleigh].pop()
                 st.session_state["assigned_clients"].discard(removed)
+                if human_segments.get(current_sleigh):
+                    human_segments[current_sleigh].pop()
+                    st.session_state["human_segments"] = human_segments
+                if st.session_state.get("pending_add", {}).get("sleigh") == current_sleigh:
+                    _clear_pending()
                 st.session_state["human_routes"] = human_routes
                 st.session_state["last_map_click"] = None
                 st.rerun()
@@ -428,32 +689,50 @@ if not human_done:
             for cid in list(human_routes[current_sleigh]):
                 st.session_state["assigned_clients"].discard(cid)
             st.session_state["human_routes"][current_sleigh] = []
+            st.session_state["human_segments"][current_sleigh] = []
+            if st.session_state.get("pending_add", {}).get("sleigh") == current_sleigh:
+                _clear_pending()
             st.session_state["last_map_click"] = None
             st.rerun()
     with rc3:
         if st.button("🔄 Tout réinitialiser", width="stretch"):
             st.session_state["human_routes"]     = {i: [] for i in range(nb_traineaux)}
+            st.session_state["human_segments"]   = {i: [] for i in range(nb_traineaux)}
             st.session_state["assigned_clients"] = set()
             st.session_state["last_map_click"]   = None
+            _clear_pending()
             st.rerun()
 
     # Affichage de la route courante
-    if human_routes[current_sleigh]:
-        labels = []
-        for rid in human_routes[current_sleigh]:
-            r = df[df["id"] == rid]
-            labels.append(f"#{rid} {r.iloc[0]['nom_client']}" if not r.empty else f"#{rid}")
-        route_str = " → ".join(labels)
-        st.markdown(f"""
-        <div style="background:white; border-left:5px solid {active_col};
-                    border-radius:12px; padding:12px 18px; margin-top:10px;
-                    box-shadow:0 2px 8px rgba(0,0,0,0.06);">
-          <strong style="color:{active_col};">🛷 Traîneau #{current_sleigh + 1}</strong>
-          <span style="color:#555; font-size:.88em;">
-            &nbsp;: Dépôt → {route_str} → Dépôt
-          </span>
-        </div>
-        """, unsafe_allow_html=True)
+        if human_routes[current_sleigh]:
+            labels = []
+            for rid in human_routes[current_sleigh]:
+                r = df[df["id"] == rid]
+                labels.append(f"#{rid} {r.iloc[0]['nom_client']}" if not r.empty else f"#{rid}")
+            route_str = " → ".join(labels)
+            dist_m = sum(float(s.get("dist_m", 0.0)) for s in human_segments.get(current_sleigh, []))
+            ret_m = 0.0
+            if G is not None:
+                last_id = int(human_routes[current_sleigh][-1])
+                flt, fln = _get_point_latlon(last_id)
+                try:
+                    ret_opts = _compute_route_options(G, flt, fln, center_lat, center_lon, k=1)
+                    if ret_opts:
+                        ret_m = float(ret_opts[0]["dist_m"])
+                except Exception:
+                    ret_m = 0.0
+            dist_total_m = dist_m + ret_m
+            st.markdown(f"""
+            <div style="background:white; border-left:5px solid {active_col};
+                        border-radius:12px; padding:12px 18px; margin-top:10px;
+                        box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+              <strong style="color:{active_col};">🛷 Traîneau #{current_sleigh + 1}</strong>
+              <span style="color:#555; font-size:.88em;">
+                &nbsp;: Dépôt → {route_str} → Dépôt
+                &nbsp;·&nbsp; <strong style="color:#111;">Distance :</strong> {dist_total_m/1000:.2f} km
+              </span>
+            </div>
+            """, unsafe_allow_html=True)
 
     # Progression
     st.markdown(f"""
