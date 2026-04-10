@@ -55,7 +55,7 @@ def get_detailed_geometry(G, route_nodes):
         return final_path
     except: return [[G.nodes[n]['y'], G.nodes[n]['x']] for n in route_nodes]
 
-def generate_map():
+def generate_map(custom_colors=None, line_weight=4, show_names=False):
     # 1. Chargement
     try:
         df = pd.read_csv(DATA_PATH)
@@ -70,17 +70,27 @@ def generate_map():
         benchmark = None
         if os.path.exists(BENCHMARK_FILE):
             with open(BENCHMARK_FILE, 'r') as f: benchmark = json.load(f)
-    except: print("Erreur chargement données."); return
+    except Exception as e:
+        print(f"Erreur chargement données: {e}")
+        return
 
     # 2. Graphe
     G = ox.load_graphml(GRAPH_PATH)
 
+    # 3. Calcul du centre de la carte
+    depot = df[df['id'] == 0].iloc[0]
+    map_center = [depot['lat'], depot['lon']]
+    depot_coords = (depot['lat'], depot['lon'])
+
     # 3. Carte
     tiles = 'cartodbdarkmatter' if weather_factor > 1.2 else 'cartodbpositron'
-    m = folium.Map(location=[48.8448, 2.3471], zoom_start=15, tiles=tiles)
+    m = folium.Map(location=map_center, zoom_start=14, tiles=tiles)
 
-    colors = ['#FF0000', '#00FFFF', '#32CD32', '#FF00FF', '#FFFF00']
-    offsets = {0: 5, 1: -5, 2: 0}
+    # Couleurs
+    colors = custom_colors if custom_colors else ['#FF0000', '#00FFFF', '#32CD32', '#FF00FF', '#FFFF00']
+    
+    # Décalages
+    offsets = [0, 5, -5, 10, -10, 15, -15, 20, -20, 25]
 
     # 4. Tracé Naïf (Pointillés Gris)
     if benchmark:
@@ -88,7 +98,8 @@ def generate_map():
             naive_coords = []
             for j in range(len(tour['route_ids']) - 1):
                 s_id, e_id = tour['route_ids'][j], tour['route_ids'][j+1]
-                s_p, e_p = points_data[s_id], points_data[e_id]
+                s_p = ({"lat": depot_coords[0], "lon": depot_coords[1]} if s_id == 0 else points_data[s_id])
+                e_p = ({"lat": depot_coords[0], "lon": depot_coords[1]} if e_id == 0 else points_data[e_id])
                 o_n, d_n = ox.nearest_nodes(G, s_p['lon'], s_p['lat']), ox.nearest_nodes(G, e_p['lon'], e_p['lat'])
                 try:
                     r_n = nx.shortest_path(G, o_n, d_n, weight='length')
@@ -98,13 +109,15 @@ def generate_map():
                 folium.PolyLine(naive_coords, color='gray', weight=2, opacity=0.3, dash_array='5, 10').add_to(m)
 
     # 5. Tracé Optimisé
-    for tour in results['tours']:
-        v_id, color, offset_m = tour.get('vehicle_id', 0), colors[tour.get('vehicle_id', 0) % len(colors)], offsets.get(tour.get('vehicle_id', 0), 0)
+    for i, tour in enumerate(results['tours']):
+        color = colors[i % len(colors)]
+        offset_m = offsets[i % len(offsets)]
+        
         all_micro_coords = []
         for j in range(len(tour['route_ids']) - 1):
             s_id, e_id = tour['route_ids'][j], tour['route_ids'][j+1]
-            s_lat, s_lon = (DEPOT_LAT_LON if s_id == 0 else (points_data[s_id]['lat'], points_data[s_id]['lon']))
-            e_lat, e_lon = (DEPOT_LAT_LON if e_id == 0 else (points_data[e_id]['lat'], points_data[e_id]['lon']))
+            s_lat, s_lon = (depot_coords if s_id == 0 else (points_data[s_id]['lat'], points_data[s_id]['lon']))
+            e_lat, e_lon = (depot_coords if e_id == 0 else (points_data[e_id]['lat'], points_data[e_id]['lon']))
             try:
                 r_n = nx.shortest_path(G, ox.nearest_nodes(G, s_lon, s_lat), ox.nearest_nodes(G, e_lon, e_lat), weight='travel_time')
                 segment = get_detailed_geometry(G, r_n)
@@ -113,31 +126,35 @@ def generate_map():
                     if all_micro_coords and all_micro_coords[-1] == segment[0]: segment = segment[1:]
                     all_micro_coords.extend(segment)
             except: pass
-        if offset_m != 0 and all_micro_coords: all_micro_coords = apply_offset(all_micro_coords, offset_m)
+            
+        if offset_m != 0 and all_micro_coords:
+            all_micro_coords = apply_offset(all_micro_coords, offset_m)
+            
         if all_micro_coords:
-            plugins.AntPath(locations=all_micro_coords, color=color, weight=4, opacity=0.8, hardwareAcceleration=True).add_to(m)
+            plugins.AntPath(locations=all_micro_coords, color=color, weight=line_weight, opacity=0.8, hardwareAcceleration=True).add_to(m)
 
     # 6. Widgets
-    folium.Marker(location=DEPOT_LAT_LON, icon=folium.Icon(color='black', icon='home', prefix='fa')).add_to(m)
-    for nid in points_data:
-        if nid != 0: folium.CircleMarker(location=[points_data[nid]['lat'], points_data[nid]['lon']], radius=4, color='gray', fill=True, fill_opacity=0.4).add_to(m)
-
-    # Météo (Top Right)
-    w_icon = "❄️" if weather_factor >= 2.0 else ("🌧️" if weather_factor >= 1.3 else "☀️")
-    folium.Element(f'''<div style="position: fixed; top: 10px; right: 10px; z-index:9999; background: white; padding: 10px; border-radius: 5px; border: 2px solid black;">
-    <b>{w_icon} Météo : {weather_desc}</b> | Impact : x{weather_factor}</div>''').add_to(m.get_root().html)
-
-    # Benchmark (Bottom Left)
-    if benchmark:
-        sav = benchmark['savings']
-        folium.Element(f'''<div style="position: fixed; bottom: 50px; left: 50px; z-index:9999; background: white; padding: 10px; border-radius: 8px; border: 2px solid #27ae60; width: 220px;">
-        <b style="color:#27ae60;">📊 Rapport d'Efficacité IA</b><br>
-        ⏱️ Temps gagné : +{sav['time_saved_min']} min<br>
-        🌱 CO2 évité : {sav['co2_saved_kg']} kg<br>
-        🚀 Score IA : {sav['score']}%</div>''').add_to(m.get_root().html)
+    folium.Marker(location=depot_coords, icon=folium.Icon(color='black', icon='home', prefix='fa'), tooltip="Dépôt Central").add_to(m)
+    
+    # Points de livraison
+    for nid, data in points_data.items():
+        if nid != 0:
+            popup_text = f"Colis #{nid}<br>Poids: {data['poids_colis']}kg"
+            if show_names and 'nom_client' in data:
+                popup_text = f"<b>{data['nom_client']}</b><br>" + popup_text
+            
+            folium.CircleMarker(
+                location=[data['lat'], data['lon']],
+                radius=4,
+                color='gray',
+                fill=True,
+                fill_opacity=0.6,
+                tooltip=popup_text if show_names else None,
+                popup=popup_text
+            ).add_to(m)
 
     m.save(OUTPUT_HTML)
-    print(f"✅ Carte générée avec benchmark ({benchmark['savings']['score'] if benchmark else 'N/A'}%)")
+    print(f"✅ Carte générée (Épaisseur: {line_weight}, Noms: {show_names})")
 
 if __name__ == "__main__":
     generate_map()

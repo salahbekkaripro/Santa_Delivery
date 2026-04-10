@@ -12,7 +12,7 @@ DIST_MATRIX = os.path.join(BASE_DIR, 'core_data', 'matrix_5eme.npy')
 OPTIMIZED_JSON = os.path.join(BASE_DIR, 'production_output', 'resultats_finaux.json')
 BENCHMARK_FILE = os.path.join(BASE_DIR, 'core_data', 'benchmark_results.json')
 
-def calculate_benchmark():
+def calculate_benchmark(num_vehicles=3):
     # 1. Chargement
     df = pd.read_csv(DATA_PATH)
     time_matrix = np.load(TIME_MATRIX)
@@ -22,7 +22,6 @@ def calculate_benchmark():
         opt_data = json.load(f)
     
     num_points = len(df)
-    num_vehicles = 3
     
     # 2. Calcul Naïf
     # On livre dans l'ordre 1..N, on ignore la capacité pour le calcul pur

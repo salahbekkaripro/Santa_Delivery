@@ -22,7 +22,7 @@ class NpEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray): return obj.tolist()
         return super(NpEncoder, self).default(obj)
 
-def solve_vrp():
+def solve_vrp(num_vehicles=3, vehicle_capacity=200, speed_multiplier=1.0, forced_weather=None):
     # 1. Chargement des données
     if not os.path.exists(DATA_PATH):
         print(f"Erreur : {DATA_PATH} introuvable.")
@@ -33,7 +33,11 @@ def solve_vrp():
     # 2. Chargement Météo
     weather_factor = 1.0
     weather_desc = "Inconnue"
-    if os.path.exists(WEATHER_FILE):
+    
+    if forced_weather:
+        weather_factor = forced_weather.get('factor', 1.0)
+        weather_desc = forced_weather.get('desc', 'Forcée')
+    elif os.path.exists(WEATHER_FILE):
         with open(WEATHER_FILE, 'r', encoding='utf-8') as f:
             w_data = json.load(f)
             weather_factor = w_data.get('factor', 1.0)
@@ -41,17 +45,17 @@ def solve_vrp():
     
     # 3. Chargement et Ajustement Matrice de temps
     if os.path.exists(TIME_MATRIX_PATH):
-        print(f"Chargement OSRM | Météo : {weather_desc} (Factor x{weather_factor})")
-        matrix = np.load(TIME_MATRIX_PATH) * weather_factor
+        # La vitesse réduit le temps : matrix / speed
+        # La météo augmente le temps : matrix * factor
+        total_factor = weather_factor / speed_multiplier
+        print(f"Chargement OSRM | Météo : {weather_desc} | Vitesse x{speed_multiplier} | Total Factor x{total_factor:.2f}")
+        matrix = np.load(TIME_MATRIX_PATH) * total_factor
     else:
         print("Erreur : Matrice OSRM manquante.")
         return
 
     # 4. Configuration Flotte
-    num_vehicles = 3
-    # Capacité ajustée selon météo
-    vehicle_capacity = 180 if weather_factor >= 1.5 else 200
-    print(f"Configuration : 3 traîneaux | Capacité : {vehicle_capacity}kg")
+    print(f"Configuration : {num_vehicles} traîneaux | Capacité : {vehicle_capacity}kg")
 
     # 5. OR-Tools
     manager = pywrapcp.RoutingIndexManager(num_locations, num_vehicles, 0)
