@@ -667,3 +667,25 @@ def get_debrief(mission_id: str) -> dict:
         status="solved",
     )
     return debrief_payload
+
+
+def save_leaderboard(mission_id: str, payload: dict) -> dict:
+    paths, mission, _ = load_mission_bundle(mission_id)
+    snapshot = repository.get_mission_snapshot(mission_id)
+    debrief = snapshot.get("debrief") if snapshot else None
+    if not debrief:
+        raise ValueError("Debrief introuvable pour cette mission")
+
+    repository.save_leaderboard_entry(
+        mission_id=mission_id,
+        zone=mission.get("zone", "Inconnue"),
+        score=float(debrief["score"]["value"]),
+        rank=debrief["score"]["rank"],
+        player_name=payload.get("player_name", "Père Noël"),
+    )
+    return {"status": "success"}
+
+
+def list_leaderboard(limit: int = 20) -> dict:
+    return {"entries": repository.list_leaderboard(limit=limit)}
+

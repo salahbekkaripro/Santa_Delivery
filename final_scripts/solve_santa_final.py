@@ -62,6 +62,15 @@ def solve_vrp(
         incident_label = " | ⚠️ INCIDENTS ACTIFS" if incident_matrix_path and os.path.exists(incident_matrix_path) else ""
         print(f"Chargement OSRM | Météo : {weather_desc} | Vitesse x{speed_multiplier} | Total Factor x{total_factor:.2f}{incident_label}")
         matrix = np.load(matrix_path) * total_factor
+        
+        # Application de la météo LOCALE (Phase 3.2)
+        # Si on n'est pas en temps clair, on applique une zone de "tempête" locale sur 20% des nœuds
+        if weather_desc not in ["Clear", "Sunny", "Forcée"] and num_locations > 5:
+            stormy_indices = random.sample(range(1, num_locations), max(1, num_locations // 5))
+            print(f"⚠️ Zones de tempête locale détectées sur {len(stormy_indices)} nœuds.")
+            for idx in stormy_indices:
+                matrix[idx, :] *= 1.5 # On ralentit tout ce qui arrive au nœud
+                matrix[:, idx] *= 1.5 # On ralentit tout ce qui part du nœud
     else:
         print("Erreur : Matrice OSRM manquante.")
         return None
@@ -79,8 +88,24 @@ def solve_vrp(
     transit_callback_index = routing.RegisterTransitCallback(time_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-    # Dimension TEMPS (Max 2h de base * weather_factor)
-    routing.AddDimension(transit_callback_index, 0, int(7200 * weather_factor), True, 'Time')
+    # Dimension TEMPS (Max 4h par traîneau par défaut)
+    routing.AddDimension(transit_callback_index, 3600, 14400, False, 'Time')
+    time_dimension = routing.GetDimensionOrDie('Time')
+
+    # Ajout des fenêtres de temps (Time Windows)
+    if 'tw_start' in df.columns and 'tw_end' in df.columns:
+        print("Application des Time Windows (VRPTW)...")
+        for i in range(num_locations):
+            index = manager.NodeToIndex(i)
+            tw_start = int(df.iloc[i]['tw_start'])
+            tw_end = int(df.iloc[i]['tw_end'])
+            time_dimension.CumulVar(index).SetRange(tw_start, tw_end)
+            
+        # Contrainte de retour au dépôt (tous les traîneaux doivent rentrer avant tw_end du dépôt)
+        for vehicle_id in range(num_vehicles):
+            index = routing.End(vehicle_id)
+            depot_end = int(df.iloc[0]['tw_end'])
+            time_dimension.CumulVar(index).SetRange(0, depot_end)
 
     # Dimension CAPACITÉ
     demands = df['poids_colis'].astype(int).tolist()

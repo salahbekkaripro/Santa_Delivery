@@ -61,8 +61,20 @@ def init_db(db_path: str | Path | None = None) -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS leaderboard (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT NOT NULL,
+                zone TEXT NOT NULL,
+                score REAL NOT NULL,
+                rank TEXT NOT NULL,
+                player_name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (mission_id) REFERENCES mission_snapshots(mission_id)
+            );
             CREATE INDEX IF NOT EXISTS idx_mission_snapshots_updated_at
             ON mission_snapshots(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_score
+            ON leaderboard(score DESC);
             """
         )
 
@@ -183,3 +195,39 @@ def list_mission_snapshots(limit: int = 50, db_path: str | Path | None = None) -
         }
         for row in rows
     ]
+
+
+def save_leaderboard_entry(
+    mission_id: str,
+    zone: str,
+    score: float,
+    rank: str,
+    player_name: str = "Père Noël",
+    db_path: str | Path | None = None,
+) -> None:
+    init_db(db_path)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO leaderboard (mission_id, zone, score, rank, player_name, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (mission_id, zone, score, rank, player_name, now),
+        )
+        conn.commit()
+
+
+def list_leaderboard(limit: int = 20, db_path: str | Path | None = None) -> list[dict]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT mission_id, zone, score, rank, player_name, created_at
+            FROM leaderboard
+            ORDER BY score DESC, created_at DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    return [dict(row) for row in rows]

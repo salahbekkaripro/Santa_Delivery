@@ -138,3 +138,16 @@ def get_debrief(mission_id: str) -> dict:
         return services.get_debrief(mission_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/missions/{mission_id}/leaderboard")
+def save_leaderboard(mission_id: str, payload: dict) -> dict:
+    try:
+        return services.save_leaderboard(mission_id, payload)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, FileNotFoundError) else 400, detail=str(exc)) from exc
+
+
+@app.get("/api/leaderboard")
+def list_leaderboard(limit: int = 20) -> dict:
+    return services.list_leaderboard(limit=limit)

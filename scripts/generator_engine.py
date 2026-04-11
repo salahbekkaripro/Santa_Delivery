@@ -154,13 +154,29 @@ def generate_new_zone(
     # Clients
     noms_fictifs = ["Boulangerie", "Pharmacie", "Café de la Gare", "Hôtel de Ville", "Librairie", "Supermarché", "Garage", "École", "Mairie", "Poste"]
     for i, node in enumerate(clients_nodes):
+        # Fenêtres de temps aléatoires (sur une base de 2h = 7200s)
+        # 30% des clients ont une contrainte forte (matin ou fin de tournée)
+        has_constraint = random.random() < 0.3
+        tw_start, tw_end = 0, 14400 # Par défaut 4h de large (très large)
+        if has_constraint:
+            if random.random() < 0.5:
+                tw_start, tw_end = 0, 3600 # Livraison impérative dans la 1ère heure
+            else:
+                tw_start, tw_end = 3600, 7200 # Livraison dans la 2ème heure
+        
         data.append({
             "id": i + 1,
             "lat": node[1]['y'],
             "lon": node[1]['x'],
             "poids_colis": random.randint(5, 50),
-            "nom_client": f"{random.choice(noms_fictifs)} {i+1}"
+            "nom_client": f"{random.choice(noms_fictifs)} {i+1}",
+            "tw_start": tw_start,
+            "tw_end": tw_end
         })
+    
+    # Depot a aussi une fenêtre de temps (ouverture/fermeture)
+    data[0]["tw_start"] = 0
+    data[0]["tw_end"] = 28800 # 8h max pour la journée totale
     
     df = pd.DataFrame(data)
     os.makedirs(os.path.dirname(data_path), exist_ok=True)

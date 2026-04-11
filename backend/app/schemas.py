@@ -134,3 +134,4 @@ class DebriefResponse(BaseModel):
     benchmark: dict
     score: dict
     human: dict
+    analysis: dict

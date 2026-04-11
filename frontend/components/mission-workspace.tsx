@@ -422,8 +422,14 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
             return (
               <div key={index} className="panel stack">
                 <strong>Traineau #{index + 1}</strong>
+                <div className="capacity-bar-container">
+                  <div 
+                    className={`capacity-bar-fill ${Number(stats.over_kg ?? 0) > 0 ? "is-overloaded" : ""}`}
+                    style={{ width: `${Math.min((Number(stats.load_kg ?? 0) / vehicleCapacity) * 100, 100)}%` }}
+                  />
+                </div>
                 <span className="muted">Stops: {humanState.routes_by_sleigh[String(index)]?.length ?? 0}</span>
-                <span className="muted">Charge: {Number(stats.load_kg ?? 0).toFixed(0)} kg</span>
+                <span className="muted">Charge: {Number(stats.load_kg ?? 0).toFixed(0)} / {vehicleCapacity} kg</span>
                 <span className="muted">Temps: {metricTime(Number(stats.time_s ?? 0))}</span>
                 <span className="muted">Distance: {(Number(stats.dist_m ?? 0) / 1000).toFixed(2)} km</span>
                 <span className="muted">

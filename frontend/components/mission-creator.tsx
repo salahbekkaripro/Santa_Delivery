@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { createMission } from "@/lib/api";
@@ -60,8 +61,15 @@ export function MissionCreator() {
     <div className="page-shell">
       <div className="page-stack">
         <section className="hero">
-          <h1>Operation Noel</h1>
-          <p>Frontend Next.js + API FastAPI pour remplacer progressivement Streamlit sans toucher au moteur Python.</p>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <h1>Operation Noel</h1>
+              <p>Frontend Next.js + API FastAPI pour remplacer progressivement Streamlit sans toucher au moteur Python.</p>
+            </div>
+            <Link href="/leaderboard" className="secondary-button" style={{ background: "rgba(255,255,255,0.2)", color: "white", boxShadow: "none" }}>
+              🏆 Panthéon
+            </Link>
+          </div>
         </section>
 
         {createMutation.error ? (
