@@ -188,6 +188,158 @@ def _route_popup_html(title: str, dist_m: float, time_s: float, time_factor: flo
     )
 
 
+def _render_folium_html(m: folium.Map, height: int = 560) -> None:
+    components.html(m.get_root().render(), height=height)
+
+
+def _build_comparison_map(
+    G,
+    df: pd.DataFrame,
+    depot_row: pd.Series,
+    human_segments: dict,
+    ai_tours: list[dict],
+    colors: list[str],
+    time_factor: float = 1.0,
+    show_human: bool = True,
+    show_ai: bool = True,
+) -> folium.Map:
+    center_lat = float(depot_row["lat"])
+    center_lon = float(depot_row["lon"])
+    points_data = df.set_index("id").to_dict("index")
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=15, tiles="CartoDB positron")
+
+    legend_html = """
+    <div style="
+        position: fixed;
+        bottom: 22px;
+        left: 22px;
+        z-index: 9999;
+        background: rgba(255,255,255,0.95);
+        border: 1px solid #DDD;
+        border-radius: 12px;
+        padding: 10px 12px;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+        font-size: 13px;
+        line-height: 1.45;
+    ">
+      <div style="font-weight:800; margin-bottom:6px;">Comparaison</div>
+      <div><span style="display:inline-block;width:22px;height:0;border-top:4px solid #111;margin-right:8px;vertical-align:middle;"></span> IA</div>
+      <div><span style="display:inline-block;width:22px;height:0;border-top:4px dashed #111;margin-right:8px;vertical-align:middle;"></span> Vous</div>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
+
+    if show_human:
+        for sid, segs in human_segments.items():
+            color = colors[sid % len(colors)]
+            for seg in segs:
+                route = seg.get("route")
+                if not route:
+                    continue
+                coords = _route_to_latlon_coords(G, route)
+                if not coords:
+                    continue
+                folium.PolyLine(
+                    coords,
+                    color=color,
+                    weight=7,
+                    opacity=0.7,
+                    dash_array="8 10",
+                    tooltip=(
+                        f"🧑 Vous · Traîneau #{sid + 1} · "
+                        f"{_format_minutes(float(seg.get('time_s', 0.0)) * time_factor)} · "
+                        f"{float(seg.get('dist_m', 0.0))/1000:.2f} km"
+                    ),
+                    popup=folium.Popup(
+                        _route_popup_html(
+                            f"🧑 Votre segment · Traîneau #{sid + 1}",
+                            float(seg.get("dist_m", 0.0)),
+                            float(seg.get("time_s", 0.0)),
+                            time_factor=time_factor,
+                        ),
+                        max_width=240,
+                    ),
+                ).add_to(m)
+
+    if show_ai:
+        for idx, tour in enumerate(ai_tours):
+            vehicle_id = int(tour.get("vehicle_id", idx))
+            color = colors[vehicle_id % len(colors)]
+            route_ids = [int(rid) for rid in tour.get("route_ids", [])]
+            for j in range(len(route_ids) - 1):
+                s_id, e_id = route_ids[j], route_ids[j + 1]
+                s_p = {"lat": center_lat, "lon": center_lon} if s_id == 0 else points_data.get(s_id)
+                e_p = {"lat": center_lat, "lon": center_lon} if e_id == 0 else points_data.get(e_id)
+                if not s_p or not e_p:
+                    continue
+                try:
+                    route = nx.shortest_path(
+                        G,
+                        ox.nearest_nodes(G, float(s_p["lon"]), float(s_p["lat"])),
+                        ox.nearest_nodes(G, float(e_p["lon"]), float(e_p["lat"])),
+                        weight="travel_time",
+                    )
+                except Exception:
+                    continue
+                coords = _route_to_latlon_coords(G, route)
+                if not coords:
+                    continue
+                dist_m = _route_length_m(G, route)
+                time_s = _route_time_s(G, route)
+                start_name = "Dépôt" if s_id == 0 else str(points_data.get(s_id, {}).get("nom_client", f"Client #{s_id}"))
+                end_name = "Dépôt" if e_id == 0 else str(points_data.get(e_id, {}).get("nom_client", f"Client #{e_id}"))
+                folium.PolyLine(
+                    coords,
+                    color=color,
+                    weight=5,
+                    opacity=0.95,
+                    tooltip=(
+                            f"🤖 IA · Traîneau #{vehicle_id + 1} · "
+                            f"{start_name} → {end_name} · "
+                            f"{_format_minutes(time_s * time_factor)} · {dist_m/1000:.2f} km"
+                    ),
+                    popup=folium.Popup(
+                        _route_popup_html(
+                            f"🤖 IA · Traîneau #{vehicle_id + 1} · {start_name} → {end_name}",
+                            dist_m,
+                            time_s,
+                            time_factor=time_factor,
+                        ),
+                        max_width=280,
+                    ),
+                ).add_to(m)
+
+    folium.CircleMarker(
+        location=[center_lat, center_lon],
+        radius=18,
+        color="white",
+        weight=3,
+        fill=True,
+        fill_color="#2C3E50",
+        fill_opacity=1.0,
+        tooltip="🏠 Dépôt central",
+        popup=folium.Popup("🏠 <b>Dépôt Central</b>", max_width=160),
+    ).add_to(m)
+
+    for _, row in df[df["id"] != 0].iterrows():
+        cid = int(row["id"])
+        folium.CircleMarker(
+            location=[float(row["lat"]), float(row["lon"])],
+            radius=6,
+            color="white",
+            weight=2,
+            fill=True,
+            fill_color="#C0392B",
+            fill_opacity=0.85,
+            tooltip=str(row.get("nom_client", f"Client #{cid}")),
+            popup=folium.Popup(
+                f"<b>#{cid} {row.get('nom_client', f'Client {cid}')}</b><br>📦 {int(row.get('poids_colis', 0))} kg",
+                max_width=220,
+            ),
+        ).add_to(m)
+    return m
+
+
 # ── Guard ─────────────────────────────────────────────────────────────────────
 if "mission" not in st.session_state:
     st.error("❌ Pas de mission configurée. Retournez au Briefing.")
@@ -1066,6 +1218,13 @@ else:
         st.error("❌ Résultats non disponibles.")
         st.stop()
 
+    if not os.path.exists(DATA_FILE):
+        st.error("❌ Données de mission introuvables.")
+        st.stop()
+
+    df = pd.read_csv(DATA_FILE)
+    depot_row = df[df["id"] == 0].iloc[0]
+
     with open(RESULTS_FILE, "r") as fh:
         res = json.load(fh)
     with open(BENCHMARK_FILE, "r") as fh:
@@ -1161,6 +1320,46 @@ else:
 
         if human_wins:
             st.balloons()
+
+    comparison_graph = None
+    comparison_graph_error = None
+    if os.path.exists(GRAPH_PATH):
+        try:
+            comparison_graph = _load_graph(GRAPH_PATH, os.path.getmtime(GRAPH_PATH))
+        except Exception as e:
+            comparison_graph_error = str(e)
+    else:
+        comparison_graph_error = "Graphe routier introuvable."
+
+    human_segments_result = st.session_state.get("human_segments", {})
+    if human_time_s:
+        st.markdown("### 🆚 Carte de comparaison : vous vs IA")
+        if comparison_graph_error:
+            st.warning(f"Carte de comparaison indisponible : {comparison_graph_error}")
+        else:
+            tg1, tg2 = st.columns(2)
+            with tg1:
+                show_compare_human = st.toggle("Afficher votre tracé", value=True, key="compare_show_human")
+            with tg2:
+                show_compare_ai = st.toggle("Afficher le tracé IA", value=True, key="compare_show_ai")
+
+            if not show_compare_human and not show_compare_ai:
+                st.info("Activez au moins une couche pour afficher la carte de comparaison.")
+            else:
+                cmp_weather_factor, _ = _current_weather_factor()
+                comparison_time_factor = cmp_weather_factor / speed_val
+                comparison_map = _build_comparison_map(
+                    comparison_graph,
+                    df,
+                    depot_row,
+                    human_segments_result,
+                    res.get("tours", []),
+                    custom_colors,
+                    time_factor=comparison_time_factor,
+                    show_human=show_compare_human,
+                    show_ai=show_compare_ai,
+                )
+                _render_folium_html(comparison_map, height=600)
 
     # ── Carte IA ─────────────────────────────────────────────────────────────
     st.markdown("### 🗺️ Carte de la solution optimale IA")
