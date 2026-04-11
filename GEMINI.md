@@ -1,61 +1,54 @@
-🎅 Project : Santa Router Optimizer (Dynamic Edition)
+# 🎅 Santa Router Optimizer (Pro Edition)
 
-Ce document décrit le fonctionnement de l'application de livraison optimisée utilisant des données réelles issues d'OpenStreetMap et des algorithmes de théorie des graphes.
+Application de logistique urbaine optimisée utilisant **FastAPI**, **Next.js**, et le moteur de recherche opérationnelle **Google OR-Tools**.
 
-🛠️ 1. Concept de l'Application
+## 🚀 Architecture Moderne
 
-L'utilisateur définit deux paramètres :
-- La Ville : (ex: "Paris", "Lyon", "Tokyo") récupérée via l'API Nominatim.
-- Le Nombre de Colis : Une quantité N de points de livraison générés aléatoirement sur des adresses réelles de la ville.
+### Backend (FastAPI + Python)
+- **Moteur d'Optimisation** : Utilise `OR-Tools` pour résoudre des problèmes de type **VRPTW** (Vehicle Routing Problem with Time Windows).
+- **Profils IA** : 
+  - ⚡ **Express** : Minimise le temps total de tournée.
+  - 🌱 **Écolo** : Minimise la distance totale parcourue.
+- **Auto-Suggestion** : Algorithme glouton temps-réel pour aider le joueur à choisir son prochain point de livraison en fonction des contraintes de temps et de charge.
+- **Météo Dynamique** : Système de pénalités locales simulant des zones de tempête.
+- **Persistence** : SQLite pour le Panthéon (Leaderboard) et le cache des missions.
 
-🏗️ 2. Architecture des Données
+### Frontend (Next.js + TypeScript)
+- **Cartographie** : Leaflet.js pour une visualisation précise des rues OSM.
+- **Dashboard** : Graphiques Recharts pour comparer les performances Humain vs IA.
+- **Robustesse** : Typage TypeScript strict pour toutes les communications API.
 
-Puisque le dataset est dynamique, nous utilisons une structure de données hybride :
-A. Extraction (OpenStreetMap / Overpass API)
-Nous interrogeons OSM pour extraire les nœuds possédant des tags spécifiques :
-- addr:housenumber (Maisons)
-- building=residential (Immeubles)
+## 🛠️ Installation & Développement
 
-B. Stockage Temporaire (SQLite / Mémoire)
-Pour chaque session, une base de données est créée pour générer la Matrice des Coûts.
-Table	Colonne	Type
-Points	id, lat, lon, est_depot	Float / Bool
-Graphe	source_id, target_id, distance_m	Integer / Float
+### Prérequis
+- Python 3.10+
+- Node.js 20+
+- Docker & Docker Compose (optionnel)
 
-🧠 3. Moteur d'Optimisation (Le Graphe)
+### Backend
+```bash
+pip install -r requirements.txt
+uvicorn backend.app.main:app --reload
+```
 
-Pour transformer la ville en itinéraire, le système suit ces étapes :
-- Génération du Graphe Routier : Utilisation de la bibliothèque OSMnx pour modéliser les rues réelles du 5ème arrondissement.
-- Calcul de la Matrice de Distances : Utilisation de l'algorithme de Dijkstra pour calculer les distances réelles par les rues entre chaque point.
-- Résolution du VRP : Le moteur Google OR-Tools optimise les tournées en se basant sur ces distances réelles.
-- Contrainte de Capacité (VRP) : Si le traîneau est plein, l'algorithme force un retour au nœud marqué comme est_depot avant de repartir.
+### Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-🌐 4. Interface Dynamique (Frontend)
+## 🧠 Moteur VRPTW (Constraints)
+1. **Capacité** : Chaque traîneau a une charge max (kg).
+2. **Fenêtres de Temps** : Certains colis doivent être livrés dans des créneaux horaires stricts.
+3. **Incidents** : Des axes routiers peuvent être bloqués aléatoirement.
+4. **Météo** : La vitesse est réduite globalement et localement selon les conditions.
 
-L'affichage repose sur Leaflet.js (via Folium) :
-- Tracé Réel : Les itinéraires (AntPath) suivent précisément les rues grâce aux nœuds du graphe OSMnx.
-- Marqueurs : Icônes de maison noire pour le dépôt, CircleMarkers colorés pour les livraisons réussies, et avertissements gris pour les points ignorés.
+## 🏆 Gamification
+Le Panthéon enregistre les meilleurs scores basés sur :
+- Le gain de temps vs benchmark naïf.
+- Les économies de CO2.
+- Le respect des délais et du budget.
 
-🚦 5. Workflow de Développement
-
-- Input : City_Name + Package_Count.
-- Geocoding : Convertir le nom de la ville en boîte de coordonnées (Bounding Box).
-- Sampling : Tirer au sort N adresses dans la zone.
-- Solveur : Lancer l'algorithme d'optimisation en Python.
-- Render : Envoyer le JSON des coordonnées à la carte web pour l'animation.
-
-📂 6. Organisation des Fichiers (Post-Nettoyage)
-- core_data/ : Contient 'livraisons_5eme.csv' et 'matrix_5eme.npy'.
-- final_scripts/ : 
-    - 'solve_santa_final.py' (Moteur d'optimisation OR-Tools).
-    - 'main_visualizer.py' (Générateur de carte Folium AntPath).
-- production_output/ : 'resultats_finaux.json' et 'output_final.html'.
-
-🚀 7. Instructions d'Exécution
-1. Calculer la tournée : python3 final_scripts/solve_santa_final.py
-2. Générer la visualisation : python3 final_scripts/main_visualizer.py
-
-📅 8. Améliorations Futures
-- [ ] Gestion du trafic en temps réel.
-- [ ] Prise en compte de la météo (neige = vitesse réduite).
-- [ ] Mode "Multitraineau" (plusieurs livreurs en parallèle).
+---
+*Dernière mise à jour : Avril 2026*

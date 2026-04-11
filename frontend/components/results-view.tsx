@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { getComparison, getDebrief, getMission } from "@/lib/api";
 import { MapSurface } from "@/components/map-surface";
+import { AISleighSummary, ComparisonPayload, DebriefPayload, HumanSleighSummary, MissionResponse } from "@/lib/types";
 
 function asMinutes(seconds: number) {
   return `${Math.round(seconds / 60)} min`;
@@ -39,17 +40,17 @@ export function ResultsView({ missionId }: { missionId: string }) {
     return <div className="page-shell error-box">Impossible de charger les resultats de mission.</div>;
   }
 
-  const mission = missionQuery.data;
-  const comparison = comparisonQuery.data;
-  const debrief = debriefQuery.data;
+  const mission: MissionResponse = missionQuery.data;
+  const comparison: ComparisonPayload = comparisonQuery.data;
+  const debrief: DebriefPayload = debriefQuery.data;
   const humanTimeS = Number(comparison.summary_metrics.human.total_time_s ?? 0);
   const aiTimeS = Number(comparison.summary_metrics.ai.total_time_s ?? debrief.results.total_time_s ?? 0);
   const humanDistM = Number(comparison.summary_metrics.human.total_dist_m ?? 0);
   const aiDistM = Number(comparison.summary_metrics.ai.total_dist_m ?? 0);
   const deltaS = humanTimeS - aiTimeS;
   const deltaLabel = deltaS > 0 ? `+${asMinutes(deltaS)}` : deltaS < 0 ? `-${asMinutes(Math.abs(deltaS))}` : "0 min";
-  const humanSleighs = Array.isArray(comparison.summary_metrics.human.sleighs) ? comparison.summary_metrics.human.sleighs : [];
-  const aiSleighs = Array.isArray(comparison.summary_metrics.ai.sleighs) ? comparison.summary_metrics.ai.sleighs : [];
+  const humanSleighs = comparison.summary_metrics.human.sleighs ?? [];
+  const aiSleighs = comparison.summary_metrics.ai.sleighs ?? [];
 
   return (
     <div className="page-shell">
@@ -141,23 +142,21 @@ export function ResultsView({ missionId }: { missionId: string }) {
           <div className="panel stack">
             <strong>Detail par traineau humain</strong>
             {humanSleighs.length > 0 ? (
-              humanSleighs.map((sleigh) => (
-                <span key={`human-${String((sleigh as { sleigh_id?: number }).sleigh_id ?? "x")}`} className="muted">
-                  T#{Number((sleigh as { sleigh_id?: number }).sleigh_id ?? 0) + 1} · {asMinutes(Number((sleigh as { time_s?: number }).time_s ?? 0))} ·{" "}
-                  {asDistance(Number((sleigh as { dist_m?: number }).dist_m ?? 0))} · {Number((sleigh as { stop_count?: number }).stop_count ?? 0)} stop(s)
+              humanSleighs.map((sleigh: HumanSleighSummary) => (
+                <span key={`human-${sleigh.sleigh_id}`} className="muted">
+                  T#{sleigh.sleigh_id + 1} · {asMinutes(sleigh.time_s)} · {asDistance(sleigh.dist_m)} · {sleigh.stop_count} stop(s)
                 </span>
               ))
             ) : (
-              <span className="muted">Aucun trajet humain detaille.</span>
+              <span className="muted">Aucun trajet humain detaillee.</span>
             )}
           </div>
           <div className="panel stack">
             <strong>Detail par traineau IA</strong>
             {aiSleighs.length > 0 ? (
-              aiSleighs.map((sleigh) => (
-                <span key={`ai-${String((sleigh as { sleigh_id?: number }).sleigh_id ?? "x")}`} className="muted">
-                  T#{Number((sleigh as { sleigh_id?: number }).sleigh_id ?? 0) + 1} · {asMinutes(Number((sleigh as { time_s?: number }).time_s ?? 0))} ·{" "}
-                  {Number((sleigh as { stop_count?: number }).stop_count ?? 0)} stop(s) · {Number((sleigh as { weight_kg?: number }).weight_kg ?? 0)} kg
+              aiSleighs.map((sleigh: AISleighSummary) => (
+                <span key={`ai-${sleigh.sleigh_id}`} className="muted">
+                  T#{sleigh.sleigh_id + 1} · {asMinutes(sleigh.time_s)} · {sleigh.stop_count} stop(s) · {sleigh.weight_kg} kg
                 </span>
               ))
             ) : (

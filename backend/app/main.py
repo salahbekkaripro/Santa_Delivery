@@ -114,6 +114,16 @@ def reset_human_state(mission_id: str, payload: HumanStateMutationRequest) -> di
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/missions/{mission_id}/human/suggest-next")
+def suggest_next_stops(mission_id: str, payload: dict) -> dict:
+    try:
+        return services.suggest_next_stops(mission_id, payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/missions/{mission_id}/solve", response_model=SolveMissionResponse)
 def solve_mission(mission_id: str, payload: SolveMissionRequest) -> dict:
     try:

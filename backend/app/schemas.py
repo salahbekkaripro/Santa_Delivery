@@ -89,6 +89,7 @@ class SolveMissionRequest(BaseModel):
     num_vehicles: int = Field(ge=1, le=20)
     vehicle_capacity: int = Field(ge=1)
     speed_multiplier: float = Field(default=1.0, gt=0)
+    optimization_target: Literal["time", "distance"] = "time"
 
 
 class HumanStateResponse(BaseModel):

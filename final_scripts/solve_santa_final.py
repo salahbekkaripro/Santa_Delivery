@@ -30,8 +30,10 @@ def solve_vrp(
     incident_matrix_path=None,
     data_path=DATA_PATH,
     time_matrix_path=TIME_MATRIX_PATH,
+    dist_matrix_path=None,
     weather_file=WEATHER_FILE,
     output_path=OUTPUT_PATH,
+    optimization_target="time",
 ):
     # 1. Chargement des données
     if not os.path.exists(data_path):
@@ -43,53 +45,67 @@ def solve_vrp(
     # 2. Chargement Météo
     weather_factor = 1.0
     weather_desc = "Inconnue"
+    weather_cond = "Clear"
     
     if forced_weather:
         weather_factor = forced_weather.get('factor', 1.0)
         weather_desc = forced_weather.get('desc', 'Forcée')
+        weather_cond = forced_weather.get('condition', 'Clear')
     elif os.path.exists(weather_file):
         with open(weather_file, 'r', encoding='utf-8') as f:
             w_data = json.load(f)
             weather_factor = w_data.get('factor', 1.0)
             weather_desc = w_data.get('desc', 'Inconnue')
+            weather_cond = w_data.get('condition', 'Clear')
     
-    # 3. Chargement et Ajustement Matrice de temps
-    matrix_path = incident_matrix_path if (incident_matrix_path and os.path.exists(incident_matrix_path)) else time_matrix_path
-    if os.path.exists(matrix_path):
-        # La vitesse réduit le temps : matrix / speed
-        # La météo augmente le temps : matrix * factor
+    # 3. Chargement et Ajustement Matrices
+    # Matrice de TEMPS (nécessaire pour les Time Windows)
+    t_matrix_path = incident_matrix_path if (incident_matrix_path and os.path.exists(incident_matrix_path)) else time_matrix_path
+    if os.path.exists(t_matrix_path):
         total_factor = weather_factor / speed_multiplier
-        incident_label = " | ⚠️ INCIDENTS ACTIFS" if incident_matrix_path and os.path.exists(incident_matrix_path) else ""
-        print(f"Chargement OSRM | Météo : {weather_desc} | Vitesse x{speed_multiplier} | Total Factor x{total_factor:.2f}{incident_label}")
-        matrix = np.load(matrix_path) * total_factor
-        
-        # Application de la météo LOCALE (Phase 3.2)
-        # Si on n'est pas en temps clair, on applique une zone de "tempête" locale sur 20% des nœuds
-        if weather_desc not in ["Clear", "Sunny", "Forcée"] and num_locations > 5:
+        matrix_time = np.load(t_matrix_path) * total_factor
+        if weather_cond not in ["Clear", "Clouds", "Forcée"] and num_locations > 5:
+            import random
             stormy_indices = random.sample(range(1, num_locations), max(1, num_locations // 5))
-            print(f"⚠️ Zones de tempête locale détectées sur {len(stormy_indices)} nœuds.")
             for idx in stormy_indices:
-                matrix[idx, :] *= 1.5 # On ralentit tout ce qui arrive au nœud
-                matrix[:, idx] *= 1.5 # On ralentit tout ce qui part du nœud
+                matrix_time[idx, :] *= 1.5
+                matrix_time[:, idx] *= 1.5
     else:
-        print("Erreur : Matrice OSRM manquante.")
+        print("Erreur : Matrice OSRM (temps) manquante.")
         return None
 
+    # Matrice de DISTANCE
+    matrix_dist = None
+    if optimization_target == "distance":
+        if dist_matrix_path and os.path.exists(dist_matrix_path):
+            matrix_dist = np.load(dist_matrix_path)
+        else:
+            print("⚠️ Matrice de distance manquante, repli sur le temps.")
+            optimization_target = "time"
+
     # 4. Configuration Flotte
-    print(f"Configuration : {num_vehicles} traîneaux | Capacité : {vehicle_capacity}kg")
+    print(f"Configuration : {num_vehicles} traîneaux | Capacité : {vehicle_capacity}kg | Cible : {optimization_target}")
 
     # 5. OR-Tools
     manager = pywrapcp.RoutingIndexManager(num_locations, num_vehicles, 0)
     routing = pywrapcp.RoutingModel(manager)
 
     def time_callback(from_index, to_index):
-        return int(matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
+        return int(matrix_time[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
 
-    transit_callback_index = routing.RegisterTransitCallback(time_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+    def dist_callback(from_index, to_index):
+        return int(matrix_dist[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
+
+    transit_time_callback_index = routing.RegisterTransitCallback(time_callback)
+    
+    if optimization_target == "distance":
+        transit_dist_callback_index = routing.RegisterTransitCallback(dist_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_dist_callback_index)
+    else:
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_time_callback_index)
 
     # Dimension TEMPS (Max 4h par traîneau par défaut)
-    routing.AddDimension(transit_callback_index, 3600, 14400, False, 'Time')
+    routing.AddDimension(transit_time_callback_index, 3600, 14400, False, 'Time')
     time_dimension = routing.GetDimensionOrDie('Time')
 
     # Ajout des fenêtres de temps (Time Windows)
@@ -136,22 +152,23 @@ def solve_vrp(
         return None
 
 def save_solution(df, manager, routing, solution, num_vehicles, w_factor, w_desc, output_path=OUTPUT_PATH):
+    time_dimension = routing.GetDimensionOrDie('Time')
     total_time = 0
     total_weight = 0
     all_tours = []
 
     for vehicle_id in range(num_vehicles):
         index = routing.Start(vehicle_id)
-        route_time = 0
         route_load = 0
         tour_ids = []
         while not routing.IsEnd(index):
             node_index = manager.IndexToNode(index)
             route_load += float(df.iloc[node_index]['poids_colis'])
             tour_ids.append(int(df.iloc[node_index]['id']))
-            previous_index = index
             index = solution.Value(routing.NextVar(index))
-            route_time += routing.GetArcCostForVehicle(previous_index, index, vehicle_id)
+        
+        # Le temps total pour ce véhicule est la valeur de CumulVar à la fin de la route
+        route_time = solution.Value(time_dimension.CumulVar(index))
         tour_ids.append(int(df.iloc[manager.IndexToNode(index)]['id']))
         
         if len(tour_ids) > 2:

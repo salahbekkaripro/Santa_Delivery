@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { clearSleigh, getMission, getRouteOptions, resetHumanState, solveMission, undoLastSegment, validateSegment } from "@/lib/api";
+import { clearSleigh, getMission, getRouteOptions, resetHumanState, solveMission, suggestNext, undoLastSegment, validateSegment } from "@/lib/api";
 import { MapSurface } from "@/components/map-surface";
 import type { HumanState, RouteOption, RouteSegment } from "@/lib/types";
 
@@ -48,6 +48,8 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
   const [routeError, setRouteError] = useState<string | null>(null);
+  const [optimizationTarget, setOptimizationTarget] = useState<"time" | "distance">("time");
+  const [suggestions, setSuggestions] = useState<Array<{ client_id: number; nom_client: string; arrival_clock: string; is_feasible: boolean }>>([]);
 
   const missionQuery = useQuery({
     queryKey: ["mission", missionId],
@@ -107,9 +109,11 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
       solveMission(missionId, {
         num_vehicles: numVehicles,
         vehicle_capacity: vehicleCapacity,
-        speed_multiplier: speedMultiplier
+        speed_multiplier: speedMultiplier,
+        optimization_target: optimizationTarget
       }),
     onSuccess: () => {
+
       queryClient.invalidateQueries({ queryKey: ["mission", missionId] });
       router.push(`/mission/${missionId}/results`);
     }
@@ -161,8 +165,15 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
       setRouteError(null);
       setSelectedClientId(null);
       setRouteOptions([]);
+      setSuggestions([]);
       setActiveSleigh(0);
     },
+    onError: (error: Error) => setRouteError(error.message)
+  });
+
+  const suggestMutation = useMutation({
+    mutationFn: () => suggestNext(missionId, { sleigh_id: activeSleigh }),
+    onSuccess: (data) => setSuggestions(data.suggestions),
     onError: (error: Error) => setRouteError(error.message)
   });
 
@@ -267,12 +278,48 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
                 ))}
               </select>
             </label>
+            <label className="field">
+              <span>Objectif IA</span>
+              <select
+                value={optimizationTarget}
+                onChange={(event) => setOptimizationTarget(event.target.value as "time" | "distance")}
+              >
+                <option value="time">⚡ Express (Temps)</option>
+                <option value="distance">🌱 Écolo (Distance)</option>
+              </select>
+            </label>
 
             <div className="stack">
               <strong>Choix de chemin</strong>
               <span className="muted">
                 Clique un client sur la carte. Le backend calcule ensuite les meilleurs chemins et tu valides celui que tu veux garder.
               </span>
+              <button 
+                className="secondary-button" 
+                onClick={() => suggestMutation.mutate()}
+                disabled={suggestMutation.isPending}
+              >
+                {suggestMutation.isPending ? "Calcul..." : "💡 Suggérer le prochain stop"}
+              </button>
+              {suggestions.length > 0 && (
+                <div className="stack" style={{ gap: "8px", marginTop: "8px" }}>
+                  {suggestions.map((s) => (
+                    <button 
+                      key={s.client_id} 
+                      className={`tag ${!s.is_feasible ? "error-box" : ""}`}
+                      style={{ cursor: "pointer", border: "1px solid var(--border)", width: "100%", justifyContent: "space-between" }}
+                      onClick={() => handleClientSelect(s.client_id)}
+                      disabled={!s.is_feasible}
+                    >
+                      <span>{s.nom_client}</span>
+                      <span className="muted">{s.arrival_clock}</span>
+                    </button>
+                  ))}
+                  <button className="secondary-button" style={{ fontSize: "0.8rem", padding: "4px" }} onClick={() => setSuggestions([])}>
+                    Effacer suggestions
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="stack">
@@ -357,6 +404,14 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
               <button className="secondary-button" onClick={() => resetMutation.mutate()}>
                 {resetMutation.isPending ? "Reset..." : "Reinitialiser toutes les routes"}
               </button>
+              <div className="error-box" style={{ background: "rgba(23, 50, 77, 0.05)", borderColor: "var(--border)", color: "var(--text)" }}>
+                <strong>Mode IA : {optimizationTarget === "time" ? "Express" : "Écolo"}</strong>
+                <p className="muted" style={{ fontSize: "0.8rem", margin: "4px 0 0" }}>
+                  {optimizationTarget === "time" 
+                    ? "L'IA cherchera à finir la tournée le plus vite possible." 
+                    : "L'IA cherchera à parcourir le moins de kilomètres possible."}
+                </p>
+              </div>
               <button className="primary-button" onClick={() => solveMutation.mutate()}>
                 {solveMutation.isPending ? "Optimisation..." : "Lancer la solution IA"}
               </button>
@@ -422,10 +477,19 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
             return (
               <div key={index} className="panel stack">
                 <strong>Traineau #{index + 1}</strong>
-                <div className="capacity-bar-container">
+                <div className="capacity-bar-container" title="Charge utile">
                   <div 
                     className={`capacity-bar-fill ${Number(stats.over_kg ?? 0) > 0 ? "is-overloaded" : ""}`}
                     style={{ width: `${Math.min((Number(stats.load_kg ?? 0) / vehicleCapacity) * 100, 100)}%` }}
+                  />
+                </div>
+                <div className="capacity-bar-container" style={{ background: "rgba(0,0,0,0.03)" }} title="Batterie / Énergie">
+                  <div 
+                    className="capacity-bar-fill"
+                    style={{ 
+                      width: `${Math.max(100 - (Number(stats.dist_m ?? 0) / 15000) * 100, 0)}%`,
+                      background: "linear-gradient(90deg, #10b981, #34d399)"
+                    }}
                   />
                 </div>
                 <span className="muted">Stops: {humanState.routes_by_sleigh[String(index)]?.length ?? 0}</span>

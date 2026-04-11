@@ -46,7 +46,7 @@ export function MissionCreator() {
     num_clients: 30,
     budget: 3000,
     sleigh_cost: 500,
-    weather_key: "random",
+    weather_key: "real",
     random_incidents: false
   });
 
@@ -119,6 +119,7 @@ export function MissionCreator() {
                 value={sandbox.weather_key}
                 onChange={(event) => setSandbox((prev) => ({ ...prev, weather_key: event.target.value }))}
               >
+                <option value="real">🌍 Temps Réel (Open-Meteo)</option>
                 <option value="random">Aleatoire</option>
                 <option value="Clear">Soleil</option>
                 <option value="Rain">Pluie</option>

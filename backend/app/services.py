@@ -19,6 +19,7 @@ from scripts.routing_payloads import (
     build_human_live_stats,
     compute_route_options,
     default_human_state,
+    format_clock,
     get_point_latlon,
     human_state_from_payload,
     load_graph,
@@ -29,7 +30,7 @@ from scripts.routing_payloads import (
     serialize_human_state,
     summarize_segments,
 )
-from scripts.weather_engine import get_simulated_weather
+from scripts.weather_engine import get_real_weather, get_simulated_weather
 
 
 def _read_json(path: str | Path, default=None):
@@ -249,6 +250,8 @@ def create_mission(payload: dict) -> dict:
 
     if payload.get("weather_key") == "random":
         weather = get_simulated_weather(weather_file=str(paths.weather_file))
+    elif payload.get("weather_key") == "real":
+        weather = get_real_weather(payload["zone"], weather_file=str(paths.weather_file))
     else:
         weather = dict(WEATHER_MAP.get(payload.get("weather_key", "Clear"), WEATHER_MAP["Clear"]))
         _write_json(paths.weather_file, weather)
@@ -398,6 +401,37 @@ def validate_human_segment(mission_id: str, payload: dict) -> dict:
     state.segments_by_sleigh[sleigh_key].append(segment)
     state.assigned_clients.append(to_id)
     state.assigned_clients = sorted(set(state.assigned_clients))
+    
+    # Incidents DYNAMIQUES (Phase 2.1)
+    if mission.get("random_incidents") and random.random() < 0.15:
+        print("⚠️ Un incident dynamique vient de se produire !")
+        incidents = _read_json(paths.incidents_file, {"count": 0, "segments": []})
+        # On simule un nouvel incident entre deux points non servis
+        unassigned = [int(row["id"]) for _, row in df.iterrows() if int(row["id"]) not in state.assigned_clients and int(row["id"]) != 0]
+        if len(unassigned) >= 2:
+            pair = random.sample(unassigned, 2)
+            try:
+                graph = load_graph(paths.graph_file)
+                p1 = df[df["id"] == pair[0]].iloc[0]
+                p2 = df[df["id"] == pair[1]].iloc[0]
+                route = compute_route_options(graph, p1["lat"], p1["lon"], p2["lat"], p2["lon"], time_factor=1.0, k=1)
+                if route:
+                    incidents["segments"].append({
+                        "variant": "incident",
+                        "sleigh_id": -1,
+                        "from_id": int(pair[0]),
+                        "to_id": int(pair[1]),
+                        "route_nodes": route[0]["route_nodes"],
+                        "geometry": route[0]["geometry"],
+                        "dist_m": float(route[0]["dist_m"]),
+                        "time_s": float(route[0]["time_s"]) * 6.0,
+                        "title": f"⚠️ INCIDENT : Axe bloqué #{pair[0]} -> #{pair[1]}",
+                    })
+                    incidents["count"] = len(incidents["segments"])
+                    _write_json(paths.incidents_file, incidents)
+            except Exception as e:
+                print(f"Échec génération incident : {e}")
+
     return _serialize_state_with_stats(paths, mission, state)
 
 
@@ -448,6 +482,72 @@ def reset_human_state(mission_id: str, payload: dict) -> dict:
     return _serialize_state_with_stats(paths, mission, state)
 
 
+def suggest_next_stops(mission_id: str, payload: dict) -> dict:
+    paths, mission, human_state_payload = load_mission_bundle(mission_id)
+    df = read_points(paths.data_file)
+    state = human_state_from_payload(human_state_payload)
+    
+    sleigh_id = int(payload.get("sleigh_id", 0))
+    sleigh_key = str(sleigh_id)
+    route = state.routes_by_sleigh.get(sleigh_key, [])
+    current_point_id = int(route[-1]) if route else 0
+    
+    # Matrice de temps (pour l'ETA et la proximité)
+    time_matrix = np.load(paths.time_matrix_file)
+    id_to_idx = {int(row["id"]): idx for idx, (_, row) in enumerate(df.iterrows())}
+    current_idx = id_to_idx[current_point_id]
+    
+    weather = load_weather(paths.weather_file, mission.get("weather_key"))
+    time_factor = float(weather.get("factor", 1.0)) / state.speed_multiplier
+    
+    # Stats actuelles du traineau
+    graph = load_graph(paths.graph_file)
+    live_stats = build_human_live_stats(df, graph, state, float(weather.get("factor", 1.0)))
+    sleigh_stats = live_stats.get(sleigh_key, {})
+    current_load = float(sleigh_stats.get("load_kg", 0.0))
+    current_time_s = float(sleigh_stats.get("time_s", 0.0))
+    
+    unassigned = [int(row["id"]) for _, row in df.iterrows() if int(row["id"]) not in state.assigned_clients and int(row["id"]) != 0]
+    
+    suggestions = []
+    for client_id in unassigned:
+        target_idx = id_to_idx[client_id]
+        travel_time = float(time_matrix[current_idx][target_idx]) * time_factor
+        arrival_time = current_time_s + travel_time
+        
+        client_row = df[df["id"] == client_id].iloc[0]
+        poids = float(client_row["poids_colis"])
+        tw_start = float(client_row.get("tw_start", 0))
+        tw_end = float(client_row.get("tw_end", 28800))
+        
+        # Heuristique : temps d'approche + pénalité si fenêtre de temps serrée
+        # Si on arrive trop tôt, on attend (pénalité légère)
+        wait_time = max(0, tw_start - arrival_time)
+        # Si on arrive trop tard, gros malus (infaisable)
+        late_penalty = 0
+        if arrival_time > tw_end:
+            late_penalty = 1000000
+            
+        # Malus si surcharge
+        weight_penalty = 0
+        if current_load + poids > state.vehicle_capacity:
+            weight_penalty = 500000
+            
+        score = travel_time + wait_time * 0.5 + late_penalty + weight_penalty
+        
+        suggestions.append({
+            "client_id": client_id,
+            "nom_client": client_row["nom_client"],
+            "score": score,
+            "travel_time_s": travel_time,
+            "arrival_clock": format_clock(32400 + arrival_time), # 9h + offset
+            "is_feasible": arrival_time <= tw_end and (current_load + poids <= state.vehicle_capacity)
+        })
+        
+    suggestions.sort(key=lambda x: x["score"])
+    return {"suggestions": suggestions[:3]}
+
+
 def _build_incident_matrix(paths: MissionPaths, mission: dict) -> str | None:
     if not mission.get("random_incidents") or not paths.time_matrix_file.exists():
         return None
@@ -487,8 +587,10 @@ def solve_mission(mission_id: str, payload: dict) -> dict:
         incident_matrix_path=incident_matrix_path,
         data_path=str(paths.data_file),
         time_matrix_path=str(paths.time_matrix_file),
+        dist_matrix_path=str(paths.dist_matrix_file),
         weather_file=str(paths.weather_file),
         output_path=str(paths.results_file),
+        optimization_target=payload.get("optimization_target", "time"),
     )
     if not results:
         raise RuntimeError("Aucune solution VRP trouvee")

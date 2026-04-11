@@ -12,6 +12,11 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     command: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
@@ -21,7 +26,8 @@ services:
     container_name: operation-noel-frontend
     working_dir: /app
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "3000:3000"
     volumes:
