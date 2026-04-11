@@ -20,6 +20,30 @@ BENCHMARK_FILE = os.path.join(BASE_DIR, 'core_data', 'benchmark_results.json')
 # Coordonnées exactes du dépôt (Hôtel de Ville)
 DEPOT_LAT_LON = (48.8566, 2.3522)
 
+
+def format_minutes(seconds):
+    minutes = max(0, int(round(float(seconds) / 60)))
+    return f"{minutes} min"
+
+
+def route_length_m(G, route_nodes):
+    total = 0.0
+    for u, v in zip(route_nodes[:-1], route_nodes[1:]):
+        edge_data = G.get_edge_data(u, v)
+        if not edge_data:
+            continue
+        total += float(min(data.get("length", 0.0) for data in edge_data.values()))
+    return total
+
+
+def route_popup_html(title, duration_s, dist_m, stops):
+    return (
+        f"<b>{title}</b><br>"
+        f"⏱️ {format_minutes(duration_s)}<br>"
+        f"📏 {dist_m/1000:.2f} km<br>"
+        f"📍 {stops} arrêt(s)"
+    )
+
 def apply_offset(coords, offset_meters):
     """Applique un décalage géographique aux coordonnées."""
     if offset_meters == 0 or len(coords) < 2: return coords
@@ -112,7 +136,8 @@ def generate_map(custom_colors=None, line_weight=4, show_names=False):
     for i, tour in enumerate(results['tours']):
         color = colors[i % len(colors)]
         offset_m = offsets[i % len(offsets)]
-        
+        tour_dist_m = 0.0
+        stop_count = max(0, len(tour['route_ids']) - 2)
         all_micro_coords = []
         for j in range(len(tour['route_ids']) - 1):
             s_id, e_id = tour['route_ids'][j], tour['route_ids'][j+1]
@@ -121,6 +146,7 @@ def generate_map(custom_colors=None, line_weight=4, show_names=False):
             try:
                 r_n = nx.shortest_path(G, ox.nearest_nodes(G, s_lon, s_lat), ox.nearest_nodes(G, e_lon, e_lat), weight='travel_time')
                 segment = get_detailed_geometry(G, r_n)
+                tour_dist_m += route_length_m(G, r_n)
                 if segment:
                     segment[0], segment[-1] = [s_lat, s_lon], [e_lat, e_lon]
                     if all_micro_coords and all_micro_coords[-1] == segment[0]: segment = segment[1:]
@@ -131,7 +157,24 @@ def generate_map(custom_colors=None, line_weight=4, show_names=False):
             all_micro_coords = apply_offset(all_micro_coords, offset_m)
             
         if all_micro_coords:
-            plugins.AntPath(locations=all_micro_coords, color=color, weight=line_weight, opacity=0.8, hardwareAcceleration=True).add_to(m)
+            title = f"🛷 Traîneau #{tour.get('vehicle_id', i) + 1}"
+            plugins.AntPath(
+                locations=all_micro_coords,
+                color=color,
+                weight=line_weight,
+                opacity=0.8,
+                hardwareAcceleration=True,
+                tooltip=f"{title} · {format_minutes(tour.get('duration_s', 0))} · {tour_dist_m/1000:.2f} km",
+                popup=folium.Popup(
+                    route_popup_html(
+                        title,
+                        float(tour.get('duration_s', 0)),
+                        float(tour_dist_m),
+                        stop_count,
+                    ),
+                    max_width=240,
+                ),
+            ).add_to(m)
 
     # 6. Widgets
     folium.Marker(location=depot_coords, icon=folium.Icon(color='black', icon='home', prefix='fa'), tooltip="Dépôt Central").add_to(m)

@@ -70,6 +70,28 @@ def _route_length_m(G, route: list[int]) -> float:
     return total
 
 
+def _edge_time_s(edge_data: dict) -> float:
+    if edge_data.get("travel_time") is not None:
+        return float(edge_data["travel_time"])
+    length_m = float(edge_data.get("length", 0.0))
+    return length_m / (30_000 / 3600)
+
+
+def _route_time_s(G, route: list[int]) -> float:
+    total = 0.0
+    for u, v in zip(route[:-1], route[1:]):
+        ed = G.get_edge_data(u, v)
+        if not ed:
+            continue
+        total += min(_edge_time_s(d) for d in ed.values())
+    return total
+
+
+def _format_minutes(seconds: float) -> str:
+    minutes = max(0, int(round(seconds / 60)))
+    return f"{minutes} min"
+
+
 def _route_to_latlon_coords(G, route: list[int]) -> list[list[float]]:
     coords: list[list[float]] = []
     for u, v in zip(route[:-1], route[1:]):
@@ -102,10 +124,17 @@ def _compute_route_options(
 ) -> list[dict]:
     orig = ox.distance.nearest_nodes(G, X=float(from_lon), Y=float(from_lat))
     dest = ox.distance.nearest_nodes(G, X=float(to_lon), Y=float(to_lat))
+    routes = []
     try:
-        routes = list(islice(ox.routing.k_shortest_paths(G, orig, dest, k, weight="length"), k))
+        fastest = ox.routing.shortest_path(G, orig, dest, weight="travel_time")
+        if fastest:
+            routes.append(fastest)
     except Exception:
-        routes = []
+        pass
+    try:
+        routes.extend(list(islice(ox.routing.k_shortest_paths(G, orig, dest, k, weight="length"), k)))
+    except Exception:
+        pass
     if not routes:
         sp = ox.routing.shortest_path(G, orig, dest, weight="length")
         routes = [sp] if sp else []
@@ -113,7 +142,11 @@ def _compute_route_options(
     for r in routes:
         if not r:
             continue
-        opts.append({"route": r, "dist_m": _route_length_m(G, r)})
+        opts.append({
+            "route": r,
+            "dist_m": _route_length_m(G, r),
+            "time_s": _route_time_s(G, r),
+        })
     # dédoublonne si les options sont identiques
     seen = set()
     unique = []
@@ -123,13 +156,42 @@ def _compute_route_options(
             continue
         seen.add(key)
         unique.append(o)
-    return unique
+    unique.sort(key=lambda o: (o["time_s"], o["dist_m"]))
+    return unique[:k]
+
+
+def _label_route_options(options: list[dict], time_factor: float = 1.0) -> list[str]:
+    if not options:
+        return []
+    fastest_idx = min(range(len(options)), key=lambda i: options[i]["time_s"])
+    shortest_idx = min(range(len(options)), key=lambda i: options[i]["dist_m"])
+    labels = []
+    for i, opt in enumerate(options):
+        tags = []
+        if i == fastest_idx:
+            tags.append("Plus rapide")
+        if i == shortest_idx:
+            tags.append("Plus court")
+        if not tags:
+            tags.append(f"Alternative {i + 1}")
+        labels.append(
+            f"{' / '.join(tags)} · {_format_minutes(opt['time_s'] * time_factor)} · {opt['dist_m']/1000:.2f} km"
+        )
+    return labels
+
+
+def _route_popup_html(title: str, dist_m: float, time_s: float, time_factor: float = 1.0) -> str:
+    return (
+        f"<b>{title}</b><br>"
+        f"⏱️ {_format_minutes(time_s * time_factor)}<br>"
+        f"📏 {dist_m/1000:.2f} km"
+    )
 
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
 if "mission" not in st.session_state:
     st.error("❌ Pas de mission configurée. Retournez au Briefing.")
-    if st.button("← Retour au Briefing"):
+    if st.button("← Retour au Briefing", key="missing_mission_back_to_briefing"):
         st.switch_page("app.py")
     st.stop()
 
@@ -266,7 +328,7 @@ Utilise plutôt un format plus précis : `Quartier, Ville, Région, Pays` (ex: `
 - Si tu as beaucoup de clients, réduis le nombre pour un premier test
                     """.strip()
                 )
-        if st.button("← Retour"):
+        if st.button("← Retour", key="generation_error_back_to_briefing"):
             st.switch_page("app.py")
         st.stop()
 
@@ -297,7 +359,11 @@ if (
     st.session_state.pop("pending_route_choice", None)
 
 human_routes   = st.session_state["human_routes"]
-human_segments = st.session_state.get("human_segments", {i: [] for i in range(nb_traineaux)})
+if "human_segments" not in st.session_state:
+    st.session_state["human_segments"] = {i: [] for i in range(nb_traineaux)}
+for sid in range(nb_traineaux):
+    st.session_state["human_segments"].setdefault(sid, [])
+human_segments = st.session_state["human_segments"]
 assigned       = st.session_state["assigned_clients"]
 current_sleigh = min(st.session_state["current_sleigh"], nb_traineaux - 1)
 human_done     = st.session_state.get("human_done", False)
@@ -315,6 +381,69 @@ def _get_point_latlon(pid: int) -> tuple[float, float]:
     if r.empty:
         return float(depot_row["lat"]), float(depot_row["lon"])
     return float(r.iloc[0]["lat"]), float(r.iloc[0]["lon"])
+
+
+def _current_weather_factor() -> tuple[float, str]:
+    if mission.get("weather_key") != "random":
+        w = WEATHER_MAP.get(mission.get("weather_key"), WEATHER_MAP["Clear"])
+        return float(w.get("factor", 1.0)), str(w.get("desc", "Météo"))
+    if os.path.exists(WEATHER_FILE):
+        try:
+            with open(WEATHER_FILE, "r", encoding="utf-8") as fh:
+                w = json.load(fh)
+            return float(w.get("factor", 1.0)), str(w.get("desc", "Météo aléatoire"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return 1.0, "Météo aléatoire"
+
+
+def _route_weight_kg(route_ids: list[int]) -> float:
+    if not route_ids:
+        return 0.0
+    return float(df[df["id"].isin(route_ids)]["poids_colis"].sum())
+
+
+def _return_leg_stats(G, last_id: int) -> tuple[float, float]:
+    if G is None:
+        return 0.0, 0.0
+    lat, lon = _get_point_latlon(last_id)
+    depot_lat, depot_lon = _get_point_latlon(0)
+    try:
+        opts = _compute_route_options(G, lat, lon, depot_lat, depot_lon, k=1)
+    except Exception:
+        opts = []
+    if not opts:
+        return 0.0, 0.0
+    return float(opts[0]["dist_m"]), float(opts[0]["time_s"])
+
+
+def _sleigh_stats(sid: int, G, time_factor: float) -> dict:
+    route_ids = human_routes.get(sid, [])
+    segments = human_segments.get(sid, [])
+    dist_m = 0.0
+    time_s = 0.0
+    for segment in segments:
+        if segment.get("dist_m"):
+            dist_m += float(segment["dist_m"])
+        elif G is not None and segment.get("route"):
+            dist_m += _route_length_m(G, segment["route"])
+        if segment.get("time_s"):
+            time_s += float(segment["time_s"])
+        elif G is not None and segment.get("route"):
+            time_s += _route_time_s(G, segment["route"])
+    return_dist_m, return_time_s = (0.0, 0.0)
+    if route_ids:
+        return_dist_m, return_time_s = _return_leg_stats(G, int(route_ids[-1]))
+    load_kg = _route_weight_kg(route_ids)
+    return {
+        "stops": len(route_ids),
+        "load_kg": load_kg,
+        "over_kg": max(0.0, load_kg - capacite),
+        "dist_m": dist_m + return_dist_m,
+        "time_s": (time_s + return_time_s) * time_factor,
+        "return_dist_m": return_dist_m,
+        "return_time_s": return_time_s * time_factor,
+    }
 
 # Alerte incidents
 if st.session_state.get("incidents_blocked", 0) > 0:
@@ -407,6 +536,55 @@ if not human_done:
     else:
         graph_error = "Graphe routier introuvable (graphml)."
 
+    weather_factor, weather_desc = _current_weather_factor()
+    live_time_factor = weather_factor / speed_val
+    live_stats = {sid: _sleigh_stats(sid, G, live_time_factor) for sid in range(nb_traineaux)}
+    total_live_time_s = sum(s["time_s"] for s in live_stats.values())
+    total_live_dist_m = sum(s["dist_m"] for s in live_stats.values())
+    total_live_load_kg = sum(s["load_kg"] for s in live_stats.values())
+    total_over_kg = sum(s["over_kg"] for s in live_stats.values())
+    overloaded = [sid for sid, s in live_stats.items() if s["over_kg"] > 0]
+    completion_score = (n_assigned / num_clients * 100) if num_clients else 0
+    overload_penalty = min(40, total_over_kg / max(1, capacite) * 30)
+    budget_penalty = 20 if budget_remaining < 0 else 0
+    live_score = max(0, min(100, completion_score - overload_penalty - budget_penalty))
+
+    sm1, sm2, sm3, sm4 = st.columns(4)
+    sm1.metric("Votre temps estimé", _format_minutes(total_live_time_s))
+    sm2.metric("Distance totale", f"{total_live_dist_m/1000:.2f} km")
+    sm3.metric("Score humain live", f"{live_score:.0f}/100")
+    sm4.metric("Clients non livrés", str(n_unassigned))
+    st.caption(
+        f"Temps estimé avec météo : {weather_desc} (x{weather_factor:g}) "
+        f"et vitesse : {vitesse_label} (x{speed_val:g}). Charge totale : {total_live_load_kg:.0f} kg."
+    )
+
+    stats_rows = []
+    for sid, s in live_stats.items():
+        status = "Surcharge" if s["over_kg"] > 0 else "OK"
+        stats_rows.append({
+            "Traîneau": f"#{sid + 1}",
+            "Stops": s["stops"],
+            "Charge": f"{s['load_kg']:.0f}/{capacite} kg",
+            "Distance": f"{s['dist_m']/1000:.2f} km",
+            "Temps": _format_minutes(s["time_s"]),
+            "Statut": status,
+        })
+    st.dataframe(pd.DataFrame(stats_rows), hide_index=True, width="stretch")
+
+    if overloaded:
+        st.error(
+            "Capacité dépassée : "
+            + ", ".join(f"traîneau #{sid + 1}" for sid in overloaded)
+            + ". Réduisez les colis sur ces routes ou augmentez la capacité."
+        )
+    elif n_unassigned:
+        st.warning(
+            f"{n_unassigned} client(s) non livré(s). Ils compteront comme oubliés si vous lancez l'IA maintenant."
+        )
+    else:
+        st.success("Contraintes respectées : tous les clients sont assignés et aucune surcharge.")
+
     # ── Choix de rue (chemin) pour le prochain segment ─────────────────────
     pending_add = st.session_state.get("pending_add")
     if pending_add and pending_add.get("sleigh") != current_sleigh:
@@ -443,7 +621,7 @@ if not human_done:
                 r = df[df["id"] == to_id]
                 name = str(r.iloc[0].get("nom_client", f"Client {to_id}")) if not r.empty else f"Client {to_id}"
                 opts = pr["options"]
-                labels = [f"Option {i+1} — {o['dist_m']/1000:.2f} km" for i, o in enumerate(opts)]
+                labels = _label_route_options(opts, live_time_factor)
                 st.markdown("### 🧭 Choix de votre rue (chemin)")
                 choice = st.radio(
                     f"Chemin vers #{to_id} · {name}",
@@ -455,7 +633,12 @@ if not human_done:
                 )
                 c1, c2 = st.columns(2)
                 with c1:
-                    if st.button("✅ Valider ce chemin", type="primary", width="stretch"):
+                    if st.button(
+                        "✅ Valider ce chemin",
+                        type="primary",
+                        width="stretch",
+                        key="validate_pending_route",
+                    ):
                         seg = opts[int(choice)]
                         human_routes[current_sleigh].append(to_id)
                         st.session_state["assigned_clients"].add(to_id)
@@ -465,13 +648,14 @@ if not human_done:
                                 "to_id": to_id,
                                 "route": seg["route"],
                                 "dist_m": float(seg["dist_m"]),
+                                "time_s": float(seg.get("time_s", 0.0)),
                             }
                         )
                         st.session_state["human_segments"] = human_segments
                         _clear_pending()
                         st.rerun()
                 with c2:
-                    if st.button("✖️ Annuler", width="stretch"):
+                    if st.button("✖️ Annuler", width="stretch", key="cancel_pending_route"):
                         _clear_pending()
                         st.rerun()
 
@@ -499,7 +683,20 @@ if not human_done:
                             color=col_r,
                             weight=5,
                             opacity=0.9,
-                            tooltip=f"🛷 Traîneau #{sid + 1} · {seg['dist_m']/1000:.2f} km",
+                            tooltip=(
+                                f"🛷 Traîneau #{sid + 1} · "
+                                f"{_format_minutes(float(seg.get('time_s', 0.0)) * live_time_factor)} · "
+                                f"{seg['dist_m']/1000:.2f} km"
+                            ),
+                            popup=folium.Popup(
+                                _route_popup_html(
+                                    f"🛷 Traîneau #{sid + 1}",
+                                    float(seg["dist_m"]),
+                                    float(seg.get("time_s", 0.0)),
+                                    live_time_factor,
+                                ),
+                                max_width=220,
+                            ),
                         ).add_to(m)
                 last_id = int(route_ids[-1])
                 flt, fln = _get_point_latlon(last_id)
@@ -515,7 +712,20 @@ if not human_done:
                                 weight=4,
                                 opacity=0.35,
                                 dash_array="6 10",
-                                tooltip=f"↩︎ Retour dépôt (auto) · {ret['dist_m']/1000:.2f} km",
+                                tooltip=(
+                                    f"↩︎ Retour dépôt (auto) · "
+                                    f"{_format_minutes(float(ret.get('time_s', 0.0)) * live_time_factor)} · "
+                                    f"{ret['dist_m']/1000:.2f} km"
+                                ),
+                                popup=folium.Popup(
+                                    _route_popup_html(
+                                        "↩︎ Retour dépôt (auto)",
+                                        float(ret["dist_m"]),
+                                        float(ret.get("time_s", 0.0)),
+                                        live_time_factor,
+                                    ),
+                                    max_width=220,
+                                ),
                             ).add_to(m)
                 except Exception:
                     pass
@@ -538,6 +748,7 @@ if not human_done:
     pr = st.session_state.get("pending_routes")
     if G and pr and pending_add and pending_add.get("sleigh") == current_sleigh:
         opts = pr.get("options", [])
+        preview_labels = _label_route_options(opts, live_time_factor)
         sel_i = int(st.session_state.get("pending_route_choice", 0))
         for i, o in enumerate(opts):
             coords = _route_to_latlon_coords(G, o["route"])
@@ -549,88 +760,94 @@ if not human_done:
                 weight=6 if i == sel_i else 4,
                 opacity=0.65 if i == sel_i else 0.25,
                 dash_array=None if i == sel_i else "4 10",
-                tooltip=f"Option {i+1} · {o['dist_m']/1000:.2f} km",
+                tooltip=preview_labels[i] if i < len(preview_labels) else f"Option {i + 1}",
+                popup=folium.Popup(
+                    _route_popup_html(
+                        preview_labels[i] if i < len(preview_labels) else f"Option {i + 1}",
+                        float(o["dist_m"]),
+                        float(o.get("time_s", 0.0)),
+                        live_time_factor,
+                    ),
+                    max_width=260,
+                ),
             ).add_to(m)
 
-# Dépôt
-folium.CircleMarker(
-    location=[center_lat, center_lon],
-    radius=18,
-    color="white",
-    weight=3,
-    fill=True,
-    fill_color="#2C3E50",
-    fill_opacity=1.0,
-    tooltip="🏠 DÉPÔT CENTRAL — départ et retour de tous les traîneaux",
-    popup=folium.Popup("🏠 <b>Dépôt Central</b>", max_width=160),
-).add_to(m)
-# Emoji home sur le dépôt (non-interactif)
-folium.Marker(
-    location=[center_lat, center_lon],
-    icon=folium.DivIcon(
-        html='<div style="font-size:14px;line-height:1;pointer-events:none;'
-             'margin-top:-6px;margin-left:-5px;">🏠</div>',
-        icon_size=(20, 20),
-        icon_anchor=(10, 10),
-    ),
-).add_to(m)
-
-# Marqueurs clients
-for _, row in clients_df.iterrows():
-    cid    = int(row["id"])
-    lat    = float(row["lat"])
-    lon    = float(row["lon"])
-    name   = str(row.get("nom_client", f"Client {cid}"))
-    weight = int(row.get("poids_colis", 0))
-
-    if cid in assigned:
-        # Trouver le traîneau propriétaire
-        owner_sid, order_n = current_sleigh, 0
-        for sid, route in human_routes.items():
-            if cid in route:
-                owner_sid = sid
-                order_n   = route.index(cid) + 1
-                break
-        fill_c    = custom_colors[owner_sid % len(custom_colors)]
-        tooltip_t = f"✅ Stop #{order_n} — {name} (Traîneau #{owner_sid + 1})"
-        radius    = 13
-    else:
-        fill_c    = "#E74C3C"
-        tooltip_t = f"📦 #{cid} · {name} · {weight} kg  — cliquer pour ajouter"
-        radius    = 11
-
+    # Dépôt
     folium.CircleMarker(
-        location=[lat, lon],
-        radius=radius,
+        location=[center_lat, center_lon],
+        radius=18,
         color="white",
-        weight=2,
+        weight=3,
         fill=True,
-        fill_color=fill_c,
-        fill_opacity=0.92,
-        tooltip=tooltip_t,
-        popup=folium.Popup(
-            f"<b>#{cid} {name}</b><br>📦 {weight} kg", max_width=180
+        fill_color="#2C3E50",
+        fill_opacity=1.0,
+        tooltip="🏠 DÉPÔT CENTRAL — départ et retour de tous les traîneaux",
+        popup=folium.Popup("🏠 <b>Dépôt Central</b>", max_width=160),
+    ).add_to(m)
+    folium.Marker(
+        location=[center_lat, center_lon],
+        icon=folium.DivIcon(
+            html='<div style="font-size:14px;line-height:1;pointer-events:none;'
+                 'margin-top:-6px;margin-left:-5px;">🏠</div>',
+            icon_size=(20, 20),
+            icon_anchor=(10, 10),
         ),
     ).add_to(m)
 
-    # Numéro ou icône au centre du cercle
-    if cid in assigned:
-        label_html = (
-            f'<div style="color:white;font-weight:900;font-size:11px;'
-            f'text-align:center;line-height:1;pointer-events:none;'
-            f'margin-top:-5px;margin-left:-5px;">{order_n}</div>'
-        )
-    else:
-        label_html = (
-            '<div style="font-size:11px;text-align:center;line-height:1;'
-            'pointer-events:none;margin-top:-5px;margin-left:-5px;">📦</div>'
-        )
-    folium.Marker(
-        location=[lat, lon],
-        icon=folium.DivIcon(
-            html=label_html, icon_size=(10, 10), icon_anchor=(5, 5)
-        ),
-    ).add_to(m)
+    # Marqueurs clients
+    for _, row in clients_df.iterrows():
+        cid    = int(row["id"])
+        lat    = float(row["lat"])
+        lon    = float(row["lon"])
+        name   = str(row.get("nom_client", f"Client {cid}"))
+        weight = int(row.get("poids_colis", 0))
+
+        if cid in assigned:
+            owner_sid, order_n = current_sleigh, 0
+            for sid, route in human_routes.items():
+                if cid in route:
+                    owner_sid = sid
+                    order_n   = route.index(cid) + 1
+                    break
+            fill_c    = custom_colors[owner_sid % len(custom_colors)]
+            tooltip_t = f"✅ Stop #{order_n} — {name} (Traîneau #{owner_sid + 1})"
+            radius    = 13
+        else:
+            fill_c    = "#E74C3C"
+            tooltip_t = f"📦 #{cid} · {name} · {weight} kg  — cliquer pour ajouter"
+            radius    = 11
+
+        folium.CircleMarker(
+            location=[lat, lon],
+            radius=radius,
+            color="white",
+            weight=2,
+            fill=True,
+            fill_color=fill_c,
+            fill_opacity=0.92,
+            tooltip=tooltip_t,
+            popup=folium.Popup(
+                f"<b>#{cid} {name}</b><br>📦 {weight} kg", max_width=180
+            ),
+        ).add_to(m)
+
+        if cid in assigned:
+            label_html = (
+                f'<div style="color:white;font-weight:900;font-size:11px;'
+                f'text-align:center;line-height:1;pointer-events:none;'
+                f'margin-top:-5px;margin-left:-5px;">{order_n}</div>'
+            )
+        else:
+            label_html = (
+                '<div style="font-size:11px;text-align:center;line-height:1;'
+                'pointer-events:none;margin-top:-5px;margin-left:-5px;">📦</div>'
+            )
+        folium.Marker(
+            location=[lat, lon],
+            icon=folium.DivIcon(
+                html=label_html, icon_size=(10, 10), icon_anchor=(5, 5)
+            ),
+        ).add_to(m)
 
     # ── Affichage interactif ───────────────────────────────────────────────────
     map_result = st_folium(
@@ -672,7 +889,11 @@ for _, row in clients_df.iterrows():
     # ── Contrôles des routes ───────────────────────────────────────────────────
     rc1, rc2, rc3 = st.columns(3)
     with rc1:
-        if st.button("↩️ Annuler le dernier point", width="stretch"):
+        if st.button(
+            "↩️ Annuler le dernier point",
+            width="stretch",
+            key="undo_last_human_point",
+        ):
             if human_routes[current_sleigh]:
                 removed = human_routes[current_sleigh].pop()
                 st.session_state["assigned_clients"].discard(removed)
@@ -685,7 +906,7 @@ for _, row in clients_df.iterrows():
                 st.session_state["last_map_click"] = None
                 st.rerun()
     with rc2:
-        if st.button("🗑️ Vider ce traîneau", width="stretch"):
+        if st.button("🗑️ Vider ce traîneau", width="stretch", key="clear_current_sleigh"):
             for cid in list(human_routes[current_sleigh]):
                 st.session_state["assigned_clients"].discard(cid)
             st.session_state["human_routes"][current_sleigh] = []
@@ -695,7 +916,7 @@ for _, row in clients_df.iterrows():
             st.session_state["last_map_click"] = None
             st.rerun()
     with rc3:
-        if st.button("🔄 Tout réinitialiser", width="stretch"):
+        if st.button("🔄 Tout réinitialiser", width="stretch", key="reset_all_human_routes"):
             st.session_state["human_routes"]     = {i: [] for i in range(nb_traineaux)}
             st.session_state["human_segments"]   = {i: [] for i in range(nb_traineaux)}
             st.session_state["assigned_clients"] = set()
@@ -704,35 +925,35 @@ for _, row in clients_df.iterrows():
             st.rerun()
 
     # Affichage de la route courante
-        if human_routes[current_sleigh]:
-            labels = []
-            for rid in human_routes[current_sleigh]:
-                r = df[df["id"] == rid]
-                labels.append(f"#{rid} {r.iloc[0]['nom_client']}" if not r.empty else f"#{rid}")
-            route_str = " → ".join(labels)
-            dist_m = sum(float(s.get("dist_m", 0.0)) for s in human_segments.get(current_sleigh, []))
-            ret_m = 0.0
-            if G is not None:
-                last_id = int(human_routes[current_sleigh][-1])
-                flt, fln = _get_point_latlon(last_id)
-                try:
-                    ret_opts = _compute_route_options(G, flt, fln, center_lat, center_lon, k=1)
-                    if ret_opts:
-                        ret_m = float(ret_opts[0]["dist_m"])
-                except Exception:
-                    ret_m = 0.0
-            dist_total_m = dist_m + ret_m
-            st.markdown(f"""
-            <div style="background:white; border-left:5px solid {active_col};
-                        border-radius:12px; padding:12px 18px; margin-top:10px;
-                        box-shadow:0 2px 8px rgba(0,0,0,0.06);">
-              <strong style="color:{active_col};">🛷 Traîneau #{current_sleigh + 1}</strong>
-              <span style="color:#555; font-size:.88em;">
-                &nbsp;: Dépôt → {route_str} → Dépôt
-                &nbsp;·&nbsp; <strong style="color:#111;">Distance :</strong> {dist_total_m/1000:.2f} km
-              </span>
-            </div>
-            """, unsafe_allow_html=True)
+    if human_routes[current_sleigh]:
+        labels = []
+        for rid in human_routes[current_sleigh]:
+            r = df[df["id"] == rid]
+            labels.append(f"#{rid} {r.iloc[0]['nom_client']}" if not r.empty else f"#{rid}")
+        route_str = " → ".join(labels)
+        dist_m = sum(float(s.get("dist_m", 0.0)) for s in human_segments.get(current_sleigh, []))
+        ret_m = 0.0
+        if G is not None:
+            last_id = int(human_routes[current_sleigh][-1])
+            flt, fln = _get_point_latlon(last_id)
+            try:
+                ret_opts = _compute_route_options(G, flt, fln, center_lat, center_lon, k=1)
+                if ret_opts:
+                    ret_m = float(ret_opts[0]["dist_m"])
+            except Exception:
+                ret_m = 0.0
+        dist_total_m = dist_m + ret_m
+        st.markdown(f"""
+        <div style="background:white; border-left:5px solid {active_col};
+                    border-radius:12px; padding:12px 18px; margin-top:10px;
+                    box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+          <strong style="color:{active_col};">🛷 Traîneau #{current_sleigh + 1}</strong>
+          <span style="color:#555; font-size:.88em;">
+            &nbsp;: Dépôt → {route_str} → Dépôt
+            &nbsp;·&nbsp; <strong style="color:#111;">Distance :</strong> {dist_total_m/1000:.2f} km
+          </span>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Progression
     st.markdown(f"""
@@ -755,18 +976,8 @@ for _, row in clients_df.iterrows():
     else:
         if st.button(
             "🤖 J'ai terminé — Lancer l'IA et voir la solution optimale !",
-            type="primary", width="stretch",
+            type="primary", width="stretch", key="finish_human_route",
         ):
-            # Calcul du temps humain
-            if os.path.exists(TIME_MATRIX_PATH):
-                matrix    = np.load(TIME_MATRIX_PATH)
-                total_h   = 0
-                for sid, route in human_routes.items():
-                    if route:
-                        r = [0] + route + [0]
-                        total_h += sum(matrix[r[i]][r[i + 1]] for i in range(len(r) - 1))
-                st.session_state["human_time_s"] = int(total_h)
-
             # Météo
             if mission["weather_key"] == "random":
                 get_simulated_weather()
@@ -775,6 +986,27 @@ for _, row in clients_df.iterrows():
                 forced_weather = WEATHER_MAP.get(mission["weather_key"])
                 with open(WEATHER_FILE, "w", encoding="utf-8") as fh:
                     json.dump(forced_weather, fh, indent=4, ensure_ascii=False)
+
+            final_weather_factor, _ = _current_weather_factor()
+            final_time_factor = final_weather_factor / speed_val
+            final_human_stats = {
+                sid: _sleigh_stats(sid, G, final_time_factor) for sid in range(nb_traineaux)
+            }
+            human_time_total_s = float(sum(s["time_s"] for s in final_human_stats.values()))
+            if human_time_total_s <= 0 and os.path.exists(TIME_MATRIX_PATH):
+                matrix = np.load(TIME_MATRIX_PATH) * final_time_factor
+                for sid, route in human_routes.items():
+                    if route:
+                        route_idx = [0] + route + [0]
+                        human_time_total_s += sum(
+                            matrix[route_idx[i]][route_idx[i + 1]]
+                            for i in range(len(route_idx) - 1)
+                        )
+            st.session_state["human_time_s"] = int(human_time_total_s)
+            st.session_state["human_dist_m"] = float(sum(s["dist_m"] for s in final_human_stats.values()))
+            st.session_state["human_load_kg"] = float(sum(s["load_kg"] for s in final_human_stats.values()))
+            st.session_state["human_over_kg"] = float(sum(s["over_kg"] for s in final_human_stats.values()))
+            st.session_state["human_unassigned"] = int(n_unassigned)
 
             # Incidents aléatoires
             incident_path = None
@@ -877,6 +1109,23 @@ else:
     human_time_s = st.session_state.get("human_time_s")
     if human_time_s:
         st.markdown("### 🧑 Votre itinéraire  vs  🤖 Solution IA")
+        human_dist_m = float(st.session_state.get("human_dist_m", 0.0))
+        human_over_kg = float(st.session_state.get("human_over_kg", 0.0))
+        human_unassigned = int(st.session_state.get("human_unassigned", 0))
+        ai_dist_m = float(bench.get("optimized", {}).get("total_dist_m", 0.0))
+        delta_min = int(round((human_time_s - res["total_time_s"]) / 60))
+
+        vc1, vc2, vc3, vc4 = st.columns(4)
+        vc1.metric("Votre temps", _format_minutes(human_time_s))
+        vc2.metric("Temps IA", _format_minutes(res["total_time_s"]), f"{delta_min:+d} min vs vous")
+        vc3.metric("Votre distance", f"{human_dist_m/1000:.2f} km")
+        vc4.metric("Distance IA", f"{ai_dist_m/1000:.2f} km")
+
+        if human_over_kg > 0:
+            st.error(f"Votre route dépasse la capacité de {human_over_kg:.0f} kg au total.")
+        if human_unassigned > 0:
+            st.warning(f"{human_unassigned} client(s) n'ont pas été assignés dans votre route.")
+
         hc1, hc2 = st.columns(2)
         human_min = human_time_s // 60
         ai_min    = res["total_time_s"] // 60
@@ -923,12 +1172,26 @@ else:
     st.markdown("---")
     nav1, nav2 = st.columns(2)
     with nav1:
-        if st.button("🔄 Refaire ma route", width="stretch"):
+        if st.button("🔄 Rejouer la même mission", width="stretch", key="redo_human_route"):
             st.session_state["human_done"]       = False
             st.session_state["human_routes"]     = {i: [] for i in range(nb_traineaux)}
+            st.session_state["human_segments"]   = {i: [] for i in range(nb_traineaux)}
             st.session_state["assigned_clients"] = set()
             st.session_state["last_map_click"]   = None
+            st.session_state.pop("pending_add", None)
+            st.session_state.pop("pending_routes", None)
+            st.session_state.pop("pending_route_choice", None)
+            st.session_state.pop("human_time_s", None)
+            st.session_state.pop("human_dist_m", None)
+            st.session_state.pop("human_load_kg", None)
+            st.session_state.pop("human_over_kg", None)
+            st.session_state.pop("human_unassigned", None)
             st.rerun()
     with nav2:
-        if st.button("🏆 VOIR LE DEBRIEFING", type="primary", width="stretch"):
+        if st.button(
+            "🏆 VOIR LE DEBRIEFING",
+            type="primary",
+            width="stretch",
+            key="go_to_debriefing",
+        ):
             st.switch_page("pages/2_Debriefing.py")
