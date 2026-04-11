@@ -1,187 +1,59 @@
-# Operation Noel
+# 🎅 Santa Router Optimizer (Pro Edition)
 
-Migration progressive du projet de livraison de Noel depuis `Streamlit` vers une architecture `FastAPI + Next.js`, en conservant le moteur Python existant :
-- `OSMnx`
-- `NetworkX`
-- `OR-Tools`
-- météo, incidents, benchmark
+[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![Next.js](https://img.shields.io/badge/Frontend-Next.js--14-black?style=flat-square&logo=next.js)](https://nextjs.org/)
+[![OR-Tools](https://img.shields.io/badge/Optimization-Google%20OR--Tools-4285F4?style=flat-square&logo=google)](https://developers.google.com/optimization)
+[![Leaflet](https://img.shields.io/badge/Map-Leaflet.js-199900?style=flat-square&logo=leaflet)](https://leafletjs.com/)
 
-Le repo contient donc aujourd'hui :
-- le moteur Python historique
-- l'ancienne interface Streamlit
-- la nouvelle API FastAPI
-- le nouveau frontend Next.js
+Une plateforme de simulation et d'optimisation de logistique urbaine pour le Père Noël. Ce projet résout des problèmes complexes de tournées de véhicules avec fenêtres de temps (**VRPTW**) en utilisant des données géographiques réelles.
 
-## Stack
+## 🚀 Fonctionnalités Clés
 
-- Backend : `FastAPI`
-- Frontend : `Next.js` App Router
-- Carte : `Leaflet`
-- Solveur : `OR-Tools`
-- Graphe routier : `OSMnx` / `NetworkX`
+- **Moteur VRPTW** : Optimisation multi-traîneaux sous contraintes de capacité, de temps et d'incidents routiers via Google OR-Tools.
+- **Profils IA** : Choisissez entre un mode **⚡ Express** (gain de temps) ou **🌱 Écolo** (réduction de la distance et du CO2).
+- **Auto-Suggestion** : Un algorithme d'aide à la décision suggère en temps réel les meilleurs prochains points de livraison au joueur.
+- **Météo Réelle** : Connexion à l'API **Open-Meteo** pour appliquer les conditions climatiques réelles de la ville choisie (impact sur la vitesse).
+- **Replay Animé** : Visualisez la course entre le Père Noël (Humain) et le Robot (IA) avec une animation fluide sur la carte.
+- **Panthéon** : Système de classement persistant (SQLite) pour enregistrer les meilleurs scores mondiaux.
 
-## Arborescence
+## 🏗️ Architecture
 
-- [backend](/home/bekkari/Documents/Graphes/Noel/backend) : API FastAPI
-- [frontend](/home/bekkari/Documents/Graphes/Noel/frontend) : interface Next.js
-- [scripts](/home/bekkari/Documents/Graphes/Noel/scripts) : services Python partages
-- [final_scripts](/home/bekkari/Documents/Graphes/Noel/final_scripts) : solveur et visualisation finale
-- [pages](/home/bekkari/Documents/Graphes/Noel/pages) : ancienne interface Streamlit
-- [tests](/home/bekkari/Documents/Graphes/Noel/tests) : tests backend et payloads
-- [run_all.sh](/home/bekkari/Documents/Graphes/Noel/run_all.sh) : lancement local en une commande
-- [Makefile](/home/bekkari/Documents/Graphes/Noel/Makefile) : raccourcis de dev
-
-## Prerequis
-
-- Python `3.10+`
-- Node.js `18+`
-- un environnement virtuel Python dans `.venv`
-- `npm`
-
-Optionnel :
-- Docker avec `docker compose`
-
-## Installation locale
-
-### 1. Backend Python
-
-```bash
-cd ~/Documents/Graphes/Noel
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+```mermaid
+graph TD
+    A[Frontend: Next.js + TS] -->|API REST| B[Backend: FastAPI]
+    B --> C[OR-Tools: Solveur VRPTW]
+    B --> D[OSMnx: Graphe Routier]
+    B --> E[SQLite: Leaderboard]
+    B --> F[Open-Meteo: API Météo]
 ```
 
-### 2. Frontend Next.js
+## 🛠️ Installation Rapide
 
+Le projet est livré avec un **Makefile** pour simplifier le développement.
+
+### Prérequis
+- Python 3.10+ & Node.js 20+
+- Un environnement virtuel `.venv` configuré.
+
+### Commandes
 ```bash
-cd ~/Documents/Graphes/Noel/frontend
-npm install
-```
+# 1. Installer tout le projet
+make install
 
-## Lancement rapide
-
-Depuis la racine du projet :
-
-```bash
-./run_all.sh
-```
-
-Ce script :
-- lance les tests backend
-- demarre FastAPI en arriere-plan
-- demarre Next.js au premier plan
-
-URLs :
-- frontend : `http://localhost:3000`
-- API : `http://127.0.0.1:8000`
-- docs API : `http://127.0.0.1:8000/docs`
-- historique missions : `http://127.0.0.1:8000/api/missions`
-
-## Lancement manuel
-
-### Terminal 1 : tests
-
-```bash
-cd ~/Documents/Graphes/Noel
-source .venv/bin/activate
-python -m unittest tests.test_api tests.test_routing_payloads tests.test_repository
-```
-
-### Terminal 2 : backend
-
-```bash
-cd ~/Documents/Graphes/Noel
-source .venv/bin/activate
-python -m uvicorn backend.app.main:app --reload
-```
-
-### Terminal 3 : frontend
-
-```bash
-cd ~/Documents/Graphes/Noel/frontend
-npm run dev
-```
-
-## Commandes utiles
-
-Le [Makefile](/home/bekkari/Documents/Graphes/Noel/Makefile) expose :
-
-```bash
-make help
-make test
-make pycheck
-make backend
-make frontend
+# 2. Lancer Backend + Frontend en parallèle
 make dev
-make docker
-make clean
+
+# 3. Lancer les tests
+make test
 ```
 
-## Tests et verification
+*Vous pouvez également utiliser **Docker Compose** pour un déploiement en une ligne : `make docker`.*
 
-### Tests backend
+## 🧠 Algorithmes Utilisés
 
-```bash
-python -m unittest tests.test_api tests.test_routing_payloads tests.test_repository
-```
+1. **Recherche Opérationnelle** : Utilisation de `PATH_CHEAPEST_ARC` et `GUIDED_LOCAL_SEARCH` pour sortir des optima locaux.
+2. **Théorie des Graphes** : Algorithme de Dijkstra pour le calcul des matrices de coût à partir des données OpenStreetMap.
+3. **Heuristique Temps-Réel** : Algorithme glouton (Greedy) pondéré par les fenêtres de temps pour les suggestions au joueur.
 
-### Verification Python
-
-```bash
-python -m py_compile backend/app/main.py backend/app/services.py backend/app/schemas.py scripts/routing_payloads.py
-```
-
-### Build frontend
-
-```bash
-cd frontend
-npm run build
-```
-
-## Docker
-
-Les fichiers suivants sont fournis :
-- [docker-compose.yml](/home/bekkari/Documents/Graphes/Noel/docker-compose.yml)
-- [backend/Dockerfile](/home/bekkari/Documents/Graphes/Noel/backend/Dockerfile)
-- [frontend/Dockerfile](/home/bekkari/Documents/Graphes/Noel/frontend/Dockerfile)
-
-Lancement :
-
-```bash
-docker compose up --build
-```
-
-Si ton installation utilise encore l'ancien binaire :
-
-```bash
-docker-compose up --build
-```
-
-Variables utiles :
-- [frontend/.env.local.example](/home/bekkari/Documents/Graphes/Noel/frontend/.env.local.example)
-- [.env.example](/home/bekkari/Documents/Graphes/Noel/.env.example)
-
-## Etat actuel de la migration
-
-Deja migre :
-- creation de mission via API
-- snapshots de mission dans SQLite
-- page mission Next.js
-- choix de chemin humain
-- ETA et heures d'arrivee
-- incidents et retours depot
-- solve IA
-- page resultats
-- page debrief
-- tests backend de base
-
-Encore legacy :
-- interface Streamlit complete dans [pages](/home/bekkari/Documents/Graphes/Noel/pages)
-- une partie du moteur historique encore appelee par les scripts Python existants
-
-## Notes
-
-- Le backend garde les artefacts lourds en fichiers, mais synchronise maintenant les snapshots de mission dans SQLite.
-- Base SQLite par defaut : `cache/api_missions/operation_noel.db`
-- `Streamlit` coexiste encore, mais le flux principal de migration est maintenant `FastAPI + Next.js`.
+---
+*Développé avec ❤️ pour aider le Père Noël à livrer ses colis à l'heure.*

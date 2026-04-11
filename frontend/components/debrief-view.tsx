@@ -71,8 +71,51 @@ export function DebriefView({ missionId }: { missionId: string }) {
             >
               {leaderboardMutation.isPending ? "Enregistrement..." : "Enregistrer mon score"}
             </button>
+            <button 
+              className="secondary-button" 
+              style={{ background: "#fff", border: "1px solid var(--border)" }}
+              onClick={() => window.print()}
+            >
+              📜 Imprimer mon Certificat
+            </button>
           </div>
         </section>
+
+        {/* --- Hidden Certificate for Print --- */}
+        <div className="certificate-only">
+          <div className="certificate-header">📜 CERTIFICAT D&apos;EXCELLENCE LOGISTIQUE</div>
+          <p>Le Pôle Nord est fier de décerner ce titre à :</p>
+          <h2 style={{ fontSize: "48px", margin: "20px 0" }}>ELITE DELIVERY AGENT</h2>
+          <div className="certificate-seal">🎅</div>
+          <p>Pour avoir accompli la mission dans la zone :</p>
+          <h3>{debrief.mission.zone}</h3>
+          
+          <div className="certificate-stats">
+            <div>
+              <strong>Score Final</strong>
+              <div style={{ fontSize: "32px" }}>{debrief.score.value}/100</div>
+            </div>
+            <div>
+              <strong>Rang</strong>
+              <div style={{ fontSize: "32px" }}>{debrief.score.rank}</div>
+            </div>
+            <div>
+              <strong>CO2 Économisé</strong>
+              <div>{debrief.benchmark.savings.co2_saved_kg} kg</div>
+            </div>
+            <div>
+              <strong>Gain de temps</strong>
+              <div>{debrief.benchmark.savings.time_saved_pct}%</div>
+            </div>
+          </div>
+          
+          <p style={{ marginTop: "60px", fontStyle: "italic" }}>
+            &quot;Par les pouvoirs conférés par Saint Nicolas, l&apos;optimisation est désormais votre seconde nature.&quot;
+          </p>
+          <div style={{ marginTop: "40px", borderTop: "1px solid #000", width: "200px", margin: "40px auto 0" }}>
+            Signature de Santa
+          </div>
+        </div>
 
         <section className="grid-2">
           <div className="chart-container">
