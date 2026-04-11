@@ -76,7 +76,14 @@ def _compute_matrices_local(G, node_ids: list[int]) -> tuple[np.ndarray, np.ndar
     return durations, distances
 
 
-def generate_new_zone(location_name, num_clients=30):
+def generate_new_zone(
+    location_name,
+    num_clients=30,
+    data_path=DATA_PATH,
+    graph_path=GRAPH_PATH,
+    time_matrix_path=TIME_MATRIX,
+    dist_matrix_path=DIST_MATRIX,
+):
     """
     Télécharge une nouvelle zone et génère des points de livraison.
 
@@ -90,7 +97,8 @@ def generate_new_zone(location_name, num_clients=30):
     try:
         G = ox.graph_from_place(location_name, network_type="drive")
         G = _prepare_graph(G, int(num_clients) + 1)
-        ox.save_graphml(G, GRAPH_PATH)
+        os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+        ox.save_graphml(G, graph_path)
         print(f"✅ Graphe de '{location_name}' téléchargé.")
     except Exception as e:
         msg = str(e)
@@ -104,7 +112,8 @@ def generate_new_zone(location_name, num_clients=30):
             print(f"↪️ Fallback: graph_from_point({center}, dist={dist_m}m)")
             G = ox.graph_from_point(center, dist=dist_m, network_type="drive")
             G = _prepare_graph(G, int(num_clients) + 1)
-            ox.save_graphml(G, GRAPH_PATH)
+            os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+            ox.save_graphml(G, graph_path)
             print(f"✅ Graphe (fallback point) téléchargé pour '{location_name}'.")
         except Exception as e2:
             msg2 = str(e2)
@@ -154,16 +163,17 @@ def generate_new_zone(location_name, num_clients=30):
         })
     
     df = pd.DataFrame(data)
-    df.to_csv(DATA_PATH, index=False)
-    print(f"✅ {num_clients} clients générés dans {DATA_PATH}")
+    os.makedirs(os.path.dirname(data_path), exist_ok=True)
+    df.to_csv(data_path, index=False)
+    print(f"✅ {num_clients} clients générés dans {data_path}")
 
     # 3. Calcul de la Matrice (Temps/Distance)
     # OSRM public peut timeouter sur de grosses matrices -> fallback local.
     max_osrm_points = int(os.getenv("OSRM_MAX_POINTS", "40"))
     if len(df) > max_osrm_points:
         durations, distances = _compute_matrices_local(G, node_ids)
-        np.save(TIME_MATRIX, durations)
-        np.save(DIST_MATRIX, distances)
+        np.save(time_matrix_path, durations)
+        np.save(dist_matrix_path, distances)
         print(f"✅ Matrices locales de temps/distance ({len(df)}x{len(df)}) générées.")
         return True, (
             f"OSRM sauté (>{max_osrm_points} points). "
@@ -188,8 +198,8 @@ def generate_new_zone(location_name, num_clients=30):
                 if "durations" not in res:
                     raise RuntimeError("OSRM: champ 'durations' manquant")
 
-                np.save(TIME_MATRIX, np.array(res["durations"]))
-                np.save(DIST_MATRIX, np.array(res.get("distances", [])))
+                np.save(time_matrix_path, np.array(res["durations"]))
+                np.save(dist_matrix_path, np.array(res.get("distances", [])))
                 print(f"✅ Matrices OSRM de temps/distance ({len(df)}x{len(df)}) générées.")
                 return True, ""
             except Exception as e:
@@ -205,8 +215,8 @@ def generate_new_zone(location_name, num_clients=30):
         try:
             print("↪️ Fallback local: calcul des matrices via NetworkX…")
             durations, distances = _compute_matrices_local(G, node_ids)
-            np.save(TIME_MATRIX, durations)
-            np.save(DIST_MATRIX, distances)
+            np.save(time_matrix_path, durations)
+            np.save(dist_matrix_path, distances)
             print(f"✅ Matrices locales de temps/distance ({len(df)}x{len(df)}) générées.")
             return True, (
                 "OSRM indisponible (timeout/rate-limit). "

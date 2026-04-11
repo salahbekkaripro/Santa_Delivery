@@ -112,27 +112,38 @@ def get_detailed_geometry(G, route_nodes):
         return final_path
     except: return [[G.nodes[n]['y'], G.nodes[n]['x']] for n in route_nodes]
 
-def generate_map(custom_colors=None, line_weight=4, show_names=False, departure_time=DEFAULT_DEPARTURE_TIME):
+def generate_map(
+    custom_colors=None,
+    line_weight=4,
+    show_names=False,
+    departure_time=DEFAULT_DEPARTURE_TIME,
+    data_path=DATA_PATH,
+    results_path=RESULTS_PATH,
+    output_html=OUTPUT_HTML,
+    graph_path=GRAPH_PATH,
+    weather_file=WEATHER_FILE,
+    benchmark_file=BENCHMARK_FILE,
+):
     # 1. Chargement
     try:
-        df = pd.read_csv(DATA_PATH)
+        df = pd.read_csv(data_path)
         points_data = df.set_index('id').to_dict('index')
-        with open(RESULTS_PATH, 'r') as f: results = json.load(f)
+        with open(results_path, 'r') as f: results = json.load(f)
         
         weather_factor, weather_desc = 1.0, "Normale"
-        if os.path.exists(WEATHER_FILE):
-            with open(WEATHER_FILE, 'r', encoding='utf-8') as f:
+        if os.path.exists(weather_file):
+            with open(weather_file, 'r', encoding='utf-8') as f:
                 w = json.load(f); weather_factor, weather_desc = w.get('factor', 1.0), w.get('desc', 'Normale')
         
         benchmark = None
-        if os.path.exists(BENCHMARK_FILE):
-            with open(BENCHMARK_FILE, 'r') as f: benchmark = json.load(f)
+        if os.path.exists(benchmark_file):
+            with open(benchmark_file, 'r') as f: benchmark = json.load(f)
     except Exception as e:
         print(f"Erreur chargement données: {e}")
         return
 
     # 2. Graphe
-    G = ox.load_graphml(GRAPH_PATH)
+    G = ox.load_graphml(graph_path)
 
     # 3. Calcul du centre de la carte
     depot = df[df['id'] == 0].iloc[0]
@@ -282,7 +293,8 @@ def generate_map(custom_colors=None, line_weight=4, show_names=False, departure_
                 popup=popup_text
             ).add_to(m)
 
-    m.save(OUTPUT_HTML)
+    os.makedirs(os.path.dirname(output_html), exist_ok=True)
+    m.save(output_html)
     print(f"✅ Carte générée (Épaisseur: {line_weight}, Noms: {show_names})")
 
 if __name__ == "__main__":

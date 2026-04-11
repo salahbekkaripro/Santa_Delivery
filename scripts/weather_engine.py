@@ -7,7 +7,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
 WEATHER_FILE = os.path.join(BASE_DIR, 'core_data', 'weather_status.json')
 
-def get_simulated_weather():
+def get_simulated_weather(weather_file=WEATHER_FILE):
     """Simule la météo de Paris de manière réaliste."""
     scenarios = [
         {"condition": "Clear", "desc": "Ciel dégagé", "factor": 1.0},
@@ -24,7 +24,8 @@ def get_simulated_weather():
     current = random.choices(scenarios, weights=weights, k=1)[0]
     
     # Sauvegarde
-    with open(WEATHER_FILE, 'w', encoding='utf-8') as f:
+    os.makedirs(os.path.dirname(weather_file), exist_ok=True)
+    with open(weather_file, 'w', encoding='utf-8') as f:
         json.dump(current, f, indent=4, ensure_ascii=False)
     
     print(f"🌡️ Météo simulée : {current['desc']} (Impact : x{current['factor']})")

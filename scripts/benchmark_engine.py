@@ -12,13 +12,22 @@ DIST_MATRIX = os.path.join(BASE_DIR, 'core_data', 'matrix_5eme.npy')
 OPTIMIZED_JSON = os.path.join(BASE_DIR, 'production_output', 'resultats_finaux.json')
 BENCHMARK_FILE = os.path.join(BASE_DIR, 'core_data', 'benchmark_results.json')
 
-def calculate_benchmark(num_vehicles=3, budget_initial=0, budget_spent=0):
+def calculate_benchmark(
+    num_vehicles=3,
+    budget_initial=0,
+    budget_spent=0,
+    data_path=DATA_PATH,
+    time_matrix_path=TIME_MATRIX,
+    dist_matrix_path=DIST_MATRIX,
+    optimized_json_path=OPTIMIZED_JSON,
+    benchmark_file=BENCHMARK_FILE,
+):
     # 1. Chargement
-    df = pd.read_csv(DATA_PATH)
-    time_matrix = np.load(TIME_MATRIX)
-    dist_matrix = np.load(DIST_MATRIX)
+    df = pd.read_csv(data_path)
+    time_matrix = np.load(time_matrix_path)
+    dist_matrix = np.load(dist_matrix_path)
     
-    with open(OPTIMIZED_JSON, 'r') as f:
+    with open(optimized_json_path, 'r') as f:
         opt_data = json.load(f)
     
     num_points = len(df)
@@ -89,10 +98,12 @@ def calculate_benchmark(num_vehicles=3, budget_initial=0, budget_spent=0):
         }
     }
     
-    with open(BENCHMARK_FILE, 'w') as f:
+    os.makedirs(os.path.dirname(benchmark_file), exist_ok=True)
+    with open(benchmark_file, 'w') as f:
         json.dump(benchmark, f, indent=4)
     
     print(f"📊 Benchmark terminé. Gain : {benchmark['savings']['score']}%")
+    return benchmark
 
 if __name__ == "__main__":
     calculate_benchmark()

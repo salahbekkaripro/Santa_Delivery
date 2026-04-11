@@ -9,3 +9,6 @@ scipy
 shapely
 plotly
 streamlit-folium
+fastapi
+uvicorn
+httpx

@@ -22,12 +22,22 @@ class NpEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray): return obj.tolist()
         return super(NpEncoder, self).default(obj)
 
-def solve_vrp(num_vehicles=3, vehicle_capacity=200, speed_multiplier=1.0, forced_weather=None, incident_matrix_path=None):
+def solve_vrp(
+    num_vehicles=3,
+    vehicle_capacity=200,
+    speed_multiplier=1.0,
+    forced_weather=None,
+    incident_matrix_path=None,
+    data_path=DATA_PATH,
+    time_matrix_path=TIME_MATRIX_PATH,
+    weather_file=WEATHER_FILE,
+    output_path=OUTPUT_PATH,
+):
     # 1. Chargement des données
-    if not os.path.exists(DATA_PATH):
-        print(f"Erreur : {DATA_PATH} introuvable.")
-        return
-    df = pd.read_csv(DATA_PATH)
+    if not os.path.exists(data_path):
+        print(f"Erreur : {data_path} introuvable.")
+        return None
+    df = pd.read_csv(data_path)
     num_locations = len(df)
     
     # 2. Chargement Météo
@@ -37,14 +47,14 @@ def solve_vrp(num_vehicles=3, vehicle_capacity=200, speed_multiplier=1.0, forced
     if forced_weather:
         weather_factor = forced_weather.get('factor', 1.0)
         weather_desc = forced_weather.get('desc', 'Forcée')
-    elif os.path.exists(WEATHER_FILE):
-        with open(WEATHER_FILE, 'r', encoding='utf-8') as f:
+    elif os.path.exists(weather_file):
+        with open(weather_file, 'r', encoding='utf-8') as f:
             w_data = json.load(f)
             weather_factor = w_data.get('factor', 1.0)
             weather_desc = w_data.get('desc', 'Inconnue')
     
     # 3. Chargement et Ajustement Matrice de temps
-    matrix_path = incident_matrix_path if (incident_matrix_path and os.path.exists(incident_matrix_path)) else TIME_MATRIX_PATH
+    matrix_path = incident_matrix_path if (incident_matrix_path and os.path.exists(incident_matrix_path)) else time_matrix_path
     if os.path.exists(matrix_path):
         # La vitesse réduit le temps : matrix / speed
         # La météo augmente le temps : matrix * factor
@@ -54,7 +64,7 @@ def solve_vrp(num_vehicles=3, vehicle_capacity=200, speed_multiplier=1.0, forced
         matrix = np.load(matrix_path) * total_factor
     else:
         print("Erreur : Matrice OSRM manquante.")
-        return
+        return None
 
     # 4. Configuration Flotte
     print(f"Configuration : {num_vehicles} traîneaux | Capacité : {vehicle_capacity}kg")
@@ -95,11 +105,12 @@ def solve_vrp(num_vehicles=3, vehicle_capacity=200, speed_multiplier=1.0, forced
     solution = routing.SolveWithParameters(search_parameters)
 
     if solution:
-        save_solution(df, manager, routing, solution, num_vehicles, weather_factor, weather_desc)
+        return save_solution(df, manager, routing, solution, num_vehicles, weather_factor, weather_desc, output_path=output_path)
     else:
         print("Aucune solution trouvée.")
+        return None
 
-def save_solution(df, manager, routing, solution, num_vehicles, w_factor, w_desc):
+def save_solution(df, manager, routing, solution, num_vehicles, w_factor, w_desc, output_path=OUTPUT_PATH):
     total_time = 0
     total_weight = 0
     all_tours = []
@@ -139,9 +150,11 @@ def save_solution(df, manager, routing, solution, num_vehicles, w_factor, w_desc
         "dropped_points": dropped_ids
     }
     
-    with open(OUTPUT_PATH, 'w') as f:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'w') as f:
         json.dump(result, f, indent=4, cls=NpEncoder)
-    print(f"Optimisation terminée. Résultats dans {OUTPUT_PATH}")
+    print(f"Optimisation terminée. Résultats dans {output_path}")
+    return result
 
 if __name__ == "__main__":
     solve_vrp()
