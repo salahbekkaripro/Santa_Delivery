@@ -22,6 +22,9 @@ type Props = {
   humanStopMetaByClient?: Record<number, { sleigh_id: number; stop_order: number; arrival_eta_s: number; arrival_clock: string }>;
   onClientSelect?: (clientId: number) => void;
   onMapClick?: (lat: number, lon: number) => void;
+  adjacentOptions?: AdjacentNode[];
+  futureOptions?: AdjacentNode[];
+  onAdjacentSelect?: (node: AdjacentNode) => void;
   showHuman?: boolean;
   showAi?: boolean;
   selectedClientId?: number | null;
@@ -43,6 +46,9 @@ export default function MapboxSurfaceClient({
   humanStopMetaByClient = {},
   onClientSelect,
   onMapClick,
+  adjacentOptions = [],
+  futureOptions = [],
+  onAdjacentSelect,
   showHuman = true,
   showAi = true,
   selectedClientId
@@ -50,7 +56,14 @@ export default function MapboxSurfaceClient({
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const markers = useRef<Record<string, mapboxgl.Marker>>({});
+  const adjacentMarkers = useRef<mapboxgl.Marker[]>([]);
   
+  // Utiliser une ref pour onMapClick pour éviter le stale closure
+  const onMapClickRef = useRef(onMapClick);
+  useEffect(() => {
+    onMapClickRef.current = onMapClick;
+  }, [onMapClick]);
+
   const [isLoaded, setIsLoaded] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -133,17 +146,67 @@ export default function MapboxSurfaceClient({
       m.addSource('ai-routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('previews', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('incidents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addSource('adjacents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addSource('future-adjacents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
       m.addLayer({ id: 'human-layer', type: 'line', source: 'human-routes', paint: { 'line-color': '#c1452f', 'line-width': 4, 'line-dasharray': [2, 2] } });
       m.addLayer({ id: 'ai-layer', type: 'line', source: 'ai-routes', paint: { 'line-color': '#143c5a', 'line-width': 5, 'line-opacity': 0.8 } });
       m.addLayer({ id: 'preview-layer', type: 'line', source: 'previews', paint: { 'line-color': '#d97706', 'line-width': 6 } });
       m.addLayer({ id: 'incident-layer', type: 'line', source: 'incidents', paint: { 'line-color': '#991b1b', 'line-width': 5, 'line-dasharray': [1, 2] } });
+      
+      // Couche Niveau 2 (Futur) - Opacité 0.2
+      m.addLayer({ id: 'future-adjacent-layer', type: 'line', source: 'future-adjacents', paint: { 'line-color': '#3b82f6', 'line-width': 2, 'line-dasharray': [2, 2], 'line-opacity': 0.2 } });
+      m.addLayer({
+        id: 'future-adjacent-arrows',
+        type: 'symbol',
+        source: 'future-adjacents',
+        layout: {
+          'symbol-placement': 'line',
+          'symbol-spacing': 100,
+          'text-field': '▶',
+          'text-size': 8,
+          'text-keep-upright': false,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true
+        },
+        paint: {
+          'text-color': '#3b82f6',
+          'text-opacity': 0.2
+        }
+      });
+
+      // Couche Niveau 1 (Immédiat) - Opacité 0.6
+      m.addLayer({ id: 'adjacent-layer', type: 'line', source: 'adjacents', paint: { 'line-color': '#3b82f6', 'line-width': 4, 'line-dasharray': [2, 2], 'line-opacity': 0.6 } });
+      
+      // Couche de flèches pour le sens de circulation
+      m.addLayer({
+        id: 'adjacent-arrows',
+        type: 'symbol',
+        source: 'adjacents',
+        layout: {
+          'symbol-placement': 'line',
+          'symbol-spacing': 50,
+          'text-field': '▶',
+          'text-size': 12,
+          'text-keep-upright': false,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true
+        },
+        paint: {
+          'text-color': '#3b82f6',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 1
+        }
+      });
 
       m.on('click', (e) => {
-        // En Mapbox, on vérifie si on a cliqué sur un élément des layers, sinon on déclenche le clic libre
-        const features = m.queryRenderedFeatures(e.point);
+        // Pour le tracé libre, on veut capter le clic sur la map.
+        // On n'ignore le clic QUE si l'utilisateur a cliqué sur une de nos couches (routes, incidents, adjacents)
+        const layers = ['human-layer', 'ai-layer', 'preview-layer', 'incident-layer', 'adjacent-layer', 'adjacent-arrows'];
+        const features = m.queryRenderedFeatures(e.point, { layers });
+        
         if (features.length === 0) {
-          onMapClick?.(e.lngLat.lat, e.lngLat.lng);
+          onMapClickRef.current?.(e.lngLat.lat, e.lngLat.lng);
         }
       });
     });
@@ -179,6 +242,30 @@ export default function MapboxSurfaceClient({
     updateSource('ai-routes', aiSegments, showAi);
     updateSource('incidents', incidentSegments, true);
     
+    const adjSource = map.current.getSource('adjacents') as mapboxgl.GeoJSONSource;
+    if (adjSource) {
+      adjSource.setData({
+        type: 'FeatureCollection',
+        features: adjacentOptions.map(opt => ({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: toMapbox(opt.geometry) },
+          properties: {}
+        }))
+      });
+    }
+
+    const futureSource = map.current.getSource('future-adjacents') as mapboxgl.GeoJSONSource;
+    if (futureSource) {
+      futureSource.setData({
+        type: 'FeatureCollection',
+        features: futureOptions.map(opt => ({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: toMapbox(opt.geometry) },
+          properties: {}
+        }))
+      });
+    }
+
     const previewSource = map.current.getSource('previews') as mapboxgl.GeoJSONSource;
     if (previewSource) {
       previewSource.setData({
@@ -230,7 +317,33 @@ export default function MapboxSurfaceClient({
         .setLngLat([c.lon, c.lat])
         .addTo(map.current!);
     });
-  }, [clients, depot, assigned, selectedClientId]);
+
+    // Adjacent Navigation Buttons
+    adjacentMarkers.current.forEach(m => m.remove());
+    adjacentMarkers.current = [];
+
+    adjacentOptions.forEach(opt => {
+      const el = document.createElement('div');
+      el.style.width = '12px';
+      el.style.height = '12px';
+      el.style.borderRadius = '50%';
+      el.style.backgroundColor = '#3b82f6';
+      el.style.border = '2px solid white';
+      el.style.boxShadow = '0 0 8px #3b82f6';
+      el.style.cursor = 'pointer';
+      el.title = opt.label;
+      
+      el.onclick = (e) => {
+        e.stopPropagation();
+        onAdjacentSelect?.(opt);
+      };
+
+      const marker = new mapboxgl.Marker(el)
+        .setLngLat([opt.lon, opt.lat])
+        .addTo(map.current!);
+      adjacentMarkers.current.push(marker);
+    });
+  }, [clients, depot, assigned, selectedClientId, adjacentOptions]);
 
   // Animation Interval
   useEffect(() => {

@@ -132,6 +132,14 @@ def get_nearest_node(mission_id: str, lat: float, lon: float) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/missions/{mission_id}/adjacent-nodes")
+def get_adjacent_nodes(mission_id: str, node_id: int, speed_multiplier: float = 1.0) -> dict:
+    try:
+        return services.get_adjacent_nodes(mission_id, node_id, speed_multiplier)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/missions/{mission_id}/solve", response_model=SolveMissionResponse)
 def solve_mission(mission_id: str, payload: SolveMissionRequest) -> dict:
     try:

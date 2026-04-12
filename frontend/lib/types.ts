@@ -172,3 +172,13 @@ export type LeaderboardEntry = {
   player_name: string;
   created_at: string;
 };
+
+export type AdjacentNode = {
+  node_id: number;
+  lat: number;
+  lon: number;
+  geometry: [number, number][];
+  dist_m: number;
+  time_s: number;
+  label: string;
+};

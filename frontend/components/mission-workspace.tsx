@@ -4,9 +4,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { clearSleigh, getMission, getRouteOptions, resetHumanState, solveMission, suggestNext, undoLastSegment, validateSegment } from "@/lib/api";
+import { clearSleigh, getAdjacentNodes, getMission, getNearestNode, getRouteOptions, resetHumanState, solveMission, suggestNext, undoLastSegment, validateSegment } from "@/lib/api";
 import { MapSurface } from "@/components/map-surface";
-import type { HumanState, RouteOption, RouteSegment } from "@/lib/types";
+import type { AdjacentNode, HumanState, RouteOption, RouteSegment } from "@/lib/types";
+
 
 function defaultHumanState(numVehicles = 3): HumanState {
   return {
@@ -58,6 +59,32 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   });
   const missionData = missionQuery.data;
 
+  // Calcul du nœud actuel pour le traineau actif
+  const currentNodeId = useMemo(() => {
+    if (!missionData) return 0;
+    const routes = missionData.human_state?.routes_by_sleigh?.[String(activeSleigh)] ?? [];
+    return routes.length > 0 ? routes[routes.length - 1] : 0;
+  }, [missionData, activeSleigh]);
+
+  const adjacentQuery = useQuery({
+    queryKey: ["adjacents", missionId, currentNodeId, speedMultiplier],
+    queryFn: () => getAdjacentNodes(missionId, currentNodeId, speedMultiplier),
+    enabled: isFreeRouting && !!missionData
+  });
+
+  // Prefetching des prochains coups pour zéro latence
+  useEffect(() => {
+    if (isFreeRouting && adjacentQuery.data?.adjacents) {
+      adjacentQuery.data.adjacents.forEach((adj) => {
+        queryClient.prefetchQuery({
+          queryKey: ["adjacents", missionId, adj.node_id, speedMultiplier],
+          queryFn: () => getAdjacentNodes(missionId, adj.node_id, speedMultiplier),
+          staleTime: 60000, // Garder en cache 1 min
+        });
+      });
+    }
+  }, [isFreeRouting, adjacentQuery.data, missionId, speedMultiplier, queryClient]);
+
   useEffect(() => {
     if (!missionData) {
       return;
@@ -101,6 +128,7 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
       setRouteOptions([]);
       setSelectedOptionIndex(0);
       queryClient.invalidateQueries({ queryKey: ["mission", missionId] });
+      queryClient.invalidateQueries({ queryKey: ["adjacents"] });
     },
     onError: (error: Error) => setRouteError(error.message)
   });
@@ -133,6 +161,7 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
       setRouteError(null);
       setSelectedClientId(null);
       setRouteOptions([]);
+      queryClient.invalidateQueries({ queryKey: ["adjacents"] });
     },
     onError: (error: Error) => setRouteError(error.message)
   });
@@ -150,6 +179,7 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
       setRouteError(null);
       setSelectedClientId(null);
       setRouteOptions([]);
+      queryClient.invalidateQueries({ queryKey: ["adjacents"] });
     },
     onError: (error: Error) => setRouteError(error.message)
   });
@@ -168,6 +198,7 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
       setRouteOptions([]);
       setSuggestions([]);
       setActiveSleigh(0);
+      queryClient.invalidateQueries({ queryKey: ["adjacents"] });
     },
     onError: (error: Error) => setRouteError(error.message)
   });
@@ -191,6 +222,18 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   function handleMapClick(lat: number, lon: number) {
     if (!isFreeRouting) return;
     nearestNodeMutation.mutate({ lat, lon });
+  }
+
+  function handleAdjacentNodeSelect(node: AdjacentNode) {
+    setSelectedClientId(node.node_id);
+    validateMutation.mutate({
+      route_nodes: [currentNodeId, node.node_id],
+      geometry: node.geometry,
+      dist_m: node.dist_m,
+      base_time_s: node.time_s,
+      time_s: node.time_s,
+      label: node.label
+    });
   }
 
   function handleClientSelect(clientId: number) {
@@ -493,6 +536,10 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
               assignedClientIds={humanState.assigned_clients}
               humanStopMetaByClient={stopMetaByClient}
               onClientSelect={handleClientSelect}
+              onMapClick={handleMapClick}
+              adjacentOptions={isFreeRouting ? adjacentQuery.data?.adjacents : []}
+              futureOptions={isFreeRouting ? adjacentQuery.data?.future_adjacents : []}
+              onAdjacentSelect={handleAdjacentNodeSelect}
               selectedClientId={selectedClientId}
               showAi={false}
             />

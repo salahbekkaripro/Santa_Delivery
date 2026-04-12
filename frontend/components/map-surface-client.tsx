@@ -27,6 +27,9 @@ type Props = {
   humanStopMetaByClient?: Record<number, { sleigh_id: number; stop_order: number; arrival_eta_s: number; arrival_clock: string }>;
   onClientSelect?: (clientId: number) => void;
   onMapClick?: (lat: number, lon: number) => void;
+  adjacentOptions?: AdjacentNode[];
+  futureOptions?: AdjacentNode[];
+  onAdjacentSelect?: (node: AdjacentNode) => void;
   showHuman?: boolean;
   showAi?: boolean;
   selectedClientId?: number | null;
@@ -108,6 +111,9 @@ export default function MapSurfaceClient({
   humanStopMetaByClient = {},
   onClientSelect,
   onMapClick,
+  adjacentOptions = [],
+  futureOptions = [],
+  onAdjacentSelect,
   showHuman = true,
   showAi = true,
   selectedClientId
@@ -245,6 +251,43 @@ export default function MapSurfaceClient({
             </Polyline>
           );
         })}
+
+        {/* --- ADJACENT OPTIONS (Step-by-Step) --- */}
+        {/* Future Options (Level 2) - Faded */}
+        {futureOptions.map((opt) => (
+          <Polyline 
+            key={`future-${opt.node_id}`}
+            positions={opt.geometry} 
+            pathOptions={{ color: "#3b82f6", weight: 2, opacity: 0.15 }} 
+            className="flowing-line"
+            pane="human"
+          />
+        ))}
+
+        {/* Immediate Options (Level 1) - Strong */}
+        {adjacentOptions.map((opt) => (
+          <div key={`adj-group-${opt.node_id}`}>
+            <Polyline 
+              positions={opt.geometry} 
+              pathOptions={{ color: "#3b82f6", weight: 4, opacity: 0.6 }} 
+              className="flowing-line"
+              pane="human"
+            />
+            <CircleMarker
+              center={[opt.lat, opt.lon]}
+              radius={6}
+              pathOptions={{ fillOpacity: 1, color: "white", fillColor: "#3b82f6", weight: 2 }}
+              eventHandlers={{
+                click: (e) => {
+                  L.DomEvent.stopPropagation(e);
+                  onAdjacentSelect?.(opt);
+                }
+              }}
+            >
+              <Tooltip direction="top">{opt.label}</Tooltip>
+            </CircleMarker>
+          </div>
+        ))}
 
         {incidentSegments.map((segment, index) => (
           <Polyline

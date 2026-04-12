@@ -143,3 +143,9 @@ export function saveLeaderboard(missionId: string, payload: { player_name: strin
 export function getLeaderboard(limit: number = 20) {
   return apiFetch<{ entries: LeaderboardEntry[] }>(`/api/leaderboard?limit=${limit}`);
 }
+
+export function getAdjacentNodes(missionId: string, nodeId: number, speedMultiplier: number) {
+  return apiFetch<{ adjacents: AdjacentNode[]; future_adjacents: AdjacentNode[] }>(
+    `/api/missions/${missionId}/adjacent-nodes?node_id=${nodeId}&speed_multiplier=${speedMultiplier}`
+  );
+}

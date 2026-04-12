@@ -291,6 +291,18 @@ select {
   min-height: 300px;
 }
 
+/* --- Flowing Line Animation --- */
+@keyframes flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.flowing-line {
+  animation: flow 1s linear infinite;
+  stroke-dasharray: 10, 10;
+}
+
 /* --- Styles Certificat (Print only) --- */
 @media screen {
   .certificate-only {

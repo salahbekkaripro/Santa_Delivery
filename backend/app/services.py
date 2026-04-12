@@ -571,6 +571,66 @@ def get_nearest_node(mission_id: str, lat: float, lon: float) -> dict:
     }
 
 
+def get_adjacent_nodes(mission_id: str, node_id: int, speed_multiplier: float) -> dict:
+    paths, mission, _ = load_mission_bundle(mission_id)
+    graph = load_graph(paths.graph_file)
+    weather = load_weather(paths.weather_file, mission.get("weather_key"))
+    time_factor = float(weather.get("factor", 1.0)) / speed_multiplier
+
+    if node_id not in graph:
+        if node_id == 0:
+            df = read_points(paths.data_file)
+            import osmnx as ox
+            depot_row = df[df["id"] == 0].iloc[0]
+            node_id = ox.nearest_nodes(graph, depot_row["lon"], depot_row["lat"])
+        else:
+            raise ValueError(f"Nœud {node_id} introuvable")
+
+    def format_edge(u, v):
+        edge_data = graph.get_edge_data(u, v)[0]
+        from_node = graph.nodes[u]
+        to_node = graph.nodes[v]
+        geometry = edge_data.get("geometry")
+        if geometry:
+            coords = [[float(y), float(x)] for x, y in list(geometry.coords)]
+        else:
+            coords = [
+                [float(from_node["y"]), float(from_node["x"])],
+                [float(to_node["y"]), float(to_node["x"])]
+            ]
+        dist_m = float(edge_data.get("length", 0.0))
+        time_s = float(edge_data.get("travel_time", 0.0)) * time_factor
+        return {
+            "node_id": int(v),
+            "lat": float(to_node["y"]),
+            "lon": float(to_node["x"]),
+            "geometry": coords,
+            "dist_m": dist_m,
+            "time_s": time_s,
+            "label": f"Rue {edge_data.get('name', 'sans nom')}"
+        }
+
+    adjacents = []
+    future_adjacents = []
+    seen_edges = set()
+
+    for neighbor in graph.successors(node_id):
+        adjacents.append(format_edge(node_id, neighbor))
+        seen_edges.add((node_id, neighbor))
+        
+        # Niveau 2 : les voisins du voisin
+        for next_neighbor in graph.successors(neighbor):
+            # Éviter de revenir en arrière au point de départ
+            if next_neighbor == node_id:
+                continue
+            if (neighbor, next_neighbor) in seen_edges:
+                continue
+            future_adjacents.append(format_edge(neighbor, next_neighbor))
+            seen_edges.add((neighbor, next_neighbor))
+        
+    return {"adjacents": adjacents, "future_adjacents": future_adjacents}
+
+
 def _build_incident_matrix(paths: MissionPaths, mission: dict) -> str | None:
     if not mission.get("random_incidents") or not paths.time_matrix_file.exists():
         return None
