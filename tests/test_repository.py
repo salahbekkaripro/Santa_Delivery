@@ -58,6 +58,39 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(snapshots[0]["status"], "solved")
         self.assertEqual(snapshots[1]["mission_id"], "mission-a")
 
+    def test_players_are_joined_into_leaderboard_entries(self):
+        repository.upsert_mission(
+            mission_id="mission-42",
+            root_dir="/tmp/mission-42",
+            mission={"zone": "Lille"},
+            status="solved",
+            db_path=self.db_path,
+        )
+        repository.upsert_player(
+            player_id="captain-north",
+            display_name="Capitaine Nord",
+            callsign="POLAR-7",
+            avatar="🦌",
+            db_path=self.db_path,
+        )
+        repository.save_leaderboard_entry(
+            mission_id="mission-42",
+            zone="Lille",
+            score=91.5,
+            rank="S",
+            player_name="Nom local",
+            player_id="captain-north",
+            db_path=self.db_path,
+        )
+
+        entries = repository.list_leaderboard(limit=5, db_path=self.db_path)
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["player_name"], "Capitaine Nord")
+        self.assertEqual(entries[0]["player_id"], "captain-north")
+        self.assertEqual(entries[0]["callsign"], "POLAR-7")
+        self.assertEqual(entries[0]["avatar"], "🦌")
+
 
 if __name__ == "__main__":
     unittest.main()

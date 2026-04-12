@@ -40,7 +40,15 @@ export default function LeaderboardPage() {
               {entries.map((entry: LeaderboardEntry, index: number) => (
                 <tr key={`${entry.mission_id}-${index}`} style={{ borderBottom: "1px solid var(--border)" }}>
                   <td style={{ padding: "12px" }}><strong>{entry.rank}</strong></td>
-                  <td style={{ padding: "12px" }}>{entry.player_name}</td>
+                  <td style={{ padding: "12px" }}>
+                    <div className="leaderboard-player">
+                      <span className="leaderboard-player-avatar">{entry.avatar ?? "🎅"}</span>
+                      <div className="leaderboard-player-copy">
+                        <strong>{entry.player_name}</strong>
+                        <span className="muted">{entry.callsign || "Profil joueur"}</span>
+                      </div>
+                    </div>
+                  </td>
                   <td style={{ padding: "12px" }}>{entry.zone}</td>
                   <td style={{ padding: "12px" }}>{entry.score}/100</td>
                   <td style={{ padding: "12px" }}>{new Date(entry.created_at).toLocaleDateString()}</td>

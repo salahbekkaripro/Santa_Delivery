@@ -4,14 +4,22 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.schemas import (
+    AuthLoginRequest,
+    AuthRegisterRequest,
     ComparisonResponse,
     DebriefResponse,
+    ForgotPasswordRequest,
     HumanRouteOptionsRequest,
     HumanStateMutationRequest,
     HumanStateResponse,
     HumanValidateSegmentRequest,
+    PasswordResetResponse,
     MissionCreateRequest,
     MissionResponse,
+    PlayerResponse,
+    PlayerUpsertRequest,
+    LeaderboardSaveRequest,
+    ResetPasswordRequest,
     SolveMissionRequest,
     SolveMissionResponse,
 )
@@ -50,6 +58,54 @@ def create_mission(payload: MissionCreateRequest) -> dict:
 @app.get("/api/missions")
 def list_missions(limit: int = 50) -> dict:
     return services.list_missions(limit=limit)
+
+
+@app.post("/api/players", response_model=PlayerResponse)
+def upsert_player(payload: PlayerUpsertRequest) -> dict:
+    try:
+        return services.upsert_player(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/players/{player_id}", response_model=PlayerResponse)
+def get_player(player_id: str) -> dict:
+    try:
+        return services.get_player(player_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/register", response_model=PlayerResponse)
+def register_player(payload: AuthRegisterRequest) -> dict:
+    try:
+        return services.register_player(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/login", response_model=PlayerResponse)
+def login_player(payload: AuthLoginRequest) -> dict:
+    try:
+        return services.login_player(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/forgot-password", response_model=PasswordResetResponse)
+def forgot_password(payload: ForgotPasswordRequest) -> dict:
+    try:
+        return services.request_password_reset(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/reset-password", response_model=PlayerResponse)
+def reset_password(payload: ResetPasswordRequest) -> dict:
+    try:
+        return services.reset_password(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/missions/{mission_id}", response_model=MissionResponse)
@@ -167,9 +223,9 @@ def get_debrief(mission_id: str) -> dict:
 
 
 @app.post("/api/missions/{mission_id}/leaderboard")
-def save_leaderboard(mission_id: str, payload: dict) -> dict:
+def save_leaderboard(mission_id: str, payload: LeaderboardSaveRequest) -> dict:
     try:
-        return services.save_leaderboard(mission_id, payload)
+        return services.save_leaderboard(mission_id, payload.model_dump())
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404 if isinstance(exc, FileNotFoundError) else 400, detail=str(exc)) from exc
 

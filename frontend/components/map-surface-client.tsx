@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CircleMarker, MapContainer, Pane, Polyline, Popup, TileLayer, Tooltip, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
-import type { ClientPoint, RouteSegment } from "@/lib/types";
+import type { AdjacentNode, ClientPoint, RouteSegment } from "@/lib/types";
 
 function MapEvents({ onMapClick }: { onMapClick?: (lat: number, lon: number) => void }) {
   useMapEvents({

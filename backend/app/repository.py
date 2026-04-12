@@ -42,10 +42,40 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _has_column(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(row["name"] == column_name for row in rows)
+
+
+def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_sql: str) -> None:
+    if not _has_column(conn, table_name, column_name):
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+
+
 def init_db(db_path: str | Path | None = None) -> None:
     with connect(db_path) as conn:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS players (
+                player_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                email TEXT,
+                password_hash TEXT,
+                callsign TEXT,
+                avatar TEXT,
+                last_login_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (player_id) REFERENCES players(player_id)
+            );
             CREATE TABLE IF NOT EXISTS mission_snapshots (
                 mission_id TEXT PRIMARY KEY,
                 root_dir TEXT NOT NULL,
@@ -68,15 +98,28 @@ def init_db(db_path: str | Path | None = None) -> None:
                 score REAL NOT NULL,
                 rank TEXT NOT NULL,
                 player_name TEXT NOT NULL,
+                player_id TEXT,
                 created_at TEXT NOT NULL,
-                FOREIGN KEY (mission_id) REFERENCES mission_snapshots(mission_id)
+                FOREIGN KEY (mission_id) REFERENCES mission_snapshots(mission_id),
+                FOREIGN KEY (player_id) REFERENCES players(player_id)
             );
             CREATE INDEX IF NOT EXISTS idx_mission_snapshots_updated_at
             ON mission_snapshots(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_leaderboard_score
             ON leaderboard(score DESC);
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_player_id
+            ON leaderboard(player_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_players_email
+            ON players(email);
+            CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_player_id
+            ON password_reset_tokens(player_id);
             """
         )
+        _ensure_column(conn, "players", "email", "email TEXT")
+        _ensure_column(conn, "players", "password_hash", "password_hash TEXT")
+        _ensure_column(conn, "players", "last_login_at", "last_login_at TEXT")
+        _ensure_column(conn, "leaderboard", "player_id", "player_id TEXT")
+        conn.commit()
 
 
 def upsert_mission(
@@ -197,12 +240,179 @@ def list_mission_snapshots(limit: int = 50, db_path: str | Path | None = None) -
     ]
 
 
+def upsert_player(
+    player_id: str,
+    display_name: str,
+    email: str | None = None,
+    password_hash: str | None = None,
+    callsign: str | None = None,
+    avatar: str | None = None,
+    last_login_at: str | None = None,
+    db_path: str | Path | None = None,
+) -> dict:
+    init_db(db_path)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT created_at, email, password_hash, last_login_at FROM players WHERE player_id = ?",
+            (player_id,),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now
+        email = email if email is not None else (existing["email"] if existing else None)
+        password_hash = password_hash if password_hash is not None else (existing["password_hash"] if existing else None)
+        last_login_at = last_login_at if last_login_at is not None else (existing["last_login_at"] if existing else None)
+        conn.execute(
+            """
+            INSERT INTO players (
+                player_id, display_name, email, password_hash, callsign, avatar, last_login_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(player_id) DO UPDATE SET
+                display_name = excluded.display_name,
+                email = excluded.email,
+                password_hash = excluded.password_hash,
+                callsign = excluded.callsign,
+                avatar = excluded.avatar,
+                last_login_at = excluded.last_login_at,
+                updated_at = excluded.updated_at
+            """,
+            (player_id, display_name, email, password_hash, callsign, avatar, last_login_at, created_at, now),
+        )
+        conn.commit()
+    return {
+        "player_id": player_id,
+        "display_name": display_name,
+        "email": email,
+        "callsign": callsign,
+        "avatar": avatar,
+        "last_login_at": last_login_at,
+        "created_at": created_at,
+        "updated_at": now,
+    }
+
+
+def get_player(player_id: str, db_path: str | Path | None = None) -> dict | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT player_id, display_name, email, callsign, avatar, last_login_at, created_at, updated_at
+            FROM players
+            WHERE player_id = ?
+            """,
+            (player_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_player_by_email(email: str, db_path: str | Path | None = None) -> dict | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT player_id, display_name, email, password_hash, callsign, avatar, last_login_at, created_at, updated_at
+            FROM players
+            WHERE email = ?
+            """,
+            (email,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_password_reset_token(
+    player_id: str,
+    token_hash: str,
+    expires_at: str,
+    db_path: str | Path | None = None,
+) -> dict:
+    init_db(db_path)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO password_reset_tokens (player_id, token_hash, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (player_id, token_hash, expires_at, now),
+        )
+        conn.commit()
+    return {
+        "player_id": player_id,
+        "token_hash": token_hash,
+        "expires_at": expires_at,
+        "created_at": now,
+    }
+
+
+def get_password_reset_token(token_hash: str, db_path: str | Path | None = None) -> dict | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT
+                password_reset_tokens.id,
+                password_reset_tokens.player_id,
+                password_reset_tokens.token_hash,
+                password_reset_tokens.expires_at,
+                password_reset_tokens.consumed_at,
+                password_reset_tokens.created_at,
+                players.display_name,
+                players.email,
+                players.callsign,
+                players.avatar,
+                players.created_at AS player_created_at,
+                players.updated_at AS player_updated_at
+            FROM password_reset_tokens
+            JOIN players ON players.player_id = password_reset_tokens.player_id
+            WHERE password_reset_tokens.token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def consume_password_reset_token(token_hash: str, db_path: str | Path | None = None) -> None:
+    init_db(db_path)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE password_reset_tokens
+            SET consumed_at = ?
+            WHERE token_hash = ? AND consumed_at IS NULL
+            """,
+            (now, token_hash),
+        )
+        conn.commit()
+
+
+def update_player_password(
+    player_id: str,
+    password_hash: str,
+    db_path: str | Path | None = None,
+) -> dict | None:
+    init_db(db_path)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE players
+            SET password_hash = ?, updated_at = ?
+            WHERE player_id = ?
+            """,
+            (password_hash, now, player_id),
+        )
+        conn.commit()
+    return get_player(player_id, db_path=db_path)
+
+
 def save_leaderboard_entry(
     mission_id: str,
     zone: str,
     score: float,
     rank: str,
     player_name: str = "Père Noël",
+    player_id: str | None = None,
     db_path: str | Path | None = None,
 ) -> None:
     init_db(db_path)
@@ -210,10 +420,10 @@ def save_leaderboard_entry(
     with connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO leaderboard (mission_id, zone, score, rank, player_name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO leaderboard (mission_id, zone, score, rank, player_name, player_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (mission_id, zone, score, rank, player_name, now),
+            (mission_id, zone, score, rank, player_name, player_id, now),
         )
         conn.commit()
 
@@ -223,9 +433,19 @@ def list_leaderboard(limit: int = 20, db_path: str | Path | None = None) -> list
     with connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT mission_id, zone, score, rank, player_name, created_at
+            SELECT
+                leaderboard.mission_id,
+                leaderboard.zone,
+                leaderboard.score,
+                leaderboard.rank,
+                COALESCE(players.display_name, leaderboard.player_name) AS player_name,
+                leaderboard.player_id,
+                players.callsign,
+                players.avatar,
+                leaderboard.created_at
             FROM leaderboard
-            ORDER BY score DESC, created_at DESC
+            LEFT JOIN players ON players.player_id = leaderboard.player_id
+            ORDER BY leaderboard.score DESC, leaderboard.created_at DESC
             LIMIT ?
             """,
             (int(limit),),

@@ -22,6 +22,19 @@ class NpEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray): return obj.tolist()
         return super(NpEncoder, self).default(obj)
 
+
+FIRST_SOLUTION_STRATEGIES = {
+    "path_cheapest_arc": routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
+    "parallel_cheapest_insertion": routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
+    "savings": routing_enums_pb2.FirstSolutionStrategy.SAVINGS,
+}
+
+LOCAL_SEARCH_METAHEURISTICS = {
+    "guided_local_search": routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH,
+    "simulated_annealing": routing_enums_pb2.LocalSearchMetaheuristic.SIMULATED_ANNEALING,
+    "tabu_search": routing_enums_pb2.LocalSearchMetaheuristic.TABU_SEARCH,
+}
+
 def solve_vrp(
     num_vehicles=3,
     vehicle_capacity=200,
@@ -34,6 +47,13 @@ def solve_vrp(
     weather_file=WEATHER_FILE,
     output_path=OUTPUT_PATH,
     optimization_target="time",
+    solver_time_limit_s=20,
+    first_solution_strategy="path_cheapest_arc",
+    local_search_metaheuristic="guided_local_search",
+    time_slack_s=3600,
+    max_route_time_s=14400,
+    drop_penalty=1000000,
+    global_span_cost=0,
 ):
     # 1. Chargement des données
     if not os.path.exists(data_path):
@@ -84,7 +104,10 @@ def solve_vrp(
             optimization_target = "time"
 
     # 4. Configuration Flotte
-    print(f"Configuration : {num_vehicles} traîneaux | Capacité : {vehicle_capacity}kg | Cible : {optimization_target}")
+    print(
+        f"Configuration : {num_vehicles} traîneaux | Capacité : {vehicle_capacity}kg | "
+        f"Cible : {optimization_target} | Stratégie : {first_solution_strategy} + {local_search_metaheuristic}"
+    )
 
     # 5. OR-Tools
     manager = pywrapcp.RoutingIndexManager(num_locations, num_vehicles, 0)
@@ -105,8 +128,10 @@ def solve_vrp(
         routing.SetArcCostEvaluatorOfAllVehicles(transit_time_callback_index)
 
     # Dimension TEMPS (Max 4h par traîneau par défaut)
-    routing.AddDimension(transit_time_callback_index, 3600, 14400, False, 'Time')
+    routing.AddDimension(transit_time_callback_index, int(time_slack_s), int(max_route_time_s), False, 'Time')
     time_dimension = routing.GetDimensionOrDie('Time')
+    if global_span_cost and int(global_span_cost) > 0:
+        time_dimension.SetGlobalSpanCostCoefficient(int(global_span_cost))
 
     # Ajout des fenêtres de temps (Time Windows)
     if 'tw_start' in df.columns and 'tw_end' in df.columns:
@@ -132,15 +157,21 @@ def solve_vrp(
     routing.AddDimensionWithVehicleCapacity(demand_callback_index, 0, [vehicle_capacity]*num_vehicles, True, 'Capacity')
 
     # Pénalités pour livraison totale
-    penalty = 1000000
+    penalty = int(drop_penalty)
     for i in range(1, num_locations):
         routing.AddDisjunction([manager.NodeToIndex(i)], penalty)
 
     # Recherche
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search_parameters.time_limit.seconds = 20
+    search_parameters.first_solution_strategy = FIRST_SOLUTION_STRATEGIES.get(
+        str(first_solution_strategy).lower(),
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
+    )
+    search_parameters.local_search_metaheuristic = LOCAL_SEARCH_METAHEURISTICS.get(
+        str(local_search_metaheuristic).lower(),
+        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH,
+    )
+    search_parameters.time_limit.seconds = int(solver_time_limit_s)
 
     print("Recherche de la solution optimale...")
     solution = routing.SolveWithParameters(search_parameters)

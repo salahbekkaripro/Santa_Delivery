@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import type { ClientPoint, RouteSegment } from "@/lib/types";
+import type { AdjacentNode, ClientPoint, RouteSegment } from "@/lib/types";
 
 // --- SECURE TOKEN ---
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";

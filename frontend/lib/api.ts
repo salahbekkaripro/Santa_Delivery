@@ -1,15 +1,40 @@
 import type {
+  AdjacentNode,
   ComparisonPayload,
   DebriefPayload,
   HumanState,
   LeaderboardEntry,
   MissionConfig,
+  MissionSnapshot,
   MissionResponse,
+  PlayerProfile,
   RouteOption,
   SolveResponse
 } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+function normalizePlayer(payload: {
+  player_id: string;
+  display_name: string;
+  email?: string | null;
+  callsign?: string | null;
+  avatar?: string | null;
+  last_login_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+}): PlayerProfile {
+  return {
+    id: payload.player_id,
+    display_name: payload.display_name,
+    email: payload.email ?? null,
+    callsign: payload.callsign ?? null,
+    avatar: payload.avatar ?? null,
+    last_login_at: payload.last_login_at ?? null,
+    created_at: payload.created_at,
+    updated_at: payload.updated_at,
+  };
+}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -42,8 +67,112 @@ export function createMission(payload: MissionConfig) {
   });
 }
 
+export function upsertPlayer(payload: {
+  player_id?: string;
+  display_name: string;
+  callsign?: string;
+  avatar?: string;
+}) {
+  return apiFetch<{
+    player_id: string;
+    display_name: string;
+    email?: string | null;
+    callsign?: string | null;
+    avatar?: string | null;
+    created_at: string;
+    last_login_at?: string | null;
+    updated_at: string;
+  }>("/api/players", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }).then(normalizePlayer);
+}
+
+export function getPlayer(playerId: string) {
+  return apiFetch<{
+    player_id: string;
+    display_name: string;
+    email?: string | null;
+    callsign?: string | null;
+    avatar?: string | null;
+    created_at: string;
+    last_login_at?: string | null;
+    updated_at: string;
+  }>(`/api/players/${playerId}`).then(normalizePlayer);
+}
+
+export function registerPlayer(payload: {
+  display_name: string;
+  email: string;
+  password: string;
+  callsign?: string;
+  avatar?: string;
+}) {
+  return apiFetch<{
+    player_id: string;
+    display_name: string;
+    email?: string | null;
+    callsign?: string | null;
+    avatar?: string | null;
+    created_at: string;
+    last_login_at?: string | null;
+    updated_at: string;
+  }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }).then(normalizePlayer);
+}
+
+export function loginPlayer(payload: { email: string; password: string }) {
+  return apiFetch<{
+    player_id: string;
+    display_name: string;
+    email?: string | null;
+    callsign?: string | null;
+    avatar?: string | null;
+    created_at: string;
+    last_login_at?: string | null;
+    updated_at: string;
+  }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }).then(normalizePlayer);
+}
+
+export function requestPasswordReset(payload: { email: string }) {
+  return apiFetch<{
+    status: string;
+    reset_token?: string | null;
+    reset_url?: string | null;
+    expires_at?: string | null;
+  }>("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function resetPassword(payload: { token: string; password: string }) {
+  return apiFetch<{
+    player_id: string;
+    display_name: string;
+    email?: string | null;
+    callsign?: string | null;
+    avatar?: string | null;
+    created_at: string;
+    last_login_at?: string | null;
+    updated_at: string;
+  }>("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }).then(normalizePlayer);
+}
+
 export function getMission(missionId: string) {
   return apiFetch<MissionResponse>(`/api/missions/${missionId}`);
+}
+
+export function getMissions(limit: number = 50) {
+  return apiFetch<{ missions: MissionSnapshot[] }>(`/api/missions?limit=${limit}`);
 }
 
 export function getRouteOptions(missionId: string, payload: { from_id: number; to_id: number; speed_multiplier: number; k?: number }) {
@@ -133,7 +262,10 @@ export function getDebrief(missionId: string) {
   return apiFetch<DebriefPayload>(`/api/missions/${missionId}/debrief`);
 }
 
-export function saveLeaderboard(missionId: string, payload: { player_name: string }) {
+export function saveLeaderboard(
+  missionId: string,
+  payload: { player_name: string; player_id?: string; callsign?: string; avatar?: string }
+) {
   return apiFetch<{ status: string }>(`/api/missions/${missionId}/leaderboard`, {
     method: "POST",
     body: JSON.stringify(payload)

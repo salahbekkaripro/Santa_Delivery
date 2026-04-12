@@ -1,5 +1,5 @@
-import { MissionCreator } from "@/components/mission-creator";
+import { HomeLanding } from "@/components/home-landing";
 
 export default function HomePage() {
-  return <MissionCreator />;
+  return <HomeLanding />;
 }

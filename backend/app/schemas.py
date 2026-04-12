@@ -13,6 +13,8 @@ class MissionCreateRequest(BaseModel):
     weather_key: str = "Clear"
     random_incidents: bool = False
     level: int | None = None
+    ai_profile: str | None = None
+    secondary_objectives: list[dict] | None = None
 
 
 class ClientPoint(BaseModel):
@@ -33,6 +35,60 @@ class MissionResponse(BaseModel):
     human_state: dict | None = None
     results_available: bool = False
     incidents: dict | None = None
+
+
+class PlayerUpsertRequest(BaseModel):
+    player_id: str | None = None
+    display_name: str = Field(min_length=1, max_length=80)
+    callsign: str | None = Field(default=None, max_length=80)
+    avatar: str | None = Field(default=None, max_length=8)
+
+
+class PlayerResponse(BaseModel):
+    player_id: str
+    display_name: str
+    email: str | None = None
+    callsign: str | None = None
+    avatar: str | None = None
+    last_login_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class LeaderboardSaveRequest(BaseModel):
+    player_name: str = Field(min_length=1, max_length=80)
+    player_id: str | None = None
+    callsign: str | None = Field(default=None, max_length=80)
+    avatar: str | None = Field(default=None, max_length=8)
+
+
+class AuthRegisterRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+    email: str = Field(min_length=5, max_length=160)
+    password: str = Field(min_length=8, max_length=256)
+    callsign: str | None = Field(default=None, max_length=80)
+    avatar: str | None = Field(default=None, max_length=8)
+
+
+class AuthLoginRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=160)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=160)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class PasswordResetResponse(BaseModel):
+    status: str
+    reset_token: str | None = None
+    reset_url: str | None = None
+    expires_at: str | None = None
 
 
 class HumanRouteOptionsRequest(BaseModel):

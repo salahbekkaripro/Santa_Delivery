@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { clearSleigh, getAdjacentNodes, getMission, getNearestNode, getRouteOptions, resetHumanState, solveMission, suggestNext, undoLastSegment, validateSegment } from "@/lib/api";
 import { MapSurface } from "@/components/map-surface";
+import { getAiProfilePreview } from "@/lib/ai-profiles";
 import type { AdjacentNode, HumanState, RouteOption, RouteSegment } from "@/lib/types";
 
 
@@ -94,6 +95,9 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     setNumVehicles(nextState.num_vehicles ?? 3);
     setVehicleCapacity(nextState.vehicle_capacity ?? 200);
     setSpeedMultiplier(nextState.speed_multiplier ?? 1);
+    if (missionData.mission?.ai_profile) {
+      setOptimizationTarget(getAiProfilePreview(missionData.mission.ai_profile).optimizationTarget);
+    }
   }, [missionData]);
 
   const mission = missionData;
@@ -267,6 +271,9 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     .filter((segment): segment is RouteSegment => Boolean(segment));
   const incidentSegments = mission.incidents?.segments ?? [];
   const stopMetaByClient = humanState.stop_meta_by_client ?? {};
+  const aiProfilePreview = getAiProfilePreview(mission.mission.ai_profile);
+  const aiProfileLocked = Boolean(mission.mission.ai_profile);
+  const secondaryObjectives = mission.mission.secondary_objectives ?? [];
 
   return (
     <div className="page-shell">
@@ -275,7 +282,7 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
           <h1>{mission.mission.zone}</h1>
           <p>
             Mission {mission.mission.level ? `niveau ${mission.mission.level}` : "sandbox"} · {mission.clients.length} clients ·{" "}
-            meteo {String(mission.weather?.desc ?? mission.mission.weather_key)}
+            meteo {String(mission.weather?.desc ?? mission.mission.weather_key)} · IA {aiProfilePreview.label}
           </p>
         </section>
 
@@ -295,6 +302,11 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
           <div className="metric-card">
             <div className="metric-label">Budget</div>
             <div className="metric-value">{mission.mission.budget} €</div>
+          </div>
+          <div className={`metric-card ai-profile-metric ${aiProfilePreview.accentClass}`}>
+            <div className="metric-label">Profil IA</div>
+            <div className="metric-value">{aiProfilePreview.label}</div>
+            <span className="muted">Bonus difficulté +{aiProfilePreview.difficultyBonus}</span>
           </div>
         </div>
 
@@ -340,13 +352,49 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
             <label className="field">
               <span>Objectif IA</span>
               <select
-                value={optimizationTarget}
+                value={aiProfileLocked ? aiProfilePreview.optimizationTarget : optimizationTarget}
+                disabled={aiProfileLocked}
                 onChange={(event) => setOptimizationTarget(event.target.value as "time" | "distance")}
               >
                 <option value="time">⚡ Express (Temps)</option>
                 <option value="distance">🌱 Écolo (Distance)</option>
               </select>
             </label>
+
+            <div className={`ai-profile-card ${aiProfilePreview.accentClass}`}>
+              <div className="ai-profile-head">
+                <div>
+                  <strong>IA {aiProfilePreview.label}</strong>
+                  <span className="muted">{aiProfilePreview.signature}</span>
+                </div>
+                <span className="tag">+{aiProfilePreview.difficultyBonus} score</span>
+              </div>
+              <p className="muted">{aiProfilePreview.description}</p>
+              <div className="ai-profile-meta">
+                <span>Cible {aiProfilePreview.optimizationTarget === "time" ? "temps" : "distance"}</span>
+                <span>{aiProfileLocked ? "Profil verrouillé par la mission" : "Mode libre configurable"}</span>
+              </div>
+            </div>
+
+            {secondaryObjectives.length > 0 ? (
+              <div className="ai-profile-card">
+                <div className="ai-profile-head">
+                  <div>
+                    <strong>Objectifs secondaires</strong>
+                    <span className="muted">À valider pendant le run et au debrief</span>
+                  </div>
+                  <span className="tag">{secondaryObjectives.length} objectif(s)</span>
+                </div>
+                <div className="objective-list">
+                  {secondaryObjectives.map((objective) => (
+                    <div key={`${objective.code}-${objective.label}`} className="objective-chip">
+                      <span className="objective-dot" />
+                      <span>{objective.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="stack">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -479,11 +527,13 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
                 {resetMutation.isPending ? "Reset..." : "Reinitialiser toutes les routes"}
               </button>
               <div className="error-box" style={{ background: "rgba(23, 50, 77, 0.05)", borderColor: "var(--border)", color: "var(--text)" }}>
-                <strong>Mode IA : {optimizationTarget === "time" ? "Express" : "Écolo"}</strong>
+                <strong>Mode IA : {aiProfilePreview.label}</strong>
                 <p className="muted" style={{ fontSize: "0.8rem", margin: "4px 0 0" }}>
-                  {optimizationTarget === "time" 
-                    ? "L'IA cherchera à finir la tournée le plus vite possible." 
-                    : "L'IA cherchera à parcourir le moins de kilomètres possible."}
+                  {aiProfileLocked
+                    ? `Cette mission impose le profil ${aiProfilePreview.label}. Signature: ${aiProfilePreview.signature}.`
+                    : aiProfilePreview.optimizationTarget === "time"
+                      ? "L'IA cherchera à finir la tournée le plus vite possible."
+                      : "L'IA cherchera à parcourir le moins de kilomètres possible."}
                 </p>
               </div>
               <button className="primary-button" onClick={() => solveMutation.mutate()}>

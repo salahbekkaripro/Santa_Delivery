@@ -7,7 +7,50 @@ export type MissionConfig = {
   weather_key: string;
   random_incidents: boolean;
   level?: number | null;
+  ai_profile?: string | null;
+  secondary_objectives?: SecondaryObjective[] | null;
   generation_message?: string;
+};
+
+export type PlayerProfile = {
+  id: string;
+  display_name: string;
+  email?: string | null;
+  callsign?: string | null;
+  avatar?: string | null;
+  last_login_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+};
+
+export type SecondaryObjective = {
+  code: string;
+  label: string;
+  target?: number;
+};
+
+export type SecondaryObjectiveResult = SecondaryObjective & {
+  completed: boolean;
+  progress_label: string;
+};
+
+export type AIStrategy = {
+  profile: string;
+  label: string;
+  signature?: string;
+  description: string;
+  optimization_target: "time" | "distance";
+  difficulty_bonus?: number;
+  num_vehicles: number;
+  vehicle_capacity: number;
+  speed_multiplier: number;
+  solver_time_limit_s: number;
+  first_solution_strategy: string;
+  local_search_metaheuristic: string;
+  time_slack_s: number;
+  max_route_time_s: number;
+  drop_penalty: number;
+  global_span_cost: number;
 };
 
 export type ClientPoint = {
@@ -68,6 +111,35 @@ export type MissionResponse = {
   incidents?: { count: number; segments: RouteSegment[] };
 };
 
+export type MissionSnapshot = {
+  mission_id: string;
+  mission: MissionConfig;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CampaignMission = MissionConfig & {
+  level: number;
+  title: string;
+  chapter: string;
+  briefing: string;
+  objective: string;
+  ai_profile: string;
+  reward_label: string;
+};
+
+export type CampaignProgress = {
+  unlockedLevel: number;
+  completedLevels: number[];
+  bestScoreByLevel: Record<number, number>;
+  starsByLevel: Record<number, number>;
+  objectivesCompletedByLevel: Record<number, number>;
+  defeatedProfiles: string[];
+  lastPlayedLevel: number | null;
+  updatedAt: string | null;
+};
+
 export type RouteOption = {
   route_nodes: number[];
   geometry: [number, number][];
@@ -100,7 +172,7 @@ export type ComparisonPayload = {
   incidents?: { count: number; segments: RouteSegment[] };
   summary_metrics: {
     human: SummaryMetrics & { assigned_clients: number; live_stats: Record<string, HumanSleighStats>; sleighs?: HumanSleighSummary[] };
-    ai: SummaryMetrics & { sleighs: AISleighSummary[]; dropped_points: number };
+    ai: SummaryMetrics & { sleighs: AISleighSummary[]; dropped_points: number; strategy?: AIStrategy };
   };
 };
 
@@ -110,6 +182,7 @@ export type SolveResponse = {
     total_weight_kg: number;
     tours: Array<{ vehicle_id: number; route_ids: number[]; duration_s: number; weight_kg: number }>;
     dropped_points: number[];
+    ai_strategy?: AIStrategy;
   };
   benchmark: {
     naive: { total_time_s: number; total_dist_m: number; tours: any[] };
@@ -137,7 +210,7 @@ export type HumanSleighSummary = {
 
 export type DebriefPayload = {
   mission: MissionConfig;
-  results: { total_time_s: number; total_weight_kg: number };
+  results: { total_time_s: number; total_weight_kg: number; ai_strategy?: AIStrategy };
   benchmark: {
     savings: { time_saved_min: number; time_saved_pct: number; co2_saved_kg: number };
     optimized: { total_dist_m: number; total_time_s: number };
@@ -148,6 +221,13 @@ export type DebriefPayload = {
     rank: string;
     rank_title: string;
     human_beat_ai: boolean;
+    breakdown?: {
+      base_score: number;
+      ai_profile_bonus: number;
+      incident_bonus: number;
+      human_bonus: number;
+      final_score: number;
+    };
   };
   human: {
     summary: SummaryMetrics;
@@ -160,6 +240,8 @@ export type DebriefPayload = {
     naive_vs_ai_delta_s: number;
     dropped_points: number[];
     ai_sleighs: AISleighSummary[];
+    ai_strategy?: AIStrategy;
+    secondary_objectives?: SecondaryObjectiveResult[];
     recommendations: string[];
   };
 };
@@ -170,6 +252,9 @@ export type LeaderboardEntry = {
   score: number;
   rank: string;
   player_name: string;
+  player_id?: string | null;
+  callsign?: string | null;
+  avatar?: string | null;
   created_at: string;
 };
 

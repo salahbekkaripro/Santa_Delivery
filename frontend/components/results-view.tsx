@@ -51,13 +51,17 @@ export function ResultsView({ missionId }: { missionId: string }) {
   const deltaLabel = deltaS > 0 ? `+${asMinutes(deltaS)}` : deltaS < 0 ? `-${asMinutes(Math.abs(deltaS))}` : "0 min";
   const humanSleighs = comparison.summary_metrics.human.sleighs ?? [];
   const aiSleighs = comparison.summary_metrics.ai.sleighs ?? [];
+  const aiStrategy = debrief.results.ai_strategy ?? comparison.summary_metrics.ai.strategy;
 
   return (
     <div className="page-shell">
       <div className="page-stack">
         <section className="hero">
           <h1>Resultats IA vs humain</h1>
-          <p>{mission.mission.zone} · mission {missionId} · score {debrief.score.value}/100</p>
+          <p>
+            {mission.mission.zone} · mission {missionId} · score {debrief.score.value}/100
+            {aiStrategy ? ` · IA ${aiStrategy.label}` : mission.mission.ai_profile ? ` · IA ${mission.mission.ai_profile}` : ""}
+          </p>
         </section>
 
         <section className="grid-4">
@@ -119,6 +123,15 @@ export function ResultsView({ missionId }: { missionId: string }) {
             <span className="muted">Distance: {asDistance(aiDistM)}</span>
             <span className="muted">Segments: {Number(comparison.summary_metrics.ai.segment_count ?? 0)}</span>
             <span className="muted">Poids livre: {debrief.results.total_weight_kg} kg</span>
+            {aiStrategy ? (
+              <span className="muted">
+                Profil: {aiStrategy.label} · cible {aiStrategy.optimization_target} · vitesse x{aiStrategy.speed_multiplier}
+              </span>
+            ) : null}
+            {aiStrategy?.signature ? <span className="muted">Signature: {aiStrategy.signature}</span> : null}
+            {typeof aiStrategy?.difficulty_bonus === "number" ? (
+              <span className="muted">Bonus difficulté: +{aiStrategy.difficulty_bonus}</span>
+            ) : null}
           </div>
           <div className="panel stack">
             <strong>Benchmark</strong>
