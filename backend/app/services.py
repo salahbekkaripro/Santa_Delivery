@@ -349,8 +349,10 @@ def get_human_route_options(mission_id: str, from_id: int, to_id: int, speed_mul
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
     df = read_points(paths.data_file)
     graph = load_graph(paths.graph_file)
-    from_lat, from_lon = get_point_latlon(df, int(from_id))
-    to_lat, to_lon = get_point_latlon(df, int(to_id))
+    
+    from_lat, from_lon = get_point_latlon(df, int(from_id), graph=graph)
+    to_lat, to_lon = get_point_latlon(df, int(to_id), graph=graph)
+
     weather = load_weather(paths.weather_file, mission.get("weather_key"))
     time_factor = float(weather.get("factor", 1.0)) / speed_multiplier
     options = compute_route_options(graph, from_lat, from_lon, to_lat, to_lon, time_factor=time_factor, k=k)
@@ -382,7 +384,13 @@ def validate_human_segment(mission_id: str, payload: dict) -> dict:
     state.segments_by_sleigh.setdefault(sleigh_key, [])
 
     to_id = int(payload["to_id"])
-    if to_id in state.assigned_clients:
+    
+    # Vérifier si c'est un client ou un nœud OSM direct
+    df = read_points(paths.data_file)
+    client_ids = set(df["id"].astype(int).tolist())
+    is_client = to_id in client_ids
+
+    if is_client and to_id in state.assigned_clients:
         raise ValueError(f"Client {to_id} deja assigne")
 
     selected_route = payload["selected_route"]
@@ -399,8 +407,10 @@ def validate_human_segment(mission_id: str, payload: dict) -> dict:
     }
     state.routes_by_sleigh[sleigh_key].append(to_id)
     state.segments_by_sleigh[sleigh_key].append(segment)
-    state.assigned_clients.append(to_id)
-    state.assigned_clients = sorted(set(state.assigned_clients))
+    
+    if is_client:
+        state.assigned_clients.append(to_id)
+        state.assigned_clients = sorted(set(state.assigned_clients))
     
     # Incidents DYNAMIQUES (Phase 2.1)
     if mission.get("random_incidents") and random.random() < 0.15:
@@ -546,6 +556,19 @@ def suggest_next_stops(mission_id: str, payload: dict) -> dict:
         
     suggestions.sort(key=lambda x: x["score"])
     return {"suggestions": suggestions[:3]}
+
+
+def get_nearest_node(mission_id: str, lat: float, lon: float) -> dict:
+    paths, mission, _ = load_mission_bundle(mission_id)
+    graph = load_graph(paths.graph_file)
+    import osmnx as ox
+    node_id = ox.nearest_nodes(graph, lon, lat)
+    node_data = graph.nodes[node_id]
+    return {
+        "node_id": int(node_id),
+        "lat": float(node_data["y"]),
+        "lon": float(node_data["x"])
+    }
 
 
 def _build_incident_matrix(paths: MissionPaths, mission: dict) -> str | None:

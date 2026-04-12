@@ -21,6 +21,7 @@ type Props = {
   assignedClientIds?: number[];
   humanStopMetaByClient?: Record<number, { sleigh_id: number; stop_order: number; arrival_eta_s: number; arrival_clock: string }>;
   onClientSelect?: (clientId: number) => void;
+  onMapClick?: (lat: number, lon: number) => void;
   showHuman?: boolean;
   showAi?: boolean;
   selectedClientId?: number | null;
@@ -41,6 +42,7 @@ export default function MapboxSurfaceClient({
   assignedClientIds = [],
   humanStopMetaByClient = {},
   onClientSelect,
+  onMapClick,
   showHuman = true,
   showAi = true,
   selectedClientId
@@ -136,6 +138,14 @@ export default function MapboxSurfaceClient({
       m.addLayer({ id: 'ai-layer', type: 'line', source: 'ai-routes', paint: { 'line-color': '#143c5a', 'line-width': 5, 'line-opacity': 0.8 } });
       m.addLayer({ id: 'preview-layer', type: 'line', source: 'previews', paint: { 'line-color': '#d97706', 'line-width': 6 } });
       m.addLayer({ id: 'incident-layer', type: 'line', source: 'incidents', paint: { 'line-color': '#991b1b', 'line-width': 5, 'line-dasharray': [1, 2] } });
+
+      m.on('click', (e) => {
+        // En Mapbox, on vérifie si on a cliqué sur un élément des layers, sinon on déclenche le clic libre
+        const features = m.queryRenderedFeatures(e.point);
+        if (features.length === 0) {
+          onMapClick?.(e.lngLat.lat, e.lngLat.lng);
+        }
+      });
     });
 
     map.current = m;

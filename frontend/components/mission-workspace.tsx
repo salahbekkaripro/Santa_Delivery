@@ -50,6 +50,7 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const [routeError, setRouteError] = useState<string | null>(null);
   const [optimizationTarget, setOptimizationTarget] = useState<"time" | "distance">("time");
   const [suggestions, setSuggestions] = useState<Array<{ client_id: number; nom_client: string; arrival_clock: string; is_feasible: boolean }>>([]);
+  const [isFreeRouting, setIsFreeRouting] = useState(false);
 
   const missionQuery = useQuery({
     queryKey: ["mission", missionId],
@@ -177,6 +178,21 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     onError: (error: Error) => setRouteError(error.message)
   });
 
+  const nearestNodeMutation = useMutation({
+    mutationFn: (coords: { lat: number; lon: number }) => getNearestNode(missionId, coords.lat, coords.lon),
+    onSuccess: (data) => {
+      const fromId = humanState.routes_by_sleigh[String(activeSleigh)]?.at(-1) ?? 0;
+      setSelectedClientId(data.node_id);
+      optionsMutation.mutate({ from_id: fromId, to_id: data.node_id, speed_multiplier: speedMultiplier });
+    },
+    onError: (error: Error) => setRouteError(error.message)
+  });
+
+  function handleMapClick(lat: number, lon: number) {
+    if (!isFreeRouting) return;
+    nearestNodeMutation.mutate({ lat, lon });
+  }
+
   function handleClientSelect(clientId: number) {
     if (!mission) {
       return;
@@ -290,9 +306,24 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
             </label>
 
             <div className="stack">
-              <strong>Choix de chemin</strong>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <strong>Choix de chemin</strong>
+                <button 
+                  className={`tag ${isFreeRouting ? "is-selected" : ""}`}
+                  style={{ cursor: "pointer", background: isFreeRouting ? "var(--accent)" : "rgba(0,0,0,0.05)", color: isFreeRouting ? "white" : "var(--text)" }}
+                  onClick={() => {
+                    setIsFreeRouting(!isFreeRouting);
+                    setSelectedClientId(null);
+                    setRouteOptions([]);
+                  }}
+                >
+                  {isFreeRouting ? "🗺️ Tracé Libre : ON" : "📍 Sélection : ON"}
+                </button>
+              </div>
               <span className="muted">
-                Clique un client sur la carte. Le backend calcule ensuite les meilleurs chemins et tu valides celui que tu veux garder.
+                {isFreeRouting 
+                  ? "Clique n'importe où sur la carte pour tracer ta route segment par segment." 
+                  : "Clique un client sur la carte pour voir les options de chemins."}
               </span>
               <button 
                 className="secondary-button" 

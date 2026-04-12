@@ -124,6 +124,14 @@ def suggest_next_stops(mission_id: str, payload: dict) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/missions/{mission_id}/nearest-node")
+def get_nearest_node(mission_id: str, lat: float, lon: float) -> dict:
+    try:
+        return services.get_nearest_node(mission_id, lat, lon)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/missions/{mission_id}/solve", response_model=SolveMissionResponse)
 def solve_mission(mission_id: str, payload: SolveMissionRequest) -> dict:
     try:

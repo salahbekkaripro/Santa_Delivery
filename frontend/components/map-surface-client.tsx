@@ -1,9 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CircleMarker, MapContainer, Pane, Polyline, Popup, TileLayer, Tooltip, Marker } from "react-leaflet";
+import { CircleMarker, MapContainer, Pane, Polyline, Popup, TileLayer, Tooltip, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import type { ClientPoint, RouteSegment } from "@/lib/types";
+
+function MapEvents({ onMapClick }: { onMapClick?: (lat: number, lon: number) => void }) {
+  useMapEvents({
+    click: (e) => {
+      onMapClick?.(e.latlng.lat, e.latlng.lng);
+    }
+  });
+  return null;
+}
 
 type Props = {
   depot: ClientPoint;
@@ -17,6 +26,7 @@ type Props = {
   assignedClientIds?: number[];
   humanStopMetaByClient?: Record<number, { sleigh_id: number; stop_order: number; arrival_eta_s: number; arrival_clock: string }>;
   onClientSelect?: (clientId: number) => void;
+  onMapClick?: (lat: number, lon: number) => void;
   showHuman?: boolean;
   showAi?: boolean;
   selectedClientId?: number | null;
@@ -97,6 +107,7 @@ export default function MapSurfaceClient({
   assignedClientIds = [],
   humanStopMetaByClient = {},
   onClientSelect,
+  onMapClick,
   showHuman = true,
   showAi = true,
   selectedClientId
@@ -171,6 +182,7 @@ export default function MapSurfaceClient({
   return (
     <div className="leaflet-shell" style={{ position: "relative" }}>
       <MapContainer center={[depot.lat, depot.lon]} zoom={14} style={{ height: "100%", minHeight: 640, width: "100%" }}>
+        <MapEvents onMapClick={onMapClick} />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"

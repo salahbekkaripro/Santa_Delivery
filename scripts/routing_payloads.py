@@ -223,12 +223,15 @@ def serialize_human_state(state: HumanState) -> dict:
     }
 
 
-def get_point_latlon(df: pd.DataFrame, point_id: int) -> tuple[float, float]:
+def get_point_latlon(df: pd.DataFrame, point_id: int, graph=None) -> tuple[float, float]:
     if point_id == 0:
         depot = df[df["id"] == 0].iloc[0]
         return float(depot["lat"]), float(depot["lon"])
     row = df[df["id"] == point_id]
     if row.empty:
+        if graph is not None and point_id in graph.nodes:
+            node_data = graph.nodes[point_id]
+            return float(node_data["y"]), float(node_data["x"])
         raise KeyError(f"Point {point_id} introuvable")
     return float(row.iloc[0]["lat"]), float(row.iloc[0]["lon"])
 
@@ -258,8 +261,8 @@ def build_human_live_stats(
         return_time_s = 0.0
         return_segment = None
         if route_ids:
-            lat, lon = get_point_latlon(df, int(route_ids[-1]))
-            depot_lat, depot_lon = get_point_latlon(df, 0)
+            lat, lon = get_point_latlon(df, int(route_ids[-1]), graph=graph)
+            depot_lat, depot_lon = get_point_latlon(df, 0, graph=graph)
             back_options = compute_route_options(graph, lat, lon, depot_lat, depot_lon, time_factor=1.0, k=1)
             if back_options:
                 return_dist_m = float(back_options[0]["dist_m"])
