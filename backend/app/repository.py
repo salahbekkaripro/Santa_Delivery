@@ -103,6 +103,14 @@ def init_db(db_path: str | Path | None = None) -> None:
                 FOREIGN KEY (mission_id) REFERENCES mission_snapshots(mission_id),
                 FOREIGN KEY (player_id) REFERENCES players(player_id)
             );
+            """
+        )
+        _ensure_column(conn, "players", "email", "email TEXT")
+        _ensure_column(conn, "players", "password_hash", "password_hash TEXT")
+        _ensure_column(conn, "players", "last_login_at", "last_login_at TEXT")
+        _ensure_column(conn, "leaderboard", "player_id", "player_id TEXT")
+        conn.executescript(
+            """
             CREATE INDEX IF NOT EXISTS idx_mission_snapshots_updated_at
             ON mission_snapshots(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_leaderboard_score
@@ -115,10 +123,6 @@ def init_db(db_path: str | Path | None = None) -> None:
             ON password_reset_tokens(player_id);
             """
         )
-        _ensure_column(conn, "players", "email", "email TEXT")
-        _ensure_column(conn, "players", "password_hash", "password_hash TEXT")
-        _ensure_column(conn, "players", "last_login_at", "last_login_at TEXT")
-        _ensure_column(conn, "leaderboard", "player_id", "player_id TEXT")
         conn.commit()
 
 

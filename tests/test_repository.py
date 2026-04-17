@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
 from backend.app import repository
@@ -90,6 +91,37 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(entries[0]["player_id"], "captain-north")
         self.assertEqual(entries[0]["callsign"], "POLAR-7")
         self.assertEqual(entries[0]["avatar"], "🦌")
+
+    def test_init_db_migrates_legacy_leaderboard_without_player_id(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE leaderboard (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mission_id TEXT NOT NULL,
+                    zone TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    rank TEXT NOT NULL,
+                    player_name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+
+        repository.init_db(self.db_path)
+
+        with sqlite3.connect(self.db_path) as conn:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(leaderboard)").fetchall()
+            }
+            indexes = {
+                row[1]
+                for row in conn.execute("PRAGMA index_list(leaderboard)").fetchall()
+            }
+
+        self.assertIn("player_id", columns)
+        self.assertIn("idx_leaderboard_player_id", indexes)
 
 
 if __name__ == "__main__":

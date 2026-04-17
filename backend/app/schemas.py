@@ -15,6 +15,11 @@ class MissionCreateRequest(BaseModel):
     level: int | None = None
     ai_profile: str | None = None
     secondary_objectives: list[dict] | None = None
+    city: str | None = Field(default=None, max_length=120)
+    center_lat: float | None = None
+    center_lon: float | None = None
+    search_radius_km: float | None = Field(default=None, gt=0, le=30)
+    max_clients: int | None = Field(default=None, ge=1, le=200)
 
 
 class ClientPoint(BaseModel):

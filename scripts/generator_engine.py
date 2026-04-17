@@ -3,6 +3,7 @@ import pandas as pd
 import random
 import os
 import json
+import math
 import numpy as np
 import requests
 import networkx as nx
@@ -40,6 +41,42 @@ def _prepare_graph(G, min_nodes: int):
     except Exception:
         pass
     return G
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    earth_radius_m = 6_371_000.0
+    phi1 = math.radians(float(lat1))
+    phi2 = math.radians(float(lat2))
+    dphi = math.radians(float(lat2) - float(lat1))
+    dlambda = math.radians(float(lon2) - float(lon1))
+    a = math.sin(dphi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    return 2.0 * earth_radius_m * math.asin(math.sqrt(a))
+
+
+def _select_depot_and_clients(
+    nodes: list[tuple[int, dict]],
+    num_clients: int,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+) -> tuple[tuple[int, dict], list[tuple[int, dict]]]:
+    if len(nodes) < int(num_clients) + 1:
+        raise ValueError("Not enough nodes to select depot and clients")
+
+    if center_lat is not None and center_lon is not None:
+        depot_node = min(
+            nodes,
+            key=lambda node: _haversine_m(float(center_lat), float(center_lon), float(node[1]["y"]), float(node[1]["x"])),
+        )
+        remaining_nodes = [node for node in nodes if int(node[0]) != int(depot_node[0])]
+        if len(remaining_nodes) < int(num_clients):
+            raise ValueError("Not enough client nodes after depot selection")
+        clients_nodes = random.sample(remaining_nodes, int(num_clients))
+        return depot_node, clients_nodes
+
+    selected_nodes = random.sample(nodes, int(num_clients) + 1)
+    depot_node = selected_nodes[0]
+    clients_nodes = selected_nodes[1:]
+    return depot_node, clients_nodes
 
 
 def _compute_matrices_local(G, node_ids: list[int]) -> tuple[np.ndarray, np.ndarray]:
@@ -83,6 +120,9 @@ def generate_new_zone(
     graph_path=GRAPH_PATH,
     time_matrix_path=TIME_MATRIX,
     dist_matrix_path=DIST_MATRIX,
+    center_lat=None,
+    center_lon=None,
+    search_radius_km=None,
 ):
     """
     Télécharge une nouvelle zone et génère des points de livraison.
@@ -94,15 +134,34 @@ def generate_new_zone(
     print(f"📍 Génération de la zone : {location_name}...")
     
     # 1. Téléchargement du graphe
+    explicit_center = center_lat is not None and center_lon is not None and search_radius_km is not None
     try:
-        G = ox.graph_from_place(location_name, network_type="drive")
-        G = _prepare_graph(G, int(num_clients) + 1)
-        os.makedirs(os.path.dirname(graph_path), exist_ok=True)
-        ox.save_graphml(G, graph_path)
-        print(f"✅ Graphe de '{location_name}' téléchargé.")
+        if explicit_center:
+            dist_m = max(200, int(float(search_radius_km) * 1000))
+            center = (float(center_lat), float(center_lon))
+            print(f"📌 Zone cible: centre={center} rayon={search_radius_km} km")
+            G = ox.graph_from_point(center, dist=dist_m, network_type="drive")
+            G = _prepare_graph(G, int(num_clients) + 1)
+            os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+            ox.save_graphml(G, graph_path)
+            print(f"✅ Graphe circulaire téléchargé autour de '{location_name}'.")
+        else:
+            G = ox.graph_from_place(location_name, network_type="drive")
+            G = _prepare_graph(G, int(num_clients) + 1)
+            os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+            ox.save_graphml(G, graph_path)
+            print(f"✅ Graphe de '{location_name}' téléchargé.")
     except Exception as e:
         msg = str(e)
-        print(f"⚠️ OSM (place) impossible : {msg}")
+        print(f"⚠️ OSM (initial) impossible : {msg}")
+
+        if explicit_center:
+            return (
+                False,
+                "Impossible de charger la zone circulaire demandee. "
+                "Essayez un rayon plus grand ou une autre ville.\n"
+                f"Detail: {msg}",
+            )
 
         # Cas fréquent: le polygon renvoyé par le géocodeur ne contient aucun nœud "drive"
         # => fallback sur un graphe autour d'un point (plus robuste).
@@ -128,17 +187,36 @@ def generate_new_zone(
     # 2. Sélection des points (Dépôt + Clients)
     # On prend des nœuds aléatoires du graphe pour être sûr qu'ils sont sur la route
     nodes = list(G.nodes(data=True))
+    if explicit_center:
+        radius_m = float(search_radius_km) * 1000.0
+        ref_lat = float(center_lat)
+        ref_lon = float(center_lon)
+        nodes = [
+            node
+            for node in nodes
+            if _haversine_m(ref_lat, ref_lon, float(node[1]["y"]), float(node[1]["x"])) <= radius_m
+        ]
     if len(nodes) < (num_clients + 1):
+        if explicit_center:
+            return (
+                False,
+                "Rayon trop petit pour ce nombre de colis. "
+                "Augmentez le rayon ou reduisez le nombre de colis.",
+            )
         return (
             False,
             "OSM: pas assez de nœuds routiers dans la zone. "
             "Réduisez le nombre de clients ou choisissez une zone plus grande.",
         )
-    selected_nodes = random.sample(nodes, min(len(nodes), num_clients + 1))
-    
-    # Le premier point est le dépôt
-    depot_node = selected_nodes[0]
-    clients_nodes = selected_nodes[1:]
+    if explicit_center:
+        depot_node, clients_nodes = _select_depot_and_clients(
+            nodes,
+            int(num_clients),
+            center_lat=float(center_lat),
+            center_lon=float(center_lon),
+        )
+    else:
+        depot_node, clients_nodes = _select_depot_and_clients(nodes, int(num_clients))
     node_ids = [depot_node[0]] + [n[0] for n in clients_nodes]
     
     data = []

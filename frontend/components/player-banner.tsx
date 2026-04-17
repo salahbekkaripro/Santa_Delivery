@@ -7,6 +7,7 @@ import { usePlayer } from "@/components/player-provider";
 export function PlayerBanner() {
   const pathname = usePathname();
   const { player, isReady, signOut } = usePlayer();
+  const authRedirect = encodeURIComponent("/");
 
   if (!isReady) {
     return null;
@@ -26,7 +27,7 @@ export function PlayerBanner() {
             </div>
             <div className="player-banner-actions">
               {pathname !== "/login" && pathname !== "/register" ? (
-                <Link className="secondary-button" href={`/login?redirect=${encodeURIComponent(pathname || "/")}`}>
+                <Link className="secondary-button" href={`/login?redirect=${authRedirect}`}>
                   Changer de compte
                 </Link>
               ) : null}
@@ -42,10 +43,10 @@ export function PlayerBanner() {
               <span className="muted">Inscris-toi ou connecte-toi pour isoler progression et score.</span>
             </div>
             <div className="player-banner-actions">
-              <Link className="secondary-button" href={`/login?redirect=${encodeURIComponent(pathname || "/")}`}>
+              <Link className="secondary-button" href={`/login?redirect=${authRedirect}`}>
                 Se connecter
               </Link>
-              <Link className="primary-button" href={`/register?redirect=${encodeURIComponent(pathname || "/")}`}>
+              <Link className="primary-button" href={`/register?redirect=${authRedirect}`}>
                 S&apos;inscrire
               </Link>
             </div>

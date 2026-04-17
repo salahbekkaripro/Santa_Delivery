@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePlayer } from "@/components/player-provider";
+import { SearchAreaMap } from "@/components/search-area-map";
 import { createMission, getLeaderboard, getMissions } from "@/lib/api";
 import type { LeaderboardEntry, MissionSnapshot } from "@/lib/types";
 
@@ -46,6 +47,31 @@ const campaigns = [
     tone: "Mission de salon à haute intensité",
   },
 ];
+
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
+const DEFAULT_ADDRESS = {
+  label: "10 Downing Street, London, United Kingdom",
+  lat: 51.5033635,
+  lon: -0.1276248,
+};
+const DEFAULT_RADIUS_KM = 3.0;
+
+const SEARCH_CLIENT_DENSITY_PER_KM2 = 2.0;
+const SEARCH_MIN_CLIENTS = 8;
+const SEARCH_MAX_CLIENTS = 200;
+const SEARCH_MIN_RADIUS_KM = 0.5;
+const SEARCH_MAX_RADIUS_KM = 30;
+
+type AddressSuggestion = {
+  label: string;
+  lat: number;
+  lon: number;
+};
+
+function computeMaxClientsForRadius(radiusKm: number) {
+  const areaKm2 = Math.PI * radiusKm * radiusKm;
+  return Math.min(SEARCH_MAX_CLIENTS, Math.max(SEARCH_MIN_CLIENTS, Math.floor(areaKm2 * SEARCH_CLIENT_DENSITY_PER_KM2)));
+}
 
 function formatTimestamp(value?: string) {
   if (!value) {
@@ -154,8 +180,14 @@ function computeLiveStats(missions: MissionSnapshot[], entries: LeaderboardEntry
 export function MissionCreator() {
   const router = useRouter();
   const { player } = usePlayer();
+  const [addressQuery, setAddressQuery] = useState(DEFAULT_ADDRESS.label);
+  const [selectedAddress, setSelectedAddress] = useState<AddressSuggestion | null>(DEFAULT_ADDRESS);
+  const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
+  const [addressLookupError, setAddressLookupError] = useState<string | null>(null);
+  const [isAddressLoading, setIsAddressLoading] = useState(false);
+  const [isAddressFocused, setIsAddressFocused] = useState(false);
   const [sandbox, setSandbox] = useState({
-    zone: "Bordeaux",
+    search_radius_km: DEFAULT_RADIUS_KM,
     num_clients: 30,
     budget: 3000,
     sleigh_cost: 500,
@@ -187,6 +219,91 @@ export function MissionCreator() {
   const liveStats = useMemo(() => computeLiveStats(recentMissions, topEntries), [recentMissions, topEntries]);
   const activityFeed = recentMissions.slice(0, 6);
   const stageBars = recentMissions.slice(0, 10).reverse();
+  const maxClientsAllowed = useMemo(() => computeMaxClientsForRadius(sandbox.search_radius_km), [sandbox.search_radius_km]);
+  const requestedClients = Math.max(1, Math.round(Number(sandbox.num_clients) || 0));
+  const requestedBudget = Math.max(0, Math.round(Number(sandbox.budget) || 0));
+  const requestedSleighCost = Math.max(0, Math.round(Number(sandbox.sleigh_cost) || 0));
+  const exceedsClientsLimit = requestedClients > maxClientsAllowed;
+  const areaKm2 = useMemo(() => Math.PI * sandbox.search_radius_km * sandbox.search_radius_km, [sandbox.search_radius_km]);
+  const hasAddressSelection = selectedAddress !== null;
+  const canAutocompleteAddress = MAPBOX_TOKEN.trim().length > 0;
+  const mapCenter = selectedAddress ?? DEFAULT_ADDRESS;
+  const weatherLocation = useMemo(() => {
+    if (!selectedAddress) {
+      return "";
+    }
+    const chunks = selectedAddress.label
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const compact = chunks.length >= 2 ? chunks.slice(-2).join(", ") : chunks[0] ?? selectedAddress.label;
+    return compact.slice(0, 120);
+  }, [selectedAddress]);
+
+  useEffect(() => {
+    if (selectedAddress && addressQuery.trim() !== selectedAddress.label) {
+      setSelectedAddress(null);
+    }
+  }, [addressQuery, selectedAddress]);
+
+  useEffect(() => {
+    const query = addressQuery.trim();
+    if (!canAutocompleteAddress || query.length < 3) {
+      setAddressSuggestions([]);
+      setIsAddressLoading(false);
+      setAddressLookupError(null);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      setIsAddressLoading(true);
+      setAddressLookupError(null);
+      try {
+        const endpoint = new URL(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json`
+        );
+        endpoint.searchParams.set("autocomplete", "true");
+        endpoint.searchParams.set("limit", "6");
+        endpoint.searchParams.set("language", "fr");
+        endpoint.searchParams.set("types", "address,place,locality,neighborhood,poi");
+        endpoint.searchParams.set("access_token", MAPBOX_TOKEN);
+        const response = await fetch(endpoint.toString(), { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("autocomplete_failed");
+        }
+        const payload = (await response.json()) as { features?: Array<{ place_name?: string; center?: [number, number] }> };
+        const suggestions = (payload.features ?? [])
+          .map((feature) => {
+            const center = feature.center;
+            if (!Array.isArray(center) || center.length < 2) {
+              return null;
+            }
+            return {
+              label: String(feature.place_name ?? query),
+              lon: Number(center[0]),
+              lat: Number(center[1]),
+            };
+          })
+          .filter((feature): feature is AddressSuggestion => feature !== null);
+        setAddressSuggestions(suggestions);
+      } catch {
+        setAddressSuggestions([]);
+        setAddressLookupError("Impossible de charger les suggestions d'adresse pour le moment.");
+      } finally {
+        setIsAddressLoading(false);
+      }
+    }, 280);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [addressQuery, canAutocompleteAddress]);
+
+  function selectAddressSuggestion(suggestion: AddressSuggestion) {
+    setSelectedAddress(suggestion);
+    setAddressQuery(suggestion.label);
+    setAddressSuggestions([]);
+    setAddressLookupError(null);
+    setIsAddressFocused(false);
+  }
 
   return (
     <div className="page-shell salon-shell">
@@ -513,12 +630,40 @@ export function MissionCreator() {
           </div>
           <div className="grid-2">
             <label className="field">
-              <span>Zone</span>
-              <input
-                value={sandbox.zone}
-                onChange={(event) => setSandbox((prev) => ({ ...prev, zone: event.target.value }))}
-                placeholder="Quartier, ville, pays"
-              />
+              <span>Adresse (point central)</span>
+              <div className="address-autocomplete">
+                <input
+                  value={addressQuery}
+                  onChange={(event) => setAddressQuery(event.target.value)}
+                  onFocus={() => setIsAddressFocused(true)}
+                  onBlur={() => window.setTimeout(() => setIsAddressFocused(false), 120)}
+                  placeholder="Tape une adresse complete"
+                />
+                {isAddressFocused && canAutocompleteAddress ? (
+                  <div className="address-suggestions">
+                    {isAddressLoading ? <div className="address-suggestion-muted">Recherche en cours...</div> : null}
+                    {!isAddressLoading && addressSuggestions.length > 0
+                      ? addressSuggestions.map((suggestion) => (
+                          <button
+                            key={`${suggestion.label}-${suggestion.lat}-${suggestion.lon}`}
+                            type="button"
+                            className="address-suggestion-item"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              selectAddressSuggestion(suggestion);
+                            }}
+                          >
+                            {suggestion.label}
+                          </button>
+                        ))
+                      : null}
+                    {!isAddressLoading && addressSuggestions.length === 0 && addressQuery.trim().length >= 3 ? (
+                      <div className="address-suggestion-muted">Aucune suggestion pour cette saisie.</div>
+                    ) : null}
+                    {addressLookupError ? <div className="address-suggestion-error">{addressLookupError}</div> : null}
+                  </div>
+                ) : null}
+              </div>
             </label>
             <label className="field">
               <span>Météo</span>
@@ -535,22 +680,93 @@ export function MissionCreator() {
               </select>
             </label>
             <label className="field">
-              <span>Nombre de clients</span>
+              <span>Rayon de recherche ({sandbox.search_radius_km.toFixed(1)} km)</span>
+              <input
+                type="range"
+                min={SEARCH_MIN_RADIUS_KM}
+                max={SEARCH_MAX_RADIUS_KM}
+                step={0.1}
+                value={sandbox.search_radius_km}
+                onChange={(event) =>
+                  setSandbox((prev) => ({
+                    ...prev,
+                    search_radius_km: Number(event.target.value),
+                  }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Nombre de colis</span>
               <input
                 type="number"
-                value={sandbox.num_clients}
-                onChange={(event) => setSandbox((prev) => ({ ...prev, num_clients: Number(event.target.value) }))}
+                min={1}
+                max={SEARCH_MAX_CLIENTS}
+                value={requestedClients}
+                onChange={(event) =>
+                  setSandbox((prev) => ({
+                    ...prev,
+                    num_clients: Number(event.target.value),
+                  }))
+                }
               />
             </label>
             <label className="field">
               <span>Budget</span>
               <input
                 type="number"
-                value={sandbox.budget}
+                min={0}
+                value={requestedBudget}
                 onChange={(event) => setSandbox((prev) => ({ ...prev, budget: Number(event.target.value) }))}
               />
             </label>
+            <label className="field">
+              <span>Coût traîneau</span>
+              <input
+                type="number"
+                min={0}
+                value={requestedSleighCost}
+                onChange={(event) => setSandbox((prev) => ({ ...prev, sleigh_cost: Number(event.target.value) }))}
+              />
+            </label>
           </div>
+          {!canAutocompleteAddress ? (
+            <div className="error-box">
+              L&apos;autocompletion d&apos;adresse est indisponible: variable `NEXT_PUBLIC_MAPBOX_TOKEN` manquante.
+            </div>
+          ) : null}
+          <div className="salon-zone-metrics">
+            <div className="salon-zone-metric">
+              <span>Adresse sélectionnée</span>
+              <strong>{selectedAddress?.label ?? "Selection requise"}</strong>
+            </div>
+            <div className="salon-zone-metric">
+              <span>Surface couverte</span>
+              <strong>{areaKm2.toFixed(1)} km²</strong>
+            </div>
+            <div className="salon-zone-metric">
+              <span>Maximum colis autorisé</span>
+              <strong>{maxClientsAllowed}</strong>
+            </div>
+            <div className="salon-zone-metric">
+              <span>Demande actuelle</span>
+              <strong className={exceedsClientsLimit ? "salon-limit-breach" : undefined}>{requestedClients}</strong>
+            </div>
+          </div>
+          <SearchAreaMap centerLat={mapCenter.lat} centerLon={mapCenter.lon} radiusKm={sandbox.search_radius_km} />
+          {exceedsClientsLimit ? (
+            <div className="error-box">
+              La zone actuelle autorise au maximum {maxClientsAllowed} colis. Réduis le nombre demandé ou augmente le
+              rayon.
+            </div>
+          ) : !hasAddressSelection ? (
+            <div className="error-box">
+              Sélectionne une adresse dans la liste pour verrouiller le point central avant de générer.
+            </div>
+          ) : (
+            <div className="tag" style={{ width: "fit-content" }}>
+              Zone valide: la génération restera dans le cercle choisi.
+            </div>
+          )}
           <div className="salon-control-footer">
             <label className="tag" style={{ width: "fit-content" }}>
               <input
@@ -560,7 +776,29 @@ export function MissionCreator() {
               />
               Incidents aléatoires
             </label>
-            <button className="primary-button" onClick={() => createMutation.mutate({ ...sandbox, level: null })}>
+            <button
+              className="primary-button"
+              disabled={createMutation.isPending || exceedsClientsLimit || !hasAddressSelection}
+              onClick={() => {
+                if (!selectedAddress) {
+                  return;
+                }
+                createMutation.mutate({
+                  zone: selectedAddress.label,
+                  city: weatherLocation,
+                  center_lat: selectedAddress.lat,
+                  center_lon: selectedAddress.lon,
+                  search_radius_km: sandbox.search_radius_km,
+                  max_clients: maxClientsAllowed,
+                  num_clients: requestedClients,
+                  budget: requestedBudget,
+                  sleigh_cost: requestedSleighCost,
+                  weather_key: sandbox.weather_key,
+                  random_incidents: sandbox.random_incidents,
+                  level: null,
+                });
+              }}
+            >
               {createMutation.isPending ? "Création..." : "Créer la mission"}
             </button>
           </div>

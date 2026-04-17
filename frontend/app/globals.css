@@ -180,6 +180,57 @@ select {
   gap: 20px;
 }
 
+.landing-entry-hero {
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  align-items: stretch;
+}
+
+.landing-entry-copy {
+  align-content: start;
+}
+
+.landing-entry-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2.8rem, 7vw, 5.4rem);
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+}
+
+.landing-route-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.landing-route-pill {
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.landing-auth-panel {
+  align-content: start;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(17, 36, 52, 0.26);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.landing-auth-panel strong {
+  color: white;
+}
+
+.landing-auth-panel .muted {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.landing-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .grid-2,
 .grid-3,
 .grid-4 {
@@ -1026,6 +1077,93 @@ select {
     linear-gradient(135deg, rgba(23, 50, 77, 0.05), rgba(193, 69, 47, 0.08));
 }
 
+.salon-zone-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.address-autocomplete {
+  position: relative;
+}
+
+.address-suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 25;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(77, 52, 43, 0.18);
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 12px 24px rgba(52, 36, 29, 0.12);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.address-suggestion-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(23, 50, 77, 0.08);
+  background: rgba(23, 50, 77, 0.04);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.address-suggestion-item:hover {
+  background: rgba(193, 69, 47, 0.08);
+  border-color: rgba(193, 69, 47, 0.2);
+}
+
+.address-suggestion-muted {
+  color: var(--muted);
+  font-size: 0.86rem;
+  padding: 6px 4px;
+}
+
+.address-suggestion-error {
+  color: #9f2820;
+  font-size: 0.84rem;
+  padding: 6px 4px;
+}
+
+.salon-zone-metric {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(23, 50, 77, 0.1);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.salon-zone-metric span,
+.salon-zone-metric strong {
+  display: block;
+}
+
+.salon-zone-metric span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.salon-zone-metric strong {
+  margin-top: 4px;
+}
+
+.salon-limit-breach {
+  color: #9f2820;
+}
+
+.search-area-map-frame {
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(77, 52, 43, 0.12);
+  box-shadow: 0 10px 24px rgba(52, 36, 29, 0.1);
+}
+
 .campaign-shell {
   position: relative;
   overflow: hidden;
@@ -1278,6 +1416,8 @@ select {
   .salon-hero-grid,
   .salon-stage-grid,
   .landing-grid,
+  .landing-entry-hero,
+  .salon-zone-metrics,
   .campaign-hero,
   .campaign-meta-grid,
   .campaign-finale-grid {
@@ -1317,6 +1457,7 @@ select {
   .salon-control-footer,
   .player-banner-card,
   .player-banner-actions,
+  .landing-hero-actions,
   .salon-panel-head,
   .salon-feed-row,
   .salon-section-head {

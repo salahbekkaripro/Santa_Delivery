@@ -1,6 +1,12 @@
 export type MissionConfig = {
   mission_id?: string;
   zone: string;
+  city?: string;
+  center_lat?: number;
+  center_lon?: number;
+  search_radius_km?: number;
+  max_clients?: number;
+  max_clients_allowed?: number;
   num_clients: number;
   budget: number;
   sleigh_cost: number;

@@ -134,6 +134,11 @@ AI_PROFILE_PRESETS = {
 
 PASSWORD_HASH_ITERATIONS = 120_000
 PASSWORD_RESET_TTL_MINUTES = 30
+SEARCH_MIN_RADIUS_KM = 0.5
+SEARCH_MAX_RADIUS_KM = 30.0
+SEARCH_CLIENT_DENSITY_PER_KM2 = 2.0
+SEARCH_MIN_CLIENTS = 8
+SEARCH_MAX_CLIENTS = 200
 
 
 def _read_json(path: str | Path, default=None):
@@ -168,6 +173,40 @@ def _validate_email(value: str) -> str:
     if "@" not in email or "." not in email.split("@")[-1]:
         raise ValueError("Adresse email invalide")
     return email
+
+
+def _max_clients_for_radius(radius_km: float) -> int:
+    area_km2 = float(np.pi) * float(radius_km) * float(radius_km)
+    capacity = int(area_km2 * SEARCH_CLIENT_DENSITY_PER_KM2)
+    capacity = max(SEARCH_MIN_CLIENTS, capacity)
+    return min(SEARCH_MAX_CLIENTS, capacity)
+
+
+def _validate_search_area_constraints(payload: dict) -> tuple[float | None, int | None]:
+    radius_raw = payload.get("search_radius_km")
+    if radius_raw is None:
+        return None, None
+    radius_km = float(radius_raw)
+    if radius_km < SEARCH_MIN_RADIUS_KM or radius_km > SEARCH_MAX_RADIUS_KM:
+        raise ValueError(
+            f"Le rayon doit etre entre {SEARCH_MIN_RADIUS_KM:.1f} km et {SEARCH_MAX_RADIUS_KM:.0f} km."
+        )
+    max_clients_allowed = _max_clients_for_radius(radius_km)
+    requested_clients = int(payload.get("num_clients", 0))
+    center_lat = payload.get("center_lat")
+    center_lon = payload.get("center_lon")
+    if center_lat is None or center_lon is None:
+        raise ValueError("Point central manquant: selectionnez une adresse valide avant de lancer la generation.")
+    lat_value = float(center_lat)
+    lon_value = float(center_lon)
+    if lat_value < -90.0 or lat_value > 90.0 or lon_value < -180.0 or lon_value > 180.0:
+        raise ValueError("Coordonnees du point central invalides.")
+    if requested_clients > max_clients_allowed:
+        raise ValueError(
+            "Nombre de colis trop eleve pour la zone delimitee: "
+            f"{requested_clients} demandes, maximum {max_clients_allowed} pour un rayon de {radius_km:.1f} km."
+        )
+    return radius_km, max_clients_allowed
 
 
 def _hash_password(password: str) -> str:
@@ -532,6 +571,7 @@ def create_mission(payload: dict) -> dict:
     paths = mission_paths(mission_id)
     paths.ensure_directories()
     repository.init_db()
+    radius_km, max_clients_allowed = _validate_search_area_constraints(payload)
 
     success, message = generate_new_zone(
         payload["zone"],
@@ -540,6 +580,9 @@ def create_mission(payload: dict) -> dict:
         graph_path=str(paths.graph_file),
         time_matrix_path=str(paths.time_matrix_file),
         dist_matrix_path=str(paths.dist_matrix_file),
+        center_lat=payload.get("center_lat"),
+        center_lon=payload.get("center_lon"),
+        search_radius_km=radius_km,
     )
     if not success:
         raise ValueError(message or "Generation de zone impossible")
@@ -547,7 +590,7 @@ def create_mission(payload: dict) -> dict:
     if payload.get("weather_key") == "random":
         weather = get_simulated_weather(weather_file=str(paths.weather_file))
     elif payload.get("weather_key") == "real":
-        weather = get_real_weather(payload["zone"], weather_file=str(paths.weather_file))
+        weather = get_real_weather(str(payload.get("city") or payload["zone"]), weather_file=str(paths.weather_file))
     else:
         weather = dict(WEATHER_MAP.get(payload.get("weather_key", "Clear"), WEATHER_MAP["Clear"]))
         _write_json(paths.weather_file, weather)
@@ -556,6 +599,7 @@ def create_mission(payload: dict) -> dict:
         "mission_id": mission_id,
         **payload,
         "generation_message": message,
+        "max_clients_allowed": max_clients_allowed,
     }
     _write_json(paths.mission_file, mission)
     _write_json(paths.human_state_file, default_human_state())
