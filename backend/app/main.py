@@ -123,6 +123,7 @@ def get_human_route_options(mission_id: str, payload: HumanRouteOptionsRequest) 
             mission_id,
             from_id=payload.from_id,
             to_id=payload.to_id,
+            sleigh_id=payload.sleigh_id,
             speed_multiplier=payload.speed_multiplier,
             k=payload.k,
         )

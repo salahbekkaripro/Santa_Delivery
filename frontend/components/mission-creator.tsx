@@ -61,6 +61,7 @@ const SEARCH_MIN_CLIENTS = 8;
 const SEARCH_MAX_CLIENTS = 200;
 const SEARCH_MIN_RADIUS_KM = 0.5;
 const SEARCH_MAX_RADIUS_KM = 30;
+const SALON_REFRESH_INTERVAL_MS = 30_000;
 
 type AddressSuggestion = {
   label: string;
@@ -205,13 +206,15 @@ export function MissionCreator() {
   const missionsQuery = useQuery({
     queryKey: ["missions", "salon"],
     queryFn: () => getMissions(24),
-    refetchInterval: 15000,
+    refetchInterval: SALON_REFRESH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
   });
 
   const leaderboardQuery = useQuery({
     queryKey: ["leaderboard", "salon"],
     queryFn: () => getLeaderboard(5),
-    refetchInterval: 15000,
+    refetchInterval: SALON_REFRESH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
   });
 
   const recentMissions = useMemo(() => missionsQuery.data?.missions ?? [], [missionsQuery.data?.missions]);
@@ -486,7 +489,7 @@ export function MissionCreator() {
           <div className="panel stack salon-feed-panel">
             <div className="salon-panel-head">
               <strong>Flux mission</strong>
-              <span className="muted">Actualisé toutes les 15 s</span>
+              <span className="muted">Actualisé toutes les 30 s</span>
             </div>
             {activityFeed.length > 0 ? (
               activityFeed.map((mission) => (

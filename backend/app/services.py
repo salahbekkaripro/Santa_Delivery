@@ -8,8 +8,11 @@ import secrets
 import sqlite3
 import unicodedata
 import uuid
+from collections import OrderedDict
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 
 import numpy as np
 
@@ -19,6 +22,7 @@ from scripts.benchmark_engine import calculate_benchmark
 from scripts.generator_engine import generate_new_zone
 from scripts.mission_paths import MissionPaths, mission_paths
 from scripts.routing_payloads import (
+    DEFAULT_DEPARTURE_TIME,
     WEATHER_MAP,
     build_ai_payload,
     build_human_eta_payload,
@@ -33,6 +37,7 @@ from scripts.routing_payloads import (
     read_points,
     route_length_m,
     route_time_s,
+    parse_clock_to_seconds,
     serialize_human_state,
     summarize_segments,
 )
@@ -139,6 +144,13 @@ SEARCH_MAX_RADIUS_KM = 30.0
 SEARCH_CLIENT_DENSITY_PER_KM2 = 2.0
 SEARCH_MIN_CLIENTS = 8
 SEARCH_MAX_CLIENTS = 200
+ROUTE_OPTIONS_CACHE_MAX = 512
+GRAPH_CACHE_MAX = 32
+_route_options_cache: OrderedDict[tuple, list[dict]] = OrderedDict()
+_route_options_cache_lock = Lock()
+_graph_cache: OrderedDict[tuple[str, int], object] = OrderedDict()
+_graph_cache_lock = Lock()
+DEFAULT_DEPARTURE_TIME_S = parse_clock_to_seconds(DEFAULT_DEPARTURE_TIME)
 
 
 def _read_json(path: str | Path, default=None):
@@ -207,6 +219,206 @@ def _validate_search_area_constraints(payload: dict) -> tuple[float | None, int 
             f"{requested_clients} demandes, maximum {max_clients_allowed} pour un rayon de {radius_km:.1f} km."
         )
     return radius_km, max_clients_allowed
+
+
+def _route_options_cache_get(key: tuple) -> list[dict] | None:
+    with _route_options_cache_lock:
+        cached = _route_options_cache.get(key)
+        if cached is None:
+            return None
+        _route_options_cache.move_to_end(key)
+        return deepcopy(cached)
+
+
+def _route_options_cache_set(key: tuple, options: list[dict]) -> None:
+    with _route_options_cache_lock:
+        _route_options_cache[key] = deepcopy(options)
+        _route_options_cache.move_to_end(key)
+        while len(_route_options_cache) > ROUTE_OPTIONS_CACHE_MAX:
+            _route_options_cache.popitem(last=False)
+
+
+def _graph_cache_key(graph_path: str | Path) -> tuple[str, int]:
+    path = Path(graph_path)
+    resolved = str(path.resolve())
+    mtime_ns = int(path.stat().st_mtime_ns) if path.exists() else 0
+    return resolved, mtime_ns
+
+
+def _load_graph_cached(graph_path: str | Path):
+    key = _graph_cache_key(graph_path)
+    with _graph_cache_lock:
+        cached = _graph_cache.get(key)
+        if cached is not None:
+            _graph_cache.move_to_end(key)
+            return cached
+    graph = load_graph(graph_path)
+    with _graph_cache_lock:
+        _graph_cache[key] = graph
+        _graph_cache.move_to_end(key)
+        while len(_graph_cache) > GRAPH_CACHE_MAX:
+            _graph_cache.popitem(last=False)
+    return graph
+
+
+def _incident_cache_token(incident_segments: list[dict] | None) -> str:
+    edges: list[str] = []
+    for segment in incident_segments or []:
+        route_nodes = [int(node_id) for node_id in segment.get("route_nodes", [])]
+        if len(route_nodes) < 2:
+            continue
+        for source, target in zip(route_nodes[:-1], route_nodes[1:]):
+            undirected = tuple(sorted((int(source), int(target))))
+            edges.append(f"{undirected[0]}-{undirected[1]}")
+    if not edges:
+        return "none"
+    payload = "|".join(sorted(edges))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _segment_base_time_s(segment: dict) -> float:
+    return float(segment.get("base_time_s", segment.get("time_s", 0.0)))
+
+
+def _sleigh_elapsed_time_s(state, sleigh_id: int, time_factor: float) -> float:
+    segments = state.segments_by_sleigh.get(str(int(sleigh_id)), [])
+    base_time_s = sum(_segment_base_time_s(segment) for segment in segments)
+    return base_time_s * float(time_factor)
+
+
+def _sleigh_current_load_kg(df, state, sleigh_id: int) -> float:
+    routes = state.routes_by_sleigh.get(str(int(sleigh_id)), [])
+    if not routes:
+        return 0.0
+    known_ids = set(int(value) for value in df["id"].astype(int).tolist())
+    client_ids = [int(route_id) for route_id in routes if int(route_id) in known_ids and int(route_id) != 0]
+    if not client_ids:
+        return 0.0
+    return float(df[df["id"].isin(client_ids)]["poids_colis"].sum())
+
+
+def _annotate_route_options_feasibility(
+    df,
+    state,
+    options: list[dict],
+    *,
+    to_id: int,
+    sleigh_id: int,
+    time_factor: float,
+    incident_segments: list[dict] | None = None,
+) -> list[dict]:
+    if not options:
+        return []
+
+    destination_rows = df[df["id"] == int(to_id)]
+    is_known_client = not destination_rows.empty and int(to_id) != 0
+    destination = destination_rows.iloc[0] if is_known_client else None
+
+    current_time_s = _sleigh_elapsed_time_s(state, sleigh_id, time_factor)
+    current_load_kg = _sleigh_current_load_kg(df, state, sleigh_id)
+    vehicle_capacity = float(state.vehicle_capacity)
+    active_route_ids = {int(route_id) for route_id in state.routes_by_sleigh.get(str(int(sleigh_id)), [])}
+    assigned_elsewhere = int(to_id) in set(state.assigned_clients) and int(to_id) not in active_route_ids
+    tw_end = float(destination.get("tw_end", 28800.0)) if destination is not None else 28800.0
+    target_weight_kg = float(destination.get("poids_colis", 0.0)) if destination is not None else 0.0
+    blocked_directed_edges: set[tuple[int, int]] = set()
+    blocked_undirected_edges: set[tuple[int, int]] = set()
+    for segment in incident_segments or []:
+        route_nodes = [int(node) for node in segment.get("route_nodes", [])]
+        if len(route_nodes) < 2:
+            continue
+        for src, dst in zip(route_nodes[:-1], route_nodes[1:]):
+            edge = (int(src), int(dst))
+            blocked_directed_edges.add(edge)
+            blocked_undirected_edges.add(tuple(sorted(edge)))
+
+    annotated: list[dict] = []
+    for option in options:
+        next_option = dict(option)
+        option_time_s = float(next_option.get("time_s", 0.0))
+        arrival_eta_s = current_time_s + option_time_s
+        arrival_clock = format_clock(DEFAULT_DEPARTURE_TIME_S + arrival_eta_s)
+
+        badges: list[str] = []
+        is_feasible = True
+        projected_load_kg = current_load_kg
+        projected_overload_kg = 0.0
+        route_nodes = [int(node_id) for node_id in next_option.get("route_nodes", [])]
+
+        has_incident_overlap = False
+        if len(route_nodes) >= 2 and blocked_undirected_edges:
+            route_directed_edges = {(int(src), int(dst)) for src, dst in zip(route_nodes[:-1], route_nodes[1:])}
+            route_undirected_edges = {tuple(sorted(edge)) for edge in route_directed_edges}
+            has_incident_overlap = bool(
+                (route_directed_edges & blocked_directed_edges)
+                or (route_undirected_edges & blocked_undirected_edges)
+            )
+        if has_incident_overlap:
+            is_feasible = False
+            badges.append("Axe incident")
+
+        if is_known_client:
+            projected_load_kg = current_load_kg + target_weight_kg
+            projected_overload_kg = max(0.0, projected_load_kg - vehicle_capacity)
+            slack_s = tw_end - arrival_eta_s
+
+            if assigned_elsewhere:
+                is_feasible = False
+                badges.append("Déjà assigné")
+            if projected_overload_kg > 0:
+                is_feasible = False
+                badges.append("Surcharge")
+            if slack_s < 0:
+                is_feasible = False
+                badges.append("Risque retard")
+            elif slack_s < 900:
+                badges.append("Risque retard")
+
+        if not badges:
+            badges.append("Sûr")
+
+        next_option["is_feasible"] = is_feasible
+        next_option["feasibility_badges"] = badges
+        next_option["projected_arrival_clock"] = arrival_clock
+        next_option["projected_load_kg"] = projected_load_kg
+        next_option["projected_overload_kg"] = projected_overload_kg
+        annotated.append(next_option)
+
+    annotated.sort(key=lambda item: (not bool(item.get("is_feasible", True)), float(item["time_s"]), float(item["dist_m"])))
+    return annotated
+
+
+def _strict_route_metrics(graph, route_nodes: list[int]) -> tuple[float, float]:
+    nodes = [int(node_id) for node_id in route_nodes]
+    if len(nodes) < 2:
+        raise ValueError("Segment invalide: route vide.")
+
+    total_dist_m = 0.0
+    total_base_time_s = 0.0
+    fallback_speed_m_s = 30_000.0 / 3600.0
+    for from_node, to_node in zip(nodes[:-1], nodes[1:]):
+        edge_bundle = graph.get_edge_data(from_node, to_node)
+        if not edge_bundle:
+            raise ValueError("Segment invalide: route discontinue sur le graphe.")
+        best_edge = min(
+            edge_bundle.values(),
+            key=lambda edge: (
+                float(edge.get("travel_time", 1e12)),
+                float(edge.get("length", 1e12)),
+            ),
+        )
+        length_m = float(best_edge.get("length", 0.0))
+        base_time_s = float(best_edge.get("travel_time", length_m / fallback_speed_m_s))
+        total_dist_m += length_m
+        total_base_time_s += base_time_s
+    return total_dist_m, total_base_time_s
+
+
+def _infeasible_segment_message(option: dict) -> str:
+    badges = [str(badge) for badge in option.get("feasibility_badges", [])]
+    if not badges:
+        return "Segment non faisable."
+    return f"Segment non faisable: {', '.join(badges)}."
 
 
 def _hash_password(password: str) -> str:
@@ -685,19 +897,59 @@ def get_mission(mission_id: str) -> dict:
     return mission_payload
 
 
-def get_human_route_options(mission_id: str, from_id: int, to_id: int, speed_multiplier: float, k: int = 3) -> dict:
+def get_human_route_options(
+    mission_id: str,
+    from_id: int,
+    to_id: int,
+    sleigh_id: int,
+    speed_multiplier: float,
+    k: int = 3,
+) -> dict:
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
     df = read_points(paths.data_file)
-    graph = load_graph(paths.graph_file)
+    graph = _load_graph_cached(paths.graph_file)
     
     from_lat, from_lon = get_point_latlon(df, int(from_id), graph=graph)
     to_lat, to_lon = get_point_latlon(df, int(to_id), graph=graph)
 
     weather = load_weather(paths.weather_file, mission.get("weather_key"))
     time_factor = float(weather.get("factor", 1.0)) / speed_multiplier
-    options = compute_route_options(graph, from_lat, from_lon, to_lat, to_lon, time_factor=time_factor, k=k)
+    incidents_payload = _read_json(paths.incidents_file, {"count": 0, "segments": []})
+    incident_segments = list((incidents_payload or {}).get("segments", []))
+    incident_token = _incident_cache_token(incident_segments)
+    cache_key = (
+        str(mission_id),
+        int(from_id),
+        int(to_id),
+        round(float(speed_multiplier), 4),
+        round(float(time_factor), 4),
+        incident_token,
+        int(k),
+    )
+    options = _route_options_cache_get(cache_key)
+    if options is None:
+        options = compute_route_options(
+            graph,
+            from_lat,
+            from_lon,
+            to_lat,
+            to_lon,
+            time_factor=time_factor,
+            k=k,
+            incident_segments=incident_segments,
+        )
+        _route_options_cache_set(cache_key, options)
     human_state = human_state_from_payload(human_state_payload)
     human_state.speed_multiplier = speed_multiplier
+    options = _annotate_route_options_feasibility(
+        df,
+        human_state,
+        options,
+        to_id=int(to_id),
+        sleigh_id=int(sleigh_id),
+        time_factor=float(time_factor),
+        incident_segments=incident_segments,
+    )
     raw_state = serialize_human_state(human_state)
     _write_json(paths.human_state_file, raw_state)
     _sync_snapshot(
@@ -727,6 +979,7 @@ def validate_human_segment(mission_id: str, payload: dict) -> dict:
     
     # Vérifier si c'est un client ou un nœud OSM direct
     df = read_points(paths.data_file)
+    graph = _load_graph_cached(paths.graph_file)
     client_ids = set(df["id"].astype(int).tolist())
     is_client = to_id in client_ids
 
@@ -734,16 +987,42 @@ def validate_human_segment(mission_id: str, payload: dict) -> dict:
         raise ValueError(f"Client {to_id} deja assigne")
 
     selected_route = payload["selected_route"]
+    route_nodes = [int(node) for node in selected_route["route_nodes"]]
+    dist_m, base_time_s = _strict_route_metrics(graph, route_nodes)
+    weather = load_weather(paths.weather_file, mission.get("weather_key"))
+    time_factor = float(weather.get("factor", 1.0)) / max(float(state.speed_multiplier), 0.1)
+    option_payload = {
+        "route_nodes": route_nodes,
+        "geometry": selected_route.get("geometry", []),
+        "dist_m": float(dist_m),
+        "base_time_s": float(base_time_s),
+        "time_s": float(base_time_s) * float(time_factor),
+        "label": str(selected_route.get("label", "Segment")),
+    }
+    incidents_payload = _read_json(paths.incidents_file, {"count": 0, "segments": []})
+    incident_segments = list((incidents_payload or {}).get("segments", []))
+    feasibility = _annotate_route_options_feasibility(
+        df,
+        state,
+        [option_payload],
+        to_id=to_id,
+        sleigh_id=int(payload["sleigh_id"]),
+        time_factor=float(time_factor),
+        incident_segments=incident_segments,
+    )
+    if feasibility and not bool(feasibility[0].get("is_feasible", True)):
+        raise ValueError(_infeasible_segment_message(feasibility[0]))
+
     segment = {
         "variant": "human",
         "sleigh_id": int(payload["sleigh_id"]),
         "from_id": int(payload["from_id"]),
         "to_id": to_id,
-        "route_nodes": [int(node) for node in selected_route["route_nodes"]],
+        "route_nodes": route_nodes,
         "geometry": selected_route.get("geometry", []),
-        "dist_m": float(selected_route["dist_m"]),
-        "base_time_s": float(selected_route.get("base_time_s", selected_route["time_s"])),
-        "time_s": float(selected_route["time_s"]),
+        "dist_m": float(dist_m),
+        "base_time_s": float(base_time_s),
+        "time_s": float(base_time_s) * float(time_factor),
     }
     state.routes_by_sleigh[sleigh_key].append(to_id)
     state.segments_by_sleigh[sleigh_key].append(segment)
@@ -842,10 +1121,12 @@ def suggest_next_stops(mission_id: str, payload: dict) -> dict:
     route = state.routes_by_sleigh.get(sleigh_key, [])
     current_point_id = int(route[-1]) if route else 0
     
-    # Matrice de temps (pour l'ETA et la proximité)
+    # Matrices (temps + distance)
     time_matrix = np.load(paths.time_matrix_file)
+    dist_matrix = np.load(paths.dist_matrix_file)
     id_to_idx = {int(row["id"]): idx for idx, (_, row) in enumerate(df.iterrows())}
     current_idx = id_to_idx[current_point_id]
+    depot_idx = id_to_idx[0]
     
     weather = load_weather(paths.weather_file, mission.get("weather_key"))
     time_factor = float(weather.get("factor", 1.0)) / state.speed_multiplier
@@ -863,6 +1144,9 @@ def suggest_next_stops(mission_id: str, payload: dict) -> dict:
     for client_id in unassigned:
         target_idx = id_to_idx[client_id]
         travel_time = float(time_matrix[current_idx][target_idx]) * time_factor
+        travel_dist_m = float(dist_matrix[current_idx][target_idx])
+        return_time = float(time_matrix[target_idx][depot_idx]) * time_factor
+        return_dist_m = float(dist_matrix[target_idx][depot_idx])
         arrival_time = current_time_s + travel_time
         
         client_row = df[df["id"] == client_id].iloc[0]
@@ -870,31 +1154,40 @@ def suggest_next_stops(mission_id: str, payload: dict) -> dict:
         tw_start = float(client_row.get("tw_start", 0))
         tw_end = float(client_row.get("tw_end", 28800))
         
-        # Heuristique : temps d'approche + pénalité si fenêtre de temps serrée
-        # Si on arrive trop tôt, on attend (pénalité légère)
+        # Heuristique multi-critères:
+        # - temps d'approche (prioritaire)
+        # - retour estimé au depot
+        # - respect fenêtre de temps
+        # - respect capacité
         wait_time = max(0, tw_start - arrival_time)
-        # Si on arrive trop tard, gros malus (infaisable)
-        late_penalty = 0
-        if arrival_time > tw_end:
-            late_penalty = 1000000
-            
-        # Malus si surcharge
-        weight_penalty = 0
-        if current_load + poids > state.vehicle_capacity:
-            weight_penalty = 500000
-            
-        score = travel_time + wait_time * 0.5 + late_penalty + weight_penalty
+        slack = tw_end - arrival_time
+        late_penalty = 0.0 if slack >= 0 else 1_000_000.0 + abs(slack) * 5.0
+        weight_over = max(0.0, (current_load + poids) - state.vehicle_capacity)
+        weight_penalty = 0.0 if weight_over <= 0 else 500_000.0 + weight_over * 100.0
+        urgency_penalty = 0.0 if slack > 1800 else float(max(0.0, 1800.0 - slack)) * 0.25
+        score = (
+            travel_time
+            + return_time * 0.25
+            + wait_time * 0.4
+            + urgency_penalty
+            + late_penalty
+            + weight_penalty
+        )
         
         suggestions.append({
             "client_id": client_id,
             "nom_client": client_row["nom_client"],
             "score": score,
             "travel_time_s": travel_time,
+            "travel_dist_m": travel_dist_m,
+            "return_time_s": return_time,
+            "return_dist_m": return_dist_m,
+            "slack_s": slack,
             "arrival_clock": format_clock(32400 + arrival_time), # 9h + offset
-            "is_feasible": arrival_time <= tw_end and (current_load + poids <= state.vehicle_capacity)
+            "is_feasible": slack >= 0 and (current_load + poids <= state.vehicle_capacity)
         })
         
-    suggestions.sort(key=lambda x: x["score"])
+    suggestions.sort(key=lambda x: (not x["is_feasible"], x["score"], x["travel_time_s"]))
     return {"suggestions": suggestions[:3]}
 
 

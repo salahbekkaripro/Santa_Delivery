@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useRef, useMemo, useState } from 'react';
-import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
+import { useEffect, useMemo, useRef, useState } from "react";
+import mapboxgl from "mapbox-gl";
+import "mapbox-gl/dist/mapbox-gl.css";
 import type { AdjacentNode, ClientPoint, RouteSegment } from "@/lib/types";
 
 // --- SECURE TOKEN ---
@@ -31,7 +31,7 @@ type Props = {
 };
 
 // Helper pour convertir [lat, lon] Leaflet en [lon, lat] Mapbox
-const toMapbox = (coords: [number, number][]): [number, number][] => coords.map(c => [c[1], c[0]]);
+const toMapbox = (coords: [number, number][]): [number, number][] => coords.map((c) => [c[1], c[0]]);
 
 export default function MapboxSurfaceClient({
   depot,
@@ -55,21 +55,32 @@ export default function MapboxSurfaceClient({
 }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
-  const markers = useRef<Record<string, mapboxgl.Marker>>({});
+  const depotMarker = useRef<mapboxgl.Marker | null>(null);
+  const clientMarkers = useRef<Record<number, mapboxgl.Marker>>({});
+  const clientMarkerElements = useRef<Record<number, HTMLDivElement>>({});
   const adjacentMarkers = useRef<mapboxgl.Marker[]>([]);
-  
-  // Utiliser une ref pour onMapClick pour éviter le stale closure
+  const sleighMarkers = useRef<Record<string, mapboxgl.Marker>>({});
+
   const onMapClickRef = useRef(onMapClick);
+  const onClientSelectRef = useRef(onClientSelect);
+  const onAdjacentSelectRef = useRef(onAdjacentSelect);
+
   useEffect(() => {
     onMapClickRef.current = onMapClick;
   }, [onMapClick]);
+  useEffect(() => {
+    onClientSelectRef.current = onClientSelect;
+  }, [onClientSelect]);
+  useEffect(() => {
+    onAdjacentSelectRef.current = onAdjacentSelect;
+  }, [onAdjacentSelect]);
 
   const [isLoaded, setIsLoaded] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(60);
 
-  const assigned = new Set(assignedClientIds);
+  const assigned = useMemo(() => new Set(assignedClientIds), [assignedClientIds]);
 
   // --- ANIMATION LOGIC (Simplified for Mapbox) ---
   const humanSleighPaths = useMemo(() => {
@@ -105,11 +116,11 @@ export default function MapboxSurfaceClient({
 
   // Initialisation Mapbox
   useEffect(() => {
-    if (!mapContainer.current) return;
+    if (!mapContainer.current || map.current) return;
 
     const m = new mapboxgl.Map({
       container: mapContainer.current,
-      style: 'mapbox://styles/mapbox/light-v11',
+      style: "mapbox://styles/mapbox/light-v11",
       center: [depot.lon, depot.lat],
       zoom: 15,
       pitch: 60,
@@ -117,94 +128,82 @@ export default function MapboxSurfaceClient({
       antialias: true
     });
 
-    m.on('load', () => {
+    m.on("load", () => {
       setIsLoaded(true);
-      
-      // Force un resize pour s'assurer que la map occupe tout l'espace
       m.resize();
+      m.addControl(new mapboxgl.NavigationControl(), "top-left");
 
-      // --- AJOUT DES BOUTONS DE NAVIGATION ---
-      m.addControl(new mapboxgl.NavigationControl(), 'top-left');
-
-      // --- AJOUT DES BATIMENTS 3D ---
       m.addLayer({
-        'id': 'add-3d-buildings',
-        'source': 'composite',
-        'source-layer': 'building',
-        'filter': ['==', 'extrude', 'true'],
-        'type': 'fill-extrusion',
-        'minzoom': 14,
-        'paint': {
-          'fill-extrusion-color': '#aaa',
-          'fill-extrusion-height': ['get', 'height'],
-          'fill-extrusion-base': ['get', 'min_height'],
-          'fill-extrusion-opacity': 0.6
+        id: "add-3d-buildings",
+        source: "composite",
+        "source-layer": "building",
+        filter: ["==", "extrude", "true"],
+        type: "fill-extrusion",
+        minzoom: 14,
+        paint: {
+          "fill-extrusion-color": "#aaa",
+          "fill-extrusion-height": ["get", "height"],
+          "fill-extrusion-base": ["get", "min_height"],
+          "fill-extrusion-opacity": 0.6
         }
       });
 
-      m.addSource('human-routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      m.addSource('ai-routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      m.addSource('previews', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      m.addSource('incidents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      m.addSource('adjacents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      m.addSource('future-adjacents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addSource("human-routes", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addSource("ai-routes", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addSource("previews", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addSource("incidents", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addSource("adjacents", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addSource("future-adjacents", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
 
-      m.addLayer({ id: 'human-layer', type: 'line', source: 'human-routes', paint: { 'line-color': '#c1452f', 'line-width': 4, 'line-dasharray': [2, 2] } });
-      m.addLayer({ id: 'ai-layer', type: 'line', source: 'ai-routes', paint: { 'line-color': '#143c5a', 'line-width': 5, 'line-opacity': 0.8 } });
-      m.addLayer({ id: 'preview-layer', type: 'line', source: 'previews', paint: { 'line-color': '#d97706', 'line-width': 6 } });
-      m.addLayer({ id: 'incident-layer', type: 'line', source: 'incidents', paint: { 'line-color': '#991b1b', 'line-width': 5, 'line-dasharray': [1, 2] } });
-      
-      // Couche Niveau 2 (Futur) - Opacité 0.2
-      m.addLayer({ id: 'future-adjacent-layer', type: 'line', source: 'future-adjacents', paint: { 'line-color': '#3b82f6', 'line-width': 2, 'line-dasharray': [2, 2], 'line-opacity': 0.2 } });
+      m.addLayer({ id: "human-layer", type: "line", source: "human-routes", paint: { "line-color": "#c1452f", "line-width": 4, "line-dasharray": [2, 2] } });
+      m.addLayer({ id: "ai-layer", type: "line", source: "ai-routes", paint: { "line-color": "#143c5a", "line-width": 5, "line-opacity": 0.8 } });
+      m.addLayer({ id: "preview-layer", type: "line", source: "previews", paint: { "line-color": "#d97706", "line-width": 6 } });
+      m.addLayer({ id: "incident-layer", type: "line", source: "incidents", paint: { "line-color": "#991b1b", "line-width": 5, "line-dasharray": [1, 2] } });
+
+      m.addLayer({ id: "future-adjacent-layer", type: "line", source: "future-adjacents", paint: { "line-color": "#3b82f6", "line-width": 2, "line-dasharray": [2, 2], "line-opacity": 0.2 } });
       m.addLayer({
-        id: 'future-adjacent-arrows',
-        type: 'symbol',
-        source: 'future-adjacents',
+        id: "future-adjacent-arrows",
+        type: "symbol",
+        source: "future-adjacents",
         layout: {
-          'symbol-placement': 'line',
-          'symbol-spacing': 100,
-          'text-field': '▶',
-          'text-size': 8,
-          'text-keep-upright': false,
-          'text-allow-overlap': true,
-          'text-ignore-placement': true
+          "symbol-placement": "line",
+          "symbol-spacing": 100,
+          "text-field": "▶",
+          "text-size": 8,
+          "text-keep-upright": false,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true
         },
         paint: {
-          'text-color': '#3b82f6',
-          'text-opacity': 0.2
+          "text-color": "#3b82f6",
+          "text-opacity": 0.2
         }
       });
 
-      // Couche Niveau 1 (Immédiat) - Opacité 0.6
-      m.addLayer({ id: 'adjacent-layer', type: 'line', source: 'adjacents', paint: { 'line-color': '#3b82f6', 'line-width': 4, 'line-dasharray': [2, 2], 'line-opacity': 0.6 } });
-      
-      // Couche de flèches pour le sens de circulation
+      m.addLayer({ id: "adjacent-layer", type: "line", source: "adjacents", paint: { "line-color": "#3b82f6", "line-width": 4, "line-dasharray": [2, 2], "line-opacity": 0.6 } });
       m.addLayer({
-        id: 'adjacent-arrows',
-        type: 'symbol',
-        source: 'adjacents',
+        id: "adjacent-arrows",
+        type: "symbol",
+        source: "adjacents",
         layout: {
-          'symbol-placement': 'line',
-          'symbol-spacing': 50,
-          'text-field': '▶',
-          'text-size': 12,
-          'text-keep-upright': false,
-          'text-allow-overlap': true,
-          'text-ignore-placement': true
+          "symbol-placement": "line",
+          "symbol-spacing": 50,
+          "text-field": "▶",
+          "text-size": 12,
+          "text-keep-upright": false,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true
         },
         paint: {
-          'text-color': '#3b82f6',
-          'text-halo-color': '#ffffff',
-          'text-halo-width': 1
+          "text-color": "#3b82f6",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1
         }
       });
 
-      m.on('click', (e) => {
-        // Pour le tracé libre, on veut capter le clic sur la map.
-        // On n'ignore le clic QUE si l'utilisateur a cliqué sur une de nos couches (routes, incidents, adjacents)
-        const layers = ['human-layer', 'ai-layer', 'preview-layer', 'incident-layer', 'adjacent-layer', 'adjacent-arrows'];
+      m.on("click", (e) => {
+        const layers = ["human-layer", "ai-layer", "preview-layer", "incident-layer", "adjacent-layer", "adjacent-arrows"];
         const features = m.queryRenderedFeatures(e.point, { layers });
-        
         if (features.length === 0) {
           onMapClickRef.current?.(e.lngLat.lat, e.lngLat.lng);
         }
@@ -216,13 +215,29 @@ export default function MapboxSurfaceClient({
     return () => {
       m.remove();
       map.current = null;
+      depotMarker.current = null;
+      clientMarkers.current = {};
+      clientMarkerElements.current = {};
+      adjacentMarkers.current = [];
+      sleighMarkers.current = {};
       setIsLoaded(false);
     };
-  }, [depot]); // Se réinitialise si on change de dépôt (nouvelle ville)
+  }, [depot.lat, depot.lon]);
+
+  useEffect(() => {
+    if (!map.current || !isLoaded) {
+      return;
+    }
+    map.current.easeTo({
+      center: [depot.lon, depot.lat],
+      duration: 350,
+      essential: true
+    });
+  }, [depot.lat, depot.lon, isLoaded]);
 
   // Update Routes
   useEffect(() => {
-    if (!map.current || !map.current.isStyleLoaded()) return;
+    if (!map.current || !isLoaded || !map.current.isStyleLoaded()) return;
 
     const updateSource = (id: string, segments: RouteSegment[], visible: boolean) => {
       const source = map.current?.getSource(id) as mapboxgl.GeoJSONSource;
@@ -278,47 +293,83 @@ export default function MapboxSurfaceClient({
       });
       map.current.setPaintProperty('preview-layer', 'line-opacity', ['case', ['==', ['get', 'selected'], true], 1, 0.3]);
     }
-  }, [humanSegments, aiSegments, returnSegments, incidentSegments, previewOptions, selectedPreviewIndex, showHuman, showAi]);
+  }, [
+    humanSegments,
+    aiSegments,
+    returnSegments,
+    incidentSegments,
+    adjacentOptions,
+    futureOptions,
+    previewOptions,
+    selectedPreviewIndex,
+    showHuman,
+    showAi,
+    isLoaded
+  ]);
 
   // Update Markers (Clients & Depot)
   useEffect(() => {
     if (!map.current || !isLoaded) return;
-
-    // Clear old markers if necessary
-    Object.values(markers.current).forEach(m => m.remove());
-    markers.current = {};
-
     // Depot
-    const depotEl = document.createElement('div');
-    depotEl.innerHTML = '🏠';
-    depotEl.style.fontSize = '24px';
-    markers.current['depot'] = new mapboxgl.Marker(depotEl)
-      .setLngLat([depot.lon, depot.lat])
-      .addTo(map.current);
+    if (!depotMarker.current) {
+      const depotEl = document.createElement("div");
+      depotEl.innerHTML = "🏠";
+      depotEl.style.fontSize = "24px";
+      depotMarker.current = new mapboxgl.Marker(depotEl).setLngLat([depot.lon, depot.lat]).addTo(map.current);
+    } else {
+      depotMarker.current.setLngLat([depot.lon, depot.lat]);
+    }
 
-    // Clients
-    clients.forEach(c => {
-      const el = document.createElement('div');
+    // Clients (incremental diff)
+    const nextClientIds = new Set<number>();
+    clients.forEach((c) => {
+      nextClientIds.add(c.id);
+
+      let marker = clientMarkers.current[c.id];
+      let el = clientMarkerElements.current[c.id];
+      if (!marker || !el) {
+        el = document.createElement("div");
+        el.style.width = "16px";
+        el.style.height = "16px";
+        el.style.borderRadius = "50%";
+        el.style.border = "2px solid white";
+        el.style.cursor = "pointer";
+        el.style.boxShadow = "0 2px 4px rgba(0,0,0,0.3)";
+        marker = new mapboxgl.Marker(el).setLngLat([c.lon, c.lat]).addTo(map.current!);
+        clientMarkers.current[c.id] = marker;
+        clientMarkerElements.current[c.id] = el;
+      } else {
+        marker.setLngLat([c.lon, c.lat]);
+      }
+
       const isAssigned = assigned.has(c.id);
       const isSelected = selectedClientId === c.id;
-      
-      el.style.width = '16px';
-      el.style.height = '16px';
-      el.style.borderRadius = '50%';
-      el.style.border = '2px solid white';
-      el.style.backgroundColor = isAssigned ? '#1f8f5f' : isSelected ? '#d97706' : '#c1452f';
-      el.style.cursor = 'pointer';
-      el.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
-      el.title = c.nom_client;
-
-      el.onclick = () => onClientSelect?.(c.id);
-
-      markers.current[c.id] = new mapboxgl.Marker(el)
-        .setLngLat([c.lon, c.lat])
-        .addTo(map.current!);
+      const color = isAssigned ? "#1f8f5f" : isSelected ? "#d97706" : "#c1452f";
+      if (el.dataset.fill !== color) {
+        el.style.backgroundColor = color;
+        el.dataset.fill = color;
+      }
+      if (el.title !== c.nom_client) {
+        el.title = c.nom_client;
+      }
+      el.onclick = () => onClientSelectRef.current?.(c.id);
     });
 
-    // Adjacent Navigation Buttons
+    Object.keys(clientMarkers.current).forEach((rawId) => {
+      const clientId = Number(rawId);
+      if (nextClientIds.has(clientId)) {
+        return;
+      }
+      clientMarkers.current[clientId]?.remove();
+      delete clientMarkers.current[clientId];
+      delete clientMarkerElements.current[clientId];
+    });
+  }, [clients, depot.lat, depot.lon, assigned, selectedClientId, isLoaded]);
+
+  // Adjacent Navigation Buttons
+  useEffect(() => {
+    if (!map.current || !isLoaded) return;
+
     adjacentMarkers.current.forEach(m => m.remove());
     adjacentMarkers.current = [];
 
@@ -335,7 +386,7 @@ export default function MapboxSurfaceClient({
       
       el.onclick = (e) => {
         e.stopPropagation();
-        onAdjacentSelect?.(opt);
+        onAdjacentSelectRef.current?.(opt);
       };
 
       const marker = new mapboxgl.Marker(el)
@@ -343,7 +394,7 @@ export default function MapboxSurfaceClient({
         .addTo(map.current!);
       adjacentMarkers.current.push(marker);
     });
-  }, [clients, depot, assigned, selectedClientId, adjacentOptions]);
+  }, [adjacentOptions, isLoaded]);
 
   // Animation Interval
   useEffect(() => {
@@ -366,34 +417,48 @@ export default function MapboxSurfaceClient({
     const updateSleigh = (id: string, icon: string, pos: [number, number] | null) => {
       const mid = `sleigh-${id}`;
       if (!pos) {
-        markers.current[mid]?.remove();
-        delete markers.current[mid];
+        sleighMarkers.current[mid]?.remove();
+        delete sleighMarkers.current[mid];
         return;
       }
-      if (!markers.current[mid]) {
-        const el = document.createElement('div');
+      if (!sleighMarkers.current[mid]) {
+        const el = document.createElement("div");
         el.innerHTML = icon;
-        el.style.fontSize = '32px';
-        el.style.filter = 'drop-shadow(0 2px 4px rgba(0,0,0,0.5))';
-        markers.current[mid] = new mapboxgl.Marker(el).setLngLat(pos).addTo(map.current!);
+        el.style.fontSize = "32px";
+        el.style.filter = "drop-shadow(0 2px 4px rgba(0,0,0,0.5))";
+        sleighMarkers.current[mid] = new mapboxgl.Marker(el).setLngLat(pos).addTo(map.current!);
       } else {
-        markers.current[mid].setLngLat(pos);
+        sleighMarkers.current[mid].setLngLat(pos);
       }
     };
+
+    const activeSleighIds = new Set<string>();
 
     // Pour chaque traineau humain
     if (showHuman) {
       Object.entries(humanSleighPaths).forEach(([id, segs]) => {
-        updateSleigh(`h-${id}`, '🎅', getPositionAtTime(segs, currentTime));
+        const key = `sleigh-h-${id}`;
+        activeSleighIds.add(key);
+        updateSleigh(`h-${id}`, "🎅", getPositionAtTime(segs, currentTime));
       });
     }
     // Pour chaque traineau IA
     if (showAi) {
       Object.entries(aiSleighPaths).forEach(([id, segs]) => {
-        updateSleigh(`a-${id}`, '🤖', getPositionAtTime(segs, currentTime));
+        const key = `sleigh-a-${id}`;
+        activeSleighIds.add(key);
+        updateSleigh(`a-${id}`, "🤖", getPositionAtTime(segs, currentTime));
       });
     }
-  }, [currentTime, showHuman, showAi, humanSleighPaths, aiSleighPaths]);
+
+    Object.entries(sleighMarkers.current).forEach(([markerId, marker]) => {
+      if (activeSleighIds.has(markerId)) {
+        return;
+      }
+      marker.remove();
+      delete sleighMarkers.current[markerId];
+    });
+  }, [currentTime, showHuman, showAi, humanSleighPaths, aiSleighPaths, isLoaded]);
 
   return (
     <div className="mapbox-shell" style={{ position: "relative", width: '100%', height: '100%', borderRadius: '22px', overflow: 'hidden' }}>

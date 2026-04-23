@@ -37,12 +37,17 @@ function normalizePlayer(payload: {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const headers = new Headers(init?.headers ?? undefined);
+  const hasBody = init?.body !== undefined && init?.body !== null;
+  if (hasBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
+    method,
+    headers,
     cache: "no-store"
   });
 
@@ -175,7 +180,10 @@ export function getMissions(limit: number = 50) {
   return apiFetch<{ missions: MissionSnapshot[] }>(`/api/missions?limit=${limit}`);
 }
 
-export function getRouteOptions(missionId: string, payload: { from_id: number; to_id: number; speed_multiplier: number; k?: number }) {
+export function getRouteOptions(
+  missionId: string,
+  payload: { from_id: number; to_id: number; sleigh_id: number; speed_multiplier: number; k?: number }
+) {
   return apiFetch<{ options: RouteOption[] }>(`/api/missions/${missionId}/human/route-options`, {
     method: "POST",
     body: JSON.stringify(payload)

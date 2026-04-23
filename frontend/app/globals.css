@@ -381,6 +381,18 @@ select {
   box-shadow: 0 0 0 2px rgba(193, 69, 47, 0.12);
 }
 
+.option-card.is-infeasible {
+  background: rgba(236, 228, 222, 0.78);
+  border-color: rgba(150, 119, 106, 0.32);
+  filter: grayscale(0.35);
+  opacity: 0.72;
+}
+
+.option-card.is-infeasible strong,
+.option-card.is-infeasible .muted {
+  color: #7a6358;
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;

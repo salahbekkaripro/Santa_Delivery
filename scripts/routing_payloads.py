@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
+from threading import Lock
+from typing import Any
+from collections import OrderedDict
 
 import networkx as nx
 import osmnx as ox
@@ -21,6 +25,9 @@ WEATHER_MAP: dict[str, dict[str, float | str]] = {
 }
 
 DEFAULT_DEPARTURE_TIME = "18:00"
+INCIDENT_GRAPH_CACHE_MAX = 32
+_incident_graph_cache: OrderedDict[tuple[int, int, str], Any] = OrderedDict()
+_incident_graph_cache_lock = Lock()
 
 
 @dataclass
@@ -127,17 +134,119 @@ def _format_minutes(seconds: float) -> str:
     return f"{minutes} min"
 
 
-def compute_route_options(
-    graph,
-    from_lat: float,
-    from_lon: float,
-    to_lat: float,
-    to_lon: float,
-    time_factor: float = 1.0,
-    k: int = 3,
-) -> list[dict]:
-    origin = ox.distance.nearest_nodes(graph, X=float(from_lon), Y=float(from_lat))
-    dest = ox.distance.nearest_nodes(graph, X=float(to_lon), Y=float(to_lat))
+def _route_edge_set(route_nodes: list[int]) -> set[tuple[int, int]]:
+    if len(route_nodes) < 2:
+        return set()
+    return {(int(u), int(v)) for u, v in zip(route_nodes[:-1], route_nodes[1:])}
+
+
+def _route_overlap_ratio(route_a: list[int], route_b: list[int]) -> float:
+    edges_a = _route_edge_set(route_a)
+    edges_b = _route_edge_set(route_b)
+    if not edges_a or not edges_b:
+        return 0.0
+    inter = len(edges_a & edges_b)
+    union = len(edges_a | edges_b)
+    if union == 0:
+        return 0.0
+    return float(inter) / float(union)
+
+
+def _pick_diverse_options(options: list[dict[str, Any]], k: int) -> list[dict[str, Any]]:
+    if len(options) <= k:
+        return options
+
+    selected: list[dict[str, Any]] = [options[0]]
+    remaining = options[1:]
+    overlap_threshold = 0.65
+
+    while remaining and len(selected) < k:
+        picked_idx = None
+        for idx, candidate in enumerate(remaining):
+            overlap = max(
+                _route_overlap_ratio(candidate["route_nodes"], kept["route_nodes"])
+                for kept in selected
+            )
+            if overlap <= overlap_threshold:
+                picked_idx = idx
+                break
+
+        if picked_idx is None:
+            picked_idx = 0
+        selected.append(remaining.pop(picked_idx))
+
+    return selected
+
+
+def _incident_edge_sets(incident_segments: list[dict] | None) -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
+    blocked_directed: set[tuple[int, int]] = set()
+    blocked_undirected: set[tuple[int, int]] = set()
+    for segment in incident_segments or []:
+        route_nodes = [int(node_id) for node_id in segment.get("route_nodes", [])]
+        if len(route_nodes) < 2:
+            continue
+        for source, target in zip(route_nodes[:-1], route_nodes[1:]):
+            edge = (int(source), int(target))
+            blocked_directed.add(edge)
+            blocked_undirected.add(tuple(sorted(edge)))
+    return blocked_directed, blocked_undirected
+
+
+def _route_has_incident_overlap(
+    route_nodes: list[int],
+    blocked_directed: set[tuple[int, int]],
+    blocked_undirected: set[tuple[int, int]],
+) -> bool:
+    if len(route_nodes) < 2 or (not blocked_directed and not blocked_undirected):
+        return False
+    route_directed = {(int(source), int(target)) for source, target in zip(route_nodes[:-1], route_nodes[1:])}
+    route_undirected = {tuple(sorted(edge)) for edge in route_directed}
+    return bool((route_directed & blocked_directed) or (route_undirected & blocked_undirected))
+
+
+def _remove_incident_edges(graph, blocked_undirected: set[tuple[int, int]]):
+    if not blocked_undirected:
+        return graph
+    cleaned = graph.copy()
+    for source, target in blocked_undirected:
+        if cleaned.has_edge(source, target):
+            keys = list(cleaned[source][target].keys())
+            for key in keys:
+                cleaned.remove_edge(source, target, key=key)
+        if cleaned.has_edge(target, source):
+            keys = list(cleaned[target][source].keys())
+            for key in keys:
+                cleaned.remove_edge(target, source, key=key)
+    return cleaned
+
+
+def _incident_signature(blocked_undirected: set[tuple[int, int]]) -> str:
+    if not blocked_undirected:
+        return "none"
+    payload = "|".join(f"{source}-{target}" for source, target in sorted(blocked_undirected))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _cached_incident_safe_graph(graph, blocked_undirected: set[tuple[int, int]]):
+    if not blocked_undirected:
+        return graph
+    signature = _incident_signature(blocked_undirected)
+    cache_key = (id(graph), int(graph.number_of_edges()), signature)
+    with _incident_graph_cache_lock:
+        cached = _incident_graph_cache.get(cache_key)
+        if cached is not None:
+            _incident_graph_cache.move_to_end(cache_key)
+            return cached
+    safer_graph = _remove_incident_edges(graph, blocked_undirected)
+    with _incident_graph_cache_lock:
+        _incident_graph_cache[cache_key] = safer_graph
+        _incident_graph_cache.move_to_end(cache_key)
+        while len(_incident_graph_cache) > INCIDENT_GRAPH_CACHE_MAX:
+            _incident_graph_cache.popitem(last=False)
+    return safer_graph
+
+
+def _collect_candidate_routes(graph, origin: int, dest: int, k_pool: int) -> list[list[int]]:
     routes: list[list[int]] = []
     try:
         fastest = ox.routing.shortest_path(graph, origin, dest, weight="travel_time")
@@ -146,12 +255,56 @@ def compute_route_options(
     except Exception:
         pass
     try:
-        routes.extend(list(islice(ox.routing.k_shortest_paths(graph, origin, dest, k, weight="length"), k)))
+        shortest = ox.routing.shortest_path(graph, origin, dest, weight="length")
+        if shortest:
+            routes.append(shortest)
     except Exception:
         pass
-    if not routes:
-        fallback = ox.routing.shortest_path(graph, origin, dest, weight="length")
-        routes = [fallback] if fallback else []
+    try:
+        routes.extend(list(islice(ox.routing.k_shortest_paths(graph, origin, dest, k_pool, weight="length"), k_pool)))
+    except Exception:
+        pass
+    try:
+        routes.extend(
+            list(
+                islice(
+                    ox.routing.k_shortest_paths(graph, origin, dest, k_pool, weight="travel_time"),
+                    k_pool,
+                )
+            )
+        )
+    except Exception:
+        pass
+    if routes:
+        return routes
+    fallback = ox.routing.shortest_path(graph, origin, dest, weight="length")
+    return [fallback] if fallback else []
+
+
+def compute_route_options(
+    graph,
+    from_lat: float,
+    from_lon: float,
+    to_lat: float,
+    to_lon: float,
+    time_factor: float = 1.0,
+    k: int = 3,
+    incident_segments: list[dict] | None = None,
+) -> list[dict]:
+    origin = ox.distance.nearest_nodes(graph, X=float(from_lon), Y=float(from_lat))
+    dest = ox.distance.nearest_nodes(graph, X=float(to_lon), Y=float(to_lat))
+    blocked_directed, blocked_undirected = _incident_edge_sets(incident_segments)
+    k_pool = max(int(k) * 4, 8)
+    routing_graph = graph
+    if blocked_undirected:
+        safer_graph = _cached_incident_safe_graph(graph, blocked_undirected)
+        routes = _collect_candidate_routes(safer_graph, int(origin), int(dest), k_pool)
+        if routes:
+            routing_graph = safer_graph
+        else:
+            routes = _collect_candidate_routes(graph, int(origin), int(dest), k_pool)
+    else:
+        routes = _collect_candidate_routes(graph, int(origin), int(dest), k_pool)
 
     options = []
     seen: set[tuple[int, ...]] = set()
@@ -162,17 +315,25 @@ def compute_route_options(
         if route_key in seen:
             continue
         seen.add(route_key)
-        base_time_s = route_time_s(graph, route)
+        base_time_s = route_time_s(routing_graph, route)
+        has_incident_overlap = _route_has_incident_overlap(route, blocked_directed, blocked_undirected)
         options.append(
             {
                 "route_nodes": route,
-                "geometry": route_to_geometry(graph, route),
-                "dist_m": route_length_m(graph, route),
+                "geometry": route_to_geometry(routing_graph, route),
+                "dist_m": route_length_m(routing_graph, route),
                 "base_time_s": base_time_s,
                 "time_s": base_time_s * time_factor,
+                "incident_overlap": has_incident_overlap,
             }
         )
-    options.sort(key=lambda item: (item["time_s"], item["dist_m"]))
+    options.sort(key=lambda item: (bool(item.get("incident_overlap", False)), item["time_s"], item["dist_m"]))
+    safe_options = [option for option in options if not option.get("incident_overlap", False)]
+    blocked_options = [option for option in options if option.get("incident_overlap", False)]
+    picked = _pick_diverse_options(safe_options, int(k))
+    if len(picked) < int(k):
+        picked.extend(_pick_diverse_options(blocked_options, int(k) - len(picked)))
+    options = picked[: int(k)]
     fastest_idx = min(range(len(options)), key=lambda idx: options[idx]["time_s"]) if options else 0
     shortest_idx = min(range(len(options)), key=lambda idx: options[idx]["dist_m"]) if options else 0
     for idx, option in enumerate(options):
@@ -182,9 +343,10 @@ def compute_route_options(
         if idx == shortest_idx:
             tags.append("Plus court")
         if not tags:
-            tags.append(f"Alternative {idx + 1}")
+            tags.append(f"Alternative diverse {idx + 1}")
         option["label"] = f"{' / '.join(tags)} · {_format_minutes(option['time_s'])} · {option['dist_m'] / 1000:.2f} km"
-    return options[:k]
+        option.pop("incident_overlap", None)
+    return options[: int(k)]
 
 
 def default_human_state(num_vehicles: int = 3, vehicle_capacity: int = 200) -> dict:

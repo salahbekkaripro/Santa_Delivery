@@ -153,6 +153,11 @@ export type RouteOption = {
   base_time_s: number;
   time_s: number;
   label: string;
+  is_feasible?: boolean;
+  feasibility_badges?: string[];
+  projected_arrival_clock?: string;
+  projected_load_kg?: number;
+  projected_overload_kg?: number;
 };
 
 export type SummaryMetrics = {

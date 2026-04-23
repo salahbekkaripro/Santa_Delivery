@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { clearSleigh, getAdjacentNodes, getMission, getNearestNode, getRouteOptions, resetHumanState, solveMission, suggestNext, undoLastSegment, validateSegment } from "@/lib/api";
 import { MapSurface } from "@/components/map-surface";
 import { getAiProfilePreview } from "@/lib/ai-profiles";
@@ -26,6 +26,28 @@ function flattenSegments(segmentsBySleigh: Record<string, RouteSegment[]>) {
 function metricTime(seconds: number | undefined) {
   const minutes = Math.round((seconds ?? 0) / 60);
   return `${minutes} min`;
+}
+
+function optionBadgeStyle(badge: string): CSSProperties {
+  if (badge === "Sûr") {
+    return {
+      background: "rgba(31, 143, 95, 0.14)",
+      color: "var(--success)",
+      border: "1px solid rgba(31, 143, 95, 0.22)"
+    };
+  }
+  if (badge === "Surcharge" || badge === "Déjà assigné" || badge === "Axe incident") {
+    return {
+      background: "rgba(193, 69, 47, 0.12)",
+      color: "#7b2418",
+      border: "1px solid rgba(193, 69, 47, 0.22)"
+    };
+  }
+  return {
+    background: "rgba(217, 119, 6, 0.12)",
+    color: "var(--warning)",
+    border: "1px solid rgba(217, 119, 6, 0.24)"
+  };
 }
 
 type LiveStat = Record<string, unknown> & {
@@ -104,12 +126,26 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const humanSegments = useMemo(() => flattenSegments(humanState.segments_by_sleigh), [humanState]);
   const activeRoute = humanState.routes_by_sleigh[String(activeSleigh)] ?? [];
   const activeSegments = humanState.segments_by_sleigh[String(activeSleigh)] ?? [];
+  const currentFromId = activeRoute.at(-1) ?? 0;
+
+  function routeOptionsQueryKey(payload: { from_id: number; to_id: number; sleigh_id: number; speed_multiplier: number }) {
+    return ["route-options", missionId, payload.sleigh_id, payload.from_id, payload.to_id, payload.speed_multiplier] as const;
+  }
+
+  async function fetchRouteOptionsCached(payload: { from_id: number; to_id: number; sleigh_id: number; speed_multiplier: number }) {
+    return queryClient.fetchQuery({
+      queryKey: routeOptionsQueryKey(payload),
+      queryFn: () => getRouteOptions(missionId, payload),
+      staleTime: 120_000,
+    });
+  }
 
   const optionsMutation = useMutation({
-    mutationFn: (payload: { from_id: number; to_id: number; speed_multiplier: number }) => getRouteOptions(missionId, payload),
+    mutationFn: (payload: { from_id: number; to_id: number; sleigh_id: number; speed_multiplier: number }) => fetchRouteOptionsCached(payload),
     onSuccess: (data) => {
       setRouteOptions(data.options);
-      setSelectedOptionIndex(0);
+      const firstFeasibleIndex = data.options.findIndex((option) => option.is_feasible !== false);
+      setSelectedOptionIndex(firstFeasibleIndex >= 0 ? firstFeasibleIndex : 0);
       setRouteError(null);
     },
     onError: (error: Error) => setRouteError(error.message)
@@ -209,7 +245,23 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
 
   const suggestMutation = useMutation({
     mutationFn: () => suggestNext(missionId, { sleigh_id: activeSleigh }),
-    onSuccess: (data) => setSuggestions(data.suggestions),
+    onSuccess: (data) => {
+      setSuggestions(data.suggestions);
+      const fromId = currentFromId;
+      data.suggestions.slice(0, 3).forEach((suggestion) => {
+        const payload = {
+          from_id: fromId,
+          to_id: suggestion.client_id,
+          sleigh_id: activeSleigh,
+          speed_multiplier: speedMultiplier,
+        };
+        queryClient.prefetchQuery({
+          queryKey: routeOptionsQueryKey(payload),
+          queryFn: () => getRouteOptions(missionId, payload),
+          staleTime: 120_000,
+        });
+      });
+    },
     onError: (error: Error) => setRouteError(error.message)
   });
 
@@ -218,7 +270,12 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     onSuccess: (data) => {
       const fromId = humanState.routes_by_sleigh[String(activeSleigh)]?.at(-1) ?? 0;
       setSelectedClientId(data.node_id);
-      optionsMutation.mutate({ from_id: fromId, to_id: data.node_id, speed_multiplier: speedMultiplier });
+      optionsMutation.mutate({
+        from_id: fromId,
+        to_id: data.node_id,
+        sleigh_id: activeSleigh,
+        speed_multiplier: speedMultiplier
+      });
     },
     onError: (error: Error) => setRouteError(error.message)
   });
@@ -247,9 +304,13 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     if (humanState.assigned_clients.includes(clientId)) {
       return;
     }
-    const fromId = humanState.routes_by_sleigh[String(activeSleigh)]?.at(-1) ?? 0;
     setSelectedClientId(clientId);
-    optionsMutation.mutate({ from_id: fromId, to_id: clientId, speed_multiplier: speedMultiplier });
+    optionsMutation.mutate({
+      from_id: currentFromId,
+      to_id: clientId,
+      sleigh_id: activeSleigh,
+      speed_multiplier: speedMultiplier
+    });
   }
 
   if (missionQuery.isLoading) {
@@ -274,6 +335,8 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const aiProfilePreview = getAiProfilePreview(mission.mission.ai_profile);
   const aiProfileLocked = Boolean(mission.mission.ai_profile);
   const secondaryObjectives = mission.mission.secondary_objectives ?? [];
+  const selectedRouteOption = routeOptions[selectedOptionIndex];
+  const selectedRouteIsFeasible = selectedRouteOption ? selectedRouteOption.is_feasible !== false : false;
 
   return (
     <div className="page-shell">
@@ -486,16 +549,45 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
                 {routeOptions.map((option, index) => (
                   <button
                     key={`${option.route_nodes.join("-")}-${index}`}
-                    className={`option-card ${selectedOptionIndex === index ? "is-selected" : ""}`}
+                    className={`option-card ${selectedOptionIndex === index ? "is-selected" : ""} ${option.is_feasible === false ? "is-infeasible" : ""}`}
                     onClick={() => setSelectedOptionIndex(index)}
                   >
                     <strong>{option.label}</strong>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
+                      {(option.feasibility_badges ?? ["Sûr"]).map((badge) => (
+                        <span key={`${option.label}-${badge}`} className="tag" style={optionBadgeStyle(badge)}>
+                          {badge}
+                        </span>
+                      ))}
+                    </div>
                     <div className="muted">Noeuds: {option.route_nodes.length}</div>
+                    <div className="muted">
+                      Arrivee estimee: {option.projected_arrival_clock ?? "--:--"} · Charge projetee: {Number(option.projected_load_kg ?? 0).toFixed(0)} kg
+                    </div>
+                    {Number(option.projected_overload_kg ?? 0) > 0 ? (
+                      <div className="muted" style={{ color: "#7b2418" }}>
+                        Depassement capacite: +{Number(option.projected_overload_kg ?? 0).toFixed(0)} kg
+                      </div>
+                    ) : null}
                   </button>
                 ))}
                 {routeOptions.length > 0 ? (
                   <>
-                    <button className="primary-button" onClick={() => validateMutation.mutate(routeOptions[selectedOptionIndex])}>
+                    {selectedRouteOption && !selectedRouteIsFeasible ? (
+                      <div className="error-box">
+                        Option non faisable: {(selectedRouteOption.feasibility_badges ?? ["Risque"]).join(", ")}.
+                      </div>
+                    ) : null}
+                    <button
+                      className="primary-button"
+                      onClick={() => {
+                        if (!selectedRouteOption || !selectedRouteIsFeasible) {
+                          return;
+                        }
+                        validateMutation.mutate(selectedRouteOption);
+                      }}
+                      disabled={validateMutation.isPending || !selectedRouteOption || !selectedRouteIsFeasible}
+                    >
                       {validateMutation.isPending ? "Validation..." : "Valider ce segment"}
                     </button>
                     <button

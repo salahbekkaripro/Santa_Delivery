@@ -99,6 +99,7 @@ class PasswordResetResponse(BaseModel):
 class HumanRouteOptionsRequest(BaseModel):
     from_id: int
     to_id: int
+    sleigh_id: int = Field(default=0, ge=0)
     speed_multiplier: float = Field(default=1.0, gt=0)
     k: int = Field(default=3, ge=1, le=5)
 
@@ -110,6 +111,11 @@ class RouteOption(BaseModel):
     base_time_s: float
     time_s: float
     label: str
+    is_feasible: bool | None = None
+    feasibility_badges: list[str] | None = None
+    projected_arrival_clock: str | None = None
+    projected_load_kg: float | None = None
+    projected_overload_kg: float | None = None
 
 
 class SelectedRoute(BaseModel):
