@@ -3,8 +3,8 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { VersusMapBuilder } from "@/components/versus-map-builder";
+import { useRef, useState } from "react";
+import { VersusMapBuilder, VersusMapBuilderHandle } from "@/components/versus-map-builder";
 import { usePlayer } from "@/components/player-provider";
 import {
   acceptVersusInvite,
@@ -23,6 +23,7 @@ function InviteMapPreview({ invite }: { invite: VersusInvite }) {
       <div className="lb-zone">{formatMissionSummary(summary)}</div>
       <div className="muted">
         Source: {invite.map_source === "custom" ? "Custom" : "Template"}
+        {typeof summary?.num_clients === "number" ? ` · ${summary.num_clients} colis` : ""}
         {typeof summary?.budget === "number" ? ` · Budget ${summary.budget}` : ""}
         {typeof summary?.sleigh_cost === "number" ? ` · Coût ${summary.sleigh_cost}` : ""}
         {typeof summary?.search_radius_km === "number" ? ` · Rayon ${summary.search_radius_km}km` : ""}
@@ -47,6 +48,13 @@ export default function VersusInvitePage() {
   const [customConfig, setCustomConfig] = useState<VersusMissionConfig>(DEFAULT_CUSTOM_MISSION_CONFIG);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [customCreateGate, setCustomCreateGate] = useState({
+    isAddressLoading: false,
+    isAddressEmpty: false,
+    exceedsClientsLimit: false,
+    canCreate: true,
+  });
+  const mapBuilderRef = useRef<VersusMapBuilderHandle>(null);
 
   const templatesQuery = useQuery({
     queryKey: ["versus-templates"],
@@ -61,15 +69,23 @@ export default function VersusInvitePage() {
   });
 
   const createInviteMutation = useMutation({
-    mutationFn: () =>
-      createVersusInvite({
+    mutationFn: async () => {
+      const missionConfig =
+        mapSource === "custom"
+          ? await mapBuilderRef.current?.resolveCustomMissionConfigForSubmit()
+          : undefined;
+      if (mapSource === "custom" && !missionConfig) {
+        throw new Error("Impossible de préparer la carte custom pour cette invitation.");
+      }
+      return createVersusInvite({
         player_id: player!.id,
         invitee_player_id: inviteePlayerId.trim(),
         map_source: mapSource,
         template_id: mapSource === "template" ? templateId : undefined,
-        mission_config: mapSource === "custom" ? customConfig : undefined,
+        mission_config: mapSource === "custom" ? (missionConfig ?? undefined) : undefined,
         winner_rule: winnerRule,
-      }),
+      });
+    },
     onSuccess: () => {
       setError(null);
       setFeedback("Invitation envoyée.");
@@ -118,6 +134,10 @@ export default function VersusInvitePage() {
   }
 
   const invites: VersusInvite[] = invitesQuery.data?.invites ?? [];
+  const isInviteDisabled =
+    createInviteMutation.isPending ||
+    inviteePlayerId.trim().length < 3 ||
+    (mapSource === "custom" && !customCreateGate.canCreate);
 
   return (
     <div className="page-shell">
@@ -140,6 +160,7 @@ export default function VersusInvitePage() {
           </label>
 
           <VersusMapBuilder
+            ref={mapBuilderRef}
             mapSource={mapSource}
             onMapSourceChange={setMapSource}
             templateId={templateId}
@@ -147,6 +168,7 @@ export default function VersusInvitePage() {
             templates={templatesQuery.data?.templates ?? []}
             customConfig={customConfig}
             onCustomConfigChange={setCustomConfig}
+            onCustomGateStateChange={setCustomCreateGate}
           />
 
           <label className="field">
@@ -163,10 +185,16 @@ export default function VersusInvitePage() {
           <button
             className="primary-button"
             onClick={() => createInviteMutation.mutate()}
-            disabled={createInviteMutation.isPending || inviteePlayerId.trim().length < 3}
+            disabled={isInviteDisabled}
           >
             {createInviteMutation.isPending ? "Envoi..." : "Envoyer l'invitation"}
           </button>
+          {mapSource === "custom" && customCreateGate.isAddressEmpty && (
+            <span className="muted">Renseigne une adresse pour créer une invitation custom.</span>
+          )}
+          {mapSource === "custom" && customCreateGate.isAddressLoading && (
+            <span className="muted">Géocodage en cours... patiente avant l&apos;envoi.</span>
+          )}
         </section>
 
         <section className="panel stack">

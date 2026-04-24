@@ -1,30 +1,62 @@
 "use client";
 
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import { SearchAreaMap } from "@/components/search-area-map";
 import type { VersusMapSource, VersusMissionConfig, VersusTemplate } from "@/lib/types";
-import { SECONDARY_OBJECTIVE_PRESETS, WEATHER_OPTIONS } from "@/lib/versus";
+import {
+  computeVersusMaxClientsAllowed,
+  DEFAULT_DEMO_ADDRESS,
+  DEFAULT_RADIUS_KM,
+  fetchAddressSuggestions,
+  geocodeFirstAddress,
+  MAPBOX_TOKEN,
+  SEARCH_MAX_RADIUS_KM,
+  SEARCH_MIN_RADIUS_KM,
+} from "@/lib/versus";
+
+type AddressSuggestion = {
+  label: string;
+  lat: number;
+  lon: number;
+};
+
+const WEATHER_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "real", label: "🌍 Temps réel" },
+  { value: "random", label: "Aléatoire" },
+  { value: "Clear", label: "Soleil" },
+  { value: "Rain", label: "Pluie" },
+  { value: "Snow", label: "Neige" },
+  { value: "Thunderstorm", label: "Tempête" },
+];
+
+export type VersusMapBuilderHandle = {
+  resolveCustomMissionConfigForSubmit: () => Promise<VersusMissionConfig | null>;
+};
+
+export type VersusMapCustomGateState = {
+  isAddressLoading: boolean;
+  isAddressEmpty: boolean;
+  exceedsClientsLimit: boolean;
+  canCreate: boolean;
+};
 
 function asNumber(value: string, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function asOptionalNumber(value: string) {
-  if (!value.trim()) {
-    return null;
+function deriveCityFromLabel(label: string): string | null {
+  const chunks = label
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (chunks.length >= 2) {
+    return chunks[chunks.length - 2] || null;
   }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return chunks[0] || null;
 }
 
-export function VersusMapBuilder({
-  mapSource,
-  onMapSourceChange,
-  templateId,
-  onTemplateIdChange,
-  templates,
-  customConfig,
-  onCustomConfigChange,
-}: {
+export const VersusMapBuilder = forwardRef<VersusMapBuilderHandle, {
   mapSource: VersusMapSource;
   onMapSourceChange: (value: VersusMapSource) => void;
   templateId: string;
@@ -32,17 +64,175 @@ export function VersusMapBuilder({
   templates: VersusTemplate[];
   customConfig: VersusMissionConfig;
   onCustomConfigChange: (value: VersusMissionConfig) => void;
-}) {
-  const selectedObjectiveCodes = new Set((customConfig.secondary_objectives ?? []).map((objective) => objective.code));
+  onCustomGateStateChange?: (state: VersusMapCustomGateState) => void;
+}>(({
+  mapSource,
+  onMapSourceChange,
+  templateId,
+  onTemplateIdChange,
+  templates,
+  customConfig,
+  onCustomConfigChange,
+  onCustomGateStateChange,
+}, ref) => {
+  const [addressQuery, setAddressQuery] = useState(customConfig.zone || DEFAULT_DEMO_ADDRESS.label);
+  const [selectedAddress, setSelectedAddress] = useState<AddressSuggestion | null>(() => {
+    const lat = customConfig.center_lat;
+    const lon = customConfig.center_lon;
+    if (typeof lat === "number" && typeof lon === "number") {
+      return {
+        label: customConfig.zone || DEFAULT_DEMO_ADDRESS.label,
+        lat,
+        lon,
+      };
+    }
+    return DEFAULT_DEMO_ADDRESS;
+  });
+  const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
+  const [addressLookupError, setAddressLookupError] = useState<string | null>(null);
+  const [isAddressLoading, setIsAddressLoading] = useState(false);
+  const [isAddressFocused, setIsAddressFocused] = useState(false);
 
-  function toggleObjective(code: string, label: string) {
-    const current = customConfig.secondary_objectives ?? [];
-    const exists = current.some((objective) => objective.code === code);
-    const next = exists
-      ? current.filter((objective) => objective.code !== code)
-      : [...current, { code, label }];
-    onCustomConfigChange({ ...customConfig, secondary_objectives: next });
+  const radiusKm = Math.min(
+    SEARCH_MAX_RADIUS_KM,
+    Math.max(SEARCH_MIN_RADIUS_KM, Number(customConfig.search_radius_km ?? DEFAULT_RADIUS_KM)),
+  );
+  const requestedClients = Math.max(1, Math.min(60, Math.round(Number(customConfig.num_clients) || 1)));
+  const requestedBudget = Math.max(0, Math.round(Number(customConfig.budget) || 0));
+  const requestedSleighCost = Math.max(0, Math.round(Number(customConfig.sleigh_cost) || 0));
+  const areaKm2 = useMemo(() => Math.PI * radiusKm * radiusKm, [radiusKm]);
+  const maxClientsAllowed = useMemo(() => computeVersusMaxClientsAllowed(radiusKm), [radiusKm]);
+  const exceedsClientsLimit = requestedClients > maxClientsAllowed;
+  const canAutocompleteAddress = MAPBOX_TOKEN.trim().length > 0;
+  const mapCenter = selectedAddress ?? DEFAULT_DEMO_ADDRESS;
+  const isAddressEmpty = addressQuery.trim().length === 0;
+  const canCreateCustom = !isAddressLoading && !isAddressEmpty && !exceedsClientsLimit;
+
+  useEffect(() => {
+    if (selectedAddress && addressQuery.trim() !== selectedAddress.label) {
+      setSelectedAddress(null);
+    }
+  }, [addressQuery, selectedAddress]);
+
+  useEffect(() => {
+    onCustomGateStateChange?.({
+      isAddressLoading,
+      isAddressEmpty,
+      exceedsClientsLimit,
+      canCreate: canCreateCustom,
+    });
+  }, [canCreateCustom, exceedsClientsLimit, isAddressEmpty, isAddressLoading, onCustomGateStateChange]);
+
+  useEffect(() => {
+    const query = addressQuery.trim();
+    if (!canAutocompleteAddress || query.length < 3 || mapSource !== "custom") {
+      setAddressSuggestions([]);
+      setIsAddressLoading(false);
+      setAddressLookupError(null);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      setIsAddressLoading(true);
+      setAddressLookupError(null);
+      try {
+        const suggestions = await fetchAddressSuggestions(query);
+        setAddressSuggestions(suggestions);
+      } catch {
+        setAddressSuggestions([]);
+        setAddressLookupError("Impossible de charger les suggestions d'adresse pour le moment.");
+      } finally {
+        setIsAddressLoading(false);
+      }
+    }, 280);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [addressQuery, canAutocompleteAddress, mapSource]);
+
+  function selectAddressSuggestion(suggestion: AddressSuggestion) {
+    setSelectedAddress(suggestion);
+    setAddressQuery(suggestion.label);
+    setAddressSuggestions([]);
+    setAddressLookupError(null);
+    setIsAddressFocused(false);
+
+    onCustomConfigChange({
+      ...customConfig,
+      zone: suggestion.label,
+      city: deriveCityFromLabel(suggestion.label),
+      center_lat: suggestion.lat,
+      center_lon: suggestion.lon,
+      search_radius_km: radiusKm,
+      num_clients: requestedClients,
+      budget: requestedBudget,
+      sleigh_cost: requestedSleighCost,
+    });
   }
+
+  useImperativeHandle(ref, () => ({
+    async resolveCustomMissionConfigForSubmit() {
+      if (mapSource !== "custom") {
+        return null;
+      }
+      if (exceedsClientsLimit) {
+        throw new Error(
+          `La zone actuelle autorise au maximum ${maxClientsAllowed} colis. Réduis la demande ou augmente le rayon.`,
+        );
+      }
+
+      let resolvedAddress = selectedAddress;
+      const query = addressQuery.trim();
+
+      if (!resolvedAddress) {
+        if (!query) {
+          throw new Error("Saisis une adresse pour configurer le point central de la carte custom.");
+        }
+        if (!canAutocompleteAddress) {
+          throw new Error(
+            "Le geocodage d'adresse est indisponible: variable NEXT_PUBLIC_MAPBOX_TOKEN manquante.",
+          );
+        }
+
+        setIsAddressLoading(true);
+        const geocoded = await geocodeFirstAddress(query);
+        setIsAddressLoading(false);
+
+        if (!geocoded) {
+          throw new Error("Impossible de géocoder cette adresse. Affine la saisie ou sélectionne une suggestion.");
+        }
+        resolvedAddress = geocoded;
+        setSelectedAddress(geocoded);
+        setAddressQuery(geocoded.label);
+      }
+
+      const nextMissionConfig: VersusMissionConfig = {
+        ...customConfig,
+        zone: resolvedAddress.label,
+        city: deriveCityFromLabel(resolvedAddress.label),
+        center_lat: resolvedAddress.lat,
+        center_lon: resolvedAddress.lon,
+        search_radius_km: radiusKm,
+        num_clients: requestedClients,
+        budget: requestedBudget,
+        sleigh_cost: requestedSleighCost,
+      };
+      onCustomConfigChange(nextMissionConfig);
+      return nextMissionConfig;
+    },
+  }), [
+    addressQuery,
+    canAutocompleteAddress,
+    customConfig,
+    exceedsClientsLimit,
+    mapSource,
+    maxClientsAllowed,
+    onCustomConfigChange,
+    radiusKm,
+    requestedBudget,
+    requestedClients,
+    requestedSleighCost,
+    selectedAddress,
+  ]);
 
   return (
     <div className="stack">
@@ -75,136 +265,169 @@ export function VersusMapBuilder({
           </select>
         </label>
       ) : (
-        <div className="grid-2" style={{ gap: 10 }}>
-          <label className="field">
-            <span>Zone</span>
-            <input
-              value={customConfig.zone}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, zone: event.target.value })}
-              placeholder="Le Marais, Paris"
-            />
-          </label>
-          <label className="field">
-            <span>Ville</span>
-            <input
-              value={customConfig.city ?? ""}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, city: event.target.value || null })}
-              placeholder="Paris"
-            />
-          </label>
+        <>
+          <div className="grid-2" style={{ gap: 10 }}>
+            <label className="field">
+              <span>Adresse (point central)</span>
+              <div className="address-field-wrap">
+                <input
+                  type="text"
+                  value={addressQuery}
+                  onChange={(event) => setAddressQuery(event.target.value)}
+                  onFocus={() => setIsAddressFocused(true)}
+                  onBlur={() => window.setTimeout(() => setIsAddressFocused(false), 120)}
+                  placeholder="Tape une adresse complète"
+                />
+                {isAddressFocused && canAutocompleteAddress ? (
+                  <div className="address-suggestions">
+                    {isAddressLoading ? <div className="address-suggestion-muted">Recherche en cours...</div> : null}
+                    {!isAddressLoading && addressSuggestions.length > 0
+                      ? addressSuggestions.map((suggestion) => (
+                          <button
+                            key={`${suggestion.label}-${suggestion.lat}-${suggestion.lon}`}
+                            type="button"
+                            className="address-suggestion-item"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              selectAddressSuggestion(suggestion);
+                            }}
+                          >
+                            {suggestion.label}
+                          </button>
+                        ))
+                      : null}
+                    {!isAddressLoading && addressSuggestions.length === 0 && addressQuery.trim().length >= 3 ? (
+                      <div className="address-suggestion-muted">Aucune suggestion pour cette saisie.</div>
+                    ) : null}
+                    {addressLookupError ? <div className="address-suggestion-error">{addressLookupError}</div> : null}
+                  </div>
+                ) : null}
+              </div>
+            </label>
+            <label className="field">
+              <span>Météo</span>
+              <select
+                value={customConfig.weather_key}
+                onChange={(event) => onCustomConfigChange({ ...customConfig, weather_key: event.target.value })}
+              >
+                {WEATHER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Rayon de recherche ({radiusKm.toFixed(1)} km)</span>
+              <input
+                type="range"
+                min={SEARCH_MIN_RADIUS_KM}
+                max={SEARCH_MAX_RADIUS_KM}
+                step={0.1}
+                value={radiusKm}
+                onChange={(event) =>
+                  onCustomConfigChange({
+                    ...customConfig,
+                    search_radius_km: Number(event.target.value),
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Nombre de colis</span>
+              <input
+                type="number"
+                min={1}
+                max={60}
+                value={requestedClients}
+                onChange={(event) =>
+                  onCustomConfigChange({
+                    ...customConfig,
+                    num_clients: Math.max(1, Math.min(60, Math.round(asNumber(event.target.value, requestedClients)))),
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Budget</span>
+              <input
+                type="number"
+                min={0}
+                value={requestedBudget}
+                onChange={(event) =>
+                  onCustomConfigChange({
+                    ...customConfig,
+                    budget: Math.max(0, Math.round(asNumber(event.target.value, requestedBudget))),
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Coût traîneau</span>
+              <input
+                type="number"
+                min={0}
+                value={requestedSleighCost}
+                onChange={(event) =>
+                  onCustomConfigChange({
+                    ...customConfig,
+                    sleigh_cost: Math.max(0, Math.round(asNumber(event.target.value, requestedSleighCost))),
+                  })
+                }
+              />
+            </label>
+          </div>
 
-          <label className="field">
-            <span>Latitude centre</span>
-            <input
-              type="number"
-              step="0.000001"
-              value={customConfig.center_lat ?? ""}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, center_lat: asOptionalNumber(event.target.value) })}
-            />
-          </label>
-          <label className="field">
-            <span>Longitude centre</span>
-            <input
-              type="number"
-              step="0.000001"
-              value={customConfig.center_lon ?? ""}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, center_lon: asOptionalNumber(event.target.value) })}
-            />
-          </label>
+          {!canAutocompleteAddress ? (
+            <div className="error-box">
+              L&apos;autocomplétion et le géocodage d&apos;adresse sont indisponibles: variable
+              `NEXT_PUBLIC_MAPBOX_TOKEN` manquante.
+            </div>
+          ) : null}
 
-          <label className="field">
-            <span>Rayon (km)</span>
-            <input
-              type="number"
-              step="0.1"
-              min={0.5}
-              max={30}
-              value={customConfig.search_radius_km ?? ""}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, search_radius_km: asOptionalNumber(event.target.value) })}
-            />
-          </label>
-          <label className="field">
-            <span>Colis (max 60)</span>
-            <input
-              type="number"
-              min={1}
-              max={60}
-              value={customConfig.num_clients}
-              onChange={(event) =>
-                onCustomConfigChange({ ...customConfig, num_clients: Math.max(1, Math.min(60, Math.round(asNumber(event.target.value, 1)))) })
-              }
-            />
-          </label>
+          <div className="salon-zone-metrics">
+            <div className="salon-zone-metric">
+              <span>Adresse sélectionnée</span>
+              <strong>{selectedAddress?.label ?? (addressQuery.trim() || "Saisie en cours")}</strong>
+            </div>
+            <div className="salon-zone-metric">
+              <span>Surface couverte</span>
+              <strong>{areaKm2.toFixed(1)} km²</strong>
+            </div>
+            <div className="salon-zone-metric">
+              <span>Maximum colis autorisé</span>
+              <strong>{maxClientsAllowed}</strong>
+            </div>
+            <div className="salon-zone-metric">
+              <span>Demande actuelle</span>
+              <strong className={exceedsClientsLimit ? "salon-limit-breach" : undefined}>{requestedClients}</strong>
+            </div>
+          </div>
 
-          <label className="field">
-            <span>Budget</span>
-            <input
-              type="number"
-              min={0}
-              value={customConfig.budget}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, budget: Math.max(0, Math.round(asNumber(event.target.value, 0))) })}
-            />
-          </label>
-          <label className="field">
-            <span>Coût traîneau</span>
-            <input
-              type="number"
-              min={0}
-              value={customConfig.sleigh_cost}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, sleigh_cost: Math.max(0, Math.round(asNumber(event.target.value, 0))) })}
-            />
-          </label>
+          <SearchAreaMap centerLat={mapCenter.lat} centerLon={mapCenter.lon} radiusKm={radiusKm} />
 
-          <label className="field">
-            <span>Météo</span>
-            <select
-              value={customConfig.weather_key}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, weather_key: event.target.value })}
-            >
-              {WEATHER_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Profil IA</span>
-            <input
-              value={customConfig.ai_profile ?? ""}
-              onChange={(event) => onCustomConfigChange({ ...customConfig, ai_profile: event.target.value || null })}
-              placeholder="Express / Prudent / Championne"
-            />
-          </label>
+          {exceedsClientsLimit ? (
+            <div className="error-box">
+              La zone actuelle autorise au maximum {maxClientsAllowed} colis. Réduis la demande ou augmente le rayon.
+            </div>
+          ) : (
+            <div className="tag" style={{ width: "fit-content" }}>
+              Zone valide: la génération restera dans le cercle choisi.
+            </div>
+          )}
 
-          <label className="field" style={{ justifyContent: "space-between", flexDirection: "row", alignItems: "center" }}>
-            <span>Incidents aléatoires</span>
+          <label className="tag" style={{ width: "fit-content" }}>
             <input
               type="checkbox"
               checked={customConfig.random_incidents}
               onChange={(event) => onCustomConfigChange({ ...customConfig, random_incidents: event.target.checked })}
             />
+            Incidents aléatoires
           </label>
-        </div>
-      )}
-
-      {mapSource === "custom" && (
-        <div className="stack" style={{ gap: 6 }}>
-          <span className="muted">Objectifs secondaires</span>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {SECONDARY_OBJECTIVE_PRESETS.map((objective) => (
-              <button
-                key={objective.code}
-                type="button"
-                className={selectedObjectiveCodes.has(objective.code) ? "primary-button" : "secondary-button"}
-                onClick={() => toggleObjective(objective.code, objective.label)}
-              >
-                {objective.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        </>
       )}
     </div>
   );
-}
+});
+
+VersusMapBuilder.displayName = "VersusMapBuilder";

@@ -3,8 +3,8 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
-import { VersusMapBuilder } from "@/components/versus-map-builder";
+import { useMemo, useRef, useState } from "react";
+import { VersusMapBuilder, VersusMapBuilderHandle } from "@/components/versus-map-builder";
 import { usePlayer } from "@/components/player-provider";
 import { createVersusMatch, getVersusTemplates, joinVersusMatch } from "@/lib/api";
 import type { VersusMapSource, VersusMissionConfig, VersusWinnerRule } from "@/lib/types";
@@ -21,6 +21,13 @@ export default function VersusPrivatePage() {
   const [joinCode, setJoinCode] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [customCreateGate, setCustomCreateGate] = useState({
+    isAddressLoading: false,
+    isAddressEmpty: false,
+    exceedsClientsLimit: false,
+    canCreate: true,
+  });
+  const mapBuilderRef = useRef<VersusMapBuilderHandle>(null);
 
   const templatesQuery = useQuery({
     queryKey: ["versus-templates"],
@@ -33,15 +40,23 @@ export default function VersusPrivatePage() {
   );
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      createVersusMatch({
+    mutationFn: async () => {
+      const missionConfig =
+        mapSource === "custom"
+          ? await mapBuilderRef.current?.resolveCustomMissionConfigForSubmit()
+          : undefined;
+      if (mapSource === "custom" && !missionConfig) {
+        throw new Error("Impossible de préparer la carte custom pour cette partie.");
+      }
+      return createVersusMatch({
         player_id: player!.id,
         mode: "private",
         map_source: mapSource,
         template_id: mapSource === "template" ? templateId : undefined,
-        mission_config: mapSource === "custom" ? customConfig : undefined,
+        mission_config: mapSource === "custom" ? (missionConfig ?? undefined) : undefined,
         winner_rule: winnerRule,
-      }),
+      });
+    },
     onSuccess: (match) => {
       setError(null);
       setFeedback(`Partie créée. Code: ${match.join_code ?? "--"}`);
@@ -63,6 +78,9 @@ export default function VersusPrivatePage() {
     },
     onError: (err: Error) => setError(err.message),
   });
+
+  const isCreateDisabled =
+    createMutation.isPending || (mapSource === "custom" && !customCreateGate.canCreate);
 
   if (!isReady) {
     return <div className="page-shell"><div className="page-stack"><div className="panel">Chargement...</div></div></div>;
@@ -92,6 +110,7 @@ export default function VersusPrivatePage() {
         <section className="panel stack">
           <strong>Configuration host</strong>
           <VersusMapBuilder
+            ref={mapBuilderRef}
             mapSource={mapSource}
             onMapSourceChange={setMapSource}
             templateId={templateId}
@@ -99,6 +118,7 @@ export default function VersusPrivatePage() {
             templates={templatesQuery.data?.templates ?? []}
             customConfig={customConfig}
             onCustomConfigChange={setCustomConfig}
+            onCustomGateStateChange={setCustomCreateGate}
           />
 
           <label className="field">
@@ -113,9 +133,15 @@ export default function VersusPrivatePage() {
           </label>
           <span className="muted">{selectedRuleDescription}</span>
 
-          <button className="primary-button" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+          <button className="primary-button" onClick={() => createMutation.mutate()} disabled={isCreateDisabled}>
             {createMutation.isPending ? "Création..." : "Créer la partie"}
           </button>
+          {mapSource === "custom" && customCreateGate.isAddressEmpty && (
+            <span className="muted">Renseigne une adresse pour créer la partie custom.</span>
+          )}
+          {mapSource === "custom" && customCreateGate.isAddressLoading && (
+            <span className="muted">Géocodage en cours... patiente avant de créer.</span>
+          )}
         </section>
 
         <section className="panel stack">

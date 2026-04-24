@@ -2792,6 +2792,7 @@ def _sanitize_and_validate_versus_mission_config(payload: dict | None) -> dict:
         "random_incidents",
         "ai_profile",
         "secondary_objectives",
+        "level",
     }
     unexpected_keys = set(source) - allowed_keys
     if unexpected_keys:
