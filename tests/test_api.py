@@ -113,6 +113,44 @@ SOLVE_RESPONSE = {
     "comparison": COMPARISON_RESPONSE,
 }
 
+VERSUS_MATCH_RESPONSE = {
+    "match_id": "match123",
+    "mode": "private",
+    "template_id": "paris_duel",
+    "template_label": "Paris Rush",
+    "winner_rule": "score_time",
+    "join_code": "ABC123",
+    "host_player_id": "player001",
+    "status": "waiting_ready",
+    "reference_mission_id": None,
+    "started_at": None,
+    "started_elapsed_s": None,
+    "completed_at": None,
+    "winner_player_id": None,
+    "result_reason": None,
+    "created_at": "2026-01-01T10:00:00+00:00",
+    "updated_at": "2026-01-01T10:00:00+00:00",
+    "participants": [
+        {
+            "player_id": "player001",
+            "display_name": "Host",
+            "seat": 0,
+            "state": "joined",
+            "mission_id": None,
+            "is_self": True,
+        },
+        {
+            "player_id": "player002",
+            "display_name": "Guest",
+            "seat": 1,
+            "state": "joined",
+            "mission_id": None,
+            "is_self": False,
+        },
+    ],
+    "current_player_mission_id": None,
+}
+
 
 class ApiTests(unittest.TestCase):
     @classmethod
@@ -178,11 +216,19 @@ class ApiTests(unittest.TestCase):
     def test_route_options_success(self, get_human_route_options_mock):
         response = self.client.post(
             "/api/missions/mission123/human/route-options",
-            json={"from_id": 0, "to_id": 1, "speed_multiplier": 1.0, "k": 2},
+            json={"from_id": 0, "to_id": 1, "speed_multiplier": 1.0, "vehicle_capacity": 123, "k": 2},
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"options": []})
-        get_human_route_options_mock.assert_called_once()
+        get_human_route_options_mock.assert_called_once_with(
+            "mission123",
+            from_id=0,
+            to_id=1,
+            sleigh_id=0,
+            speed_multiplier=1.0,
+            vehicle_capacity=123,
+            k=2,
+        )
 
     @patch("backend.app.services.validate_human_segment", return_value=HUMAN_STATE_RESPONSE)
     def test_validate_segment_success(self, validate_human_segment_mock):
@@ -254,6 +300,51 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["score"]["rank"], "A")
         get_debrief_mock.assert_called_once()
+
+    @patch("backend.app.services.create_versus_match", return_value=VERSUS_MATCH_RESPONSE)
+    def test_create_versus_match_success(self, create_versus_match_mock):
+        response = self.client.post(
+            "/api/versus/matches",
+            json={"player_id": "player001", "mode": "private", "template_id": "paris_duel", "winner_rule": "score_time"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["match_id"], "match123")
+        create_versus_match_mock.assert_called_once()
+
+    @patch("backend.app.services.join_versus_match", side_effect=RuntimeError("Partie indisponible"))
+    def test_join_versus_match_conflict(self, _join_versus_match_mock):
+        response = self.client.post(
+            "/api/versus/matches/join",
+            json={"player_id": "player002", "join_code": "ABC123"},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"], "Partie indisponible")
+
+    @patch("backend.app.services.enter_versus_queue", return_value={"status": "queued"})
+    def test_enter_versus_queue_success(self, enter_versus_queue_mock):
+        response = self.client.post(
+            "/api/versus/queue/enter",
+            json={"player_id": "player001", "template_id": "paris_duel", "winner_rule": "score_time"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "queued")
+        enter_versus_queue_mock.assert_called_once()
+
+    @patch("backend.app.services.submit_versus_attempt", side_effect=ValueError("Soumission invalide"))
+    def test_submit_versus_attempt_bad_request(self, _submit_versus_attempt_mock):
+        response = self.client.post(
+            "/api/versus/matches/match123/submit",
+            json={"player_id": "player001"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Soumission invalide")
+
+    @patch("backend.app.services.list_versus_leaderboard", return_value={"entries": []})
+    def test_list_versus_leaderboard_success(self, list_versus_leaderboard_mock):
+        response = self.client.get("/api/versus/leaderboard?limit=5")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"entries": []})
+        list_versus_leaderboard_mock.assert_called_once_with(limit=5)
 
 
 if __name__ == "__main__":

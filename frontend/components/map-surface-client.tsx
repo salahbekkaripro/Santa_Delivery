@@ -213,7 +213,7 @@ export default function MapSurfaceClient({
             <Polyline
               key={segmentKey(segment, index)}
               positions={segment.geometry}
-              pathOptions={{ color: "#c1452f", weight: 6, opacity: 0.3, dashArray: "8 10" }}
+              pathOptions={{ color: "#9e2f3f", weight: 6, opacity: 0.3, dashArray: "8 10" }}
               pane="human"
             />
           ))}
@@ -233,7 +233,7 @@ export default function MapSurfaceClient({
               key={`preview-${index}`}
               positions={option.geometry}
               pathOptions={{
-                color: isSelected ? "#d97706" : "#6b7280",
+                color: isSelected ? "#b8892f" : "#6b7280",
                 weight: isSelected ? 7 : 4,
                 opacity: isSelected ? 0.9 : 0.35,
                 dashArray: isSelected ? undefined : "6 10"
@@ -317,7 +317,7 @@ export default function MapSurfaceClient({
               center={[client.lat, client.lon]}
               radius={isSelected ? 10 : 8}
               pathOptions={{ color: "#ffffff", weight: 2 }}
-              fillColor={isAssigned ? "#1f8f5f" : isSelected ? "#d97706" : "#c1452f"}
+              fillColor={isAssigned ? "#1f8f5f" : isSelected ? "#b8892f" : "#9e2f3f"}
               fillOpacity={0.92}
               pane="points"
               eventHandlers={onClientSelect ? { click: () => onClientSelect(client.id) } : undefined}

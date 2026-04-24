@@ -15,22 +15,33 @@ import {
 } from "@/lib/campaign";
 import type { CampaignMission, CampaignProgress } from "@/lib/types";
 
+const CITY_ICONS: Record<number, string> = {
+  1: "🗼",  // Paris
+  2: "🌆",  // Berlin
+  3: "🏔",  // Lyon
+  4: "🇧🇪",  // Bruxelles
+  5: "🍷",  // Bordeaux
+  6: "⛄",  // Montréal
+  7: "🎡",  // Londres
+  8: "❄️",  // Stockholm
+};
+
+const WEATHER_ICONS: Record<string, string> = {
+  Clear: "☀️",
+  Rain: "🌧",
+  Snow: "🌨",
+  Thunderstorm: "⛈",
+  real: "🌡",
+};
+
 function chapterSummary(progress: CampaignProgress) {
   const stars = Object.values(progress.starsByLevel).reduce((sum, count) => sum + Number(count), 0);
-  return {
-    completed: progress.completedLevels.length,
-    total: CAMPAIGN_MISSIONS.length,
-    stars,
-  };
+  return { completed: progress.completedLevels.length, total: CAMPAIGN_MISSIONS.length, stars };
 }
 
 function missionStatus(mission: CampaignMission, progress: CampaignProgress) {
-  if (progress.completedLevels.includes(mission.level)) {
-    return "completed";
-  }
-  if (mission.level <= progress.unlockedLevel) {
-    return "unlocked";
-  }
+  if (progress.completedLevels.includes(mission.level)) return "completed";
+  if (mission.level <= progress.unlockedLevel) return "unlocked";
   return "locked";
 }
 
@@ -41,7 +52,6 @@ export function CampaignMap() {
 
   useEffect(() => {
     setProgress(readCampaignProgress());
-
     const syncProgress = () => setProgress(readCampaignProgress());
     window.addEventListener("storage", syncProgress);
     return () => window.removeEventListener("storage", syncProgress);
@@ -49,6 +59,7 @@ export function CampaignMap() {
 
   const summary = useMemo(() => chapterSummary(progress), [progress]);
   const completion = useMemo(() => getCampaignCompletion(progress), [progress]);
+  const progressPct = summary.total > 0 ? (summary.completed / summary.total) * 100 : 0;
 
   const launchMutation = useMutation({
     mutationFn: (mission: CampaignMission) => {
@@ -67,25 +78,38 @@ export function CampaignMap() {
   return (
     <div className="page-shell campaign-shell">
       <div className="page-stack campaign-stack">
+
+        {/* HERO */}
         <section className="campaign-hero">
           <div className="campaign-hero-copy">
-            <span className="salon-badge">Campagne · Solo contre IA</span>
+            <span className="salon-badge">🎄 Campagne · Solo contre IA</span>
             <h1>La route vers le Pôle Nord</h1>
             <p>
-              Chaque mission oppose ton plan à un profil IA distinct. Termine un niveau pour débloquer le suivant et
-              fais grimper ton rang de logisticien.
+              8 villes à travers le monde. 8 profils IA à vaincre. Chaque mission débloque la suivante —
+              bats l&apos;IA et prouve que tu mérites le rang de Maître Livreur.
             </p>
+            <div className="campaign-hero-ribbon">
+              <span className="campaign-hero-pill">Progression persistante</span>
+              <span className="campaign-hero-pill">IA adaptative</span>
+              <span className="campaign-hero-pill">Défi 8 villes</span>
+            </div>
+            <div className="campaign-progress">
+              <div className="campaign-progress-bar">
+                <div className="campaign-progress-fill" style={{ width: `${progressPct}%` }} />
+              </div>
+              <span className="campaign-progress-label">
+                {summary.completed} / {summary.total} mission{summary.completed !== 1 ? "s" : ""} · {summary.stars} ⭐
+              </span>
+            </div>
           </div>
           <div className="campaign-hero-stats">
             <div className="campaign-stat-card">
               <span>Missions validées</span>
-              <strong>
-                {summary.completed}/{summary.total}
-              </strong>
+              <strong>{summary.completed}/{summary.total}</strong>
             </div>
             <div className="campaign-stat-card">
               <span>Étoiles gagnées</span>
-              <strong>{summary.stars}</strong>
+              <strong>{summary.stars} ⭐</strong>
             </div>
             <div className="campaign-stat-card">
               <span>Niveau débloqué</span>
@@ -94,105 +118,127 @@ export function CampaignMap() {
           </div>
         </section>
 
-        <section className="grid-3">
+        {/* INFO PANELS */}
+        <section className="grid-3 campaign-info-grid">
           <div className="panel stack">
-            <strong>Règles de progression</strong>
+            <strong>📋 Règles de progression</strong>
             <span className="muted">Un niveau terminé débloque le suivant.</span>
-            <span className="muted">1 étoile à 60, 2 étoiles à 75, 3 étoiles à 90.</span>
-            <span className="muted">Les missions gardent ton meilleur score localement.</span>
+            <span className="muted">⭐ 1 étoile ≥ 60 pts · ⭐⭐ ≥ 75 · ⭐⭐⭐ ≥ 90</span>
+            <span className="muted">Les meilleurs scores sont sauvegardés localement.</span>
           </div>
           <div className="panel stack">
-            <strong>Modes de jeu</strong>
-            <Link className="secondary-button" href="/">
-              Retour au hub salon
-            </Link>
-            <Link className="secondary-button" href="/versus">
-              Préparer le duel live
-            </Link>
+            <strong>🎮 Autres modes</strong>
+            <Link className="secondary-button" href="/">← Retour au hub</Link>
+            <Link className="secondary-button" href="/versus">⚔️ Mode Versus</Link>
+            <Link className="secondary-button" href="/leaderboard">🏆 Panthéon</Link>
           </div>
           <div className="panel stack">
-            <strong>Dernière tentative</strong>
-            <span className="muted">{player ? `Profil actif: ${player.display_name}` : "Connexion recommandée pour une progression dédiée"}</span>
-            <span className="muted">
-              {progress.lastPlayedLevel ? `Mission ${progress.lastPlayedLevel}` : "Aucune mission lancée"}
-            </span>
-            <span className="muted">
-              {progress.updatedAt ? new Date(progress.updatedAt).toLocaleString("fr-FR") : "Pas encore d'activité"}
-            </span>
-            {completion.isCampaignComplete ? (
-              <Link className="primary-button" href="/campaign/finale">
-                Ouvrir la finale de campagne
-              </Link>
-            ) : null}
-            {!player ? (
-              <Link className="secondary-button" href="/login?redirect=/campaign">
-                Se connecter
-              </Link>
-            ) : null}
+            <strong>👤 Profil joueur</strong>
+            {player ? (
+              <>
+                <span className="muted">{player.avatar ?? "🎅"} {player.display_name}</span>
+                <span className="muted">
+                  {progress.lastPlayedLevel ? `Dernière mission : niveau ${progress.lastPlayedLevel}` : "Aucune mission lancée"}
+                </span>
+                <span className="muted">
+                  {progress.updatedAt ? new Date(progress.updatedAt).toLocaleString("fr-FR") : "Pas encore d'activité"}
+                </span>
+                {completion.isCampaignComplete && (
+                  <Link className="primary-button" href="/campaign/finale">
+                    🎉 Ouvrir la finale
+                  </Link>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="muted">Connexion recommandée pour une progression dédiée.</span>
+                <Link className="primary-button" href="/login?redirect=/campaign">
+                  🎅 Se connecter
+                </Link>
+              </>
+            )}
           </div>
         </section>
 
+        {/* CARTE DES MISSIONS */}
         <section className="campaign-path">
           {CAMPAIGN_MISSIONS.map((mission, index) => {
             const status = missionStatus(mission, progress);
             const stars = Number(progress.starsByLevel[mission.level] ?? 0);
             const bestScore = Number(progress.bestScoreByLevel[mission.level] ?? 0);
             const isPending = launchMutation.isPending && launchMutation.variables?.level === mission.level;
+            const cityIcon = CITY_ICONS[mission.level] ?? "🏙";
+            const weatherIcon = WEATHER_ICONS[mission.weather_key] ?? "🌡";
 
             return (
-              <div key={mission.level} className={`campaign-row ${index % 2 === 0 ? "is-left" : "is-right"}`}>
+              <div key={mission.level} className={`campaign-row ${index % 2 === 0 ? "is-left" : "is-right"} status-${status}`}>
                 <div className="campaign-node-column">
-                  <div className={`campaign-node status-${status}`}>{mission.level}</div>
-                  {index < CAMPAIGN_MISSIONS.length - 1 ? <div className="campaign-link" /> : null}
+                  <div className={`campaign-node status-${status}`}>
+                    {status === "completed" ? "✓" : status === "locked" ? "🔒" : mission.level}
+                  </div>
+                  {index < CAMPAIGN_MISSIONS.length - 1 && <div className="campaign-link" />}
                 </div>
+
                 <article className={`campaign-card status-${status}`}>
                   <div className="campaign-card-head">
                     <div>
                       <span className="campaign-chapter">{mission.chapter}</span>
-                      <h2>{mission.title}</h2>
+                      <h2>
+                        <span className="campaign-city-icon">{cityIcon}</span>
+                        {mission.title}
+                      </h2>
                     </div>
                     <span className={`tag salon-status-chip status-${status}`}>
-                      {status === "completed" ? "Terminé" : status === "unlocked" ? "Disponible" : "Verrouillé"}
+                      {status === "completed" ? "✓ Terminé" : status === "unlocked" ? "Disponible" : "🔒 Verrouillé"}
                     </span>
                   </div>
+
                   <p className="campaign-briefing">{mission.briefing}</p>
+
                   <div className="campaign-meta-grid">
-                    <span>{mission.zone}</span>
-                    <span>{mission.num_clients} clients</span>
-                    <span>Météo {mission.weather_key}</span>
-                    <span>IA {mission.ai_profile}</span>
+                    <span className="campaign-meta-chip">📍 {mission.zone}</span>
+                    <span className="campaign-meta-chip">📦 {mission.num_clients} clients</span>
+                    <span className="campaign-meta-chip">{weatherIcon} {mission.weather_key}</span>
+                    <span className="campaign-meta-chip">🤖 IA {mission.ai_profile}</span>
                   </div>
+
                   <div className="campaign-objectives">
-                    <span>
-                      <strong>Objectif</strong> {mission.objective}
-                    </span>
-                    <span>
-                      <strong>Récompense</strong> {mission.reward_label}
-                    </span>
+                    <span><strong>Objectif ·</strong> {mission.objective}</span>
+                    <span><strong>Récompense ·</strong> {mission.reward_label}</span>
                   </div>
-                  {mission.secondary_objectives && mission.secondary_objectives.length > 0 ? (
+
+                  {mission.secondary_objectives && mission.secondary_objectives.length > 0 && (
                     <div className="objective-list">
-                      {mission.secondary_objectives.map((objective) => (
-                        <div key={`${mission.level}-${objective.code}`} className="objective-chip">
+                      {mission.secondary_objectives.map((obj) => (
+                        <div key={`${mission.level}-${obj.code}`} className="objective-chip">
                           <span className="objective-dot" />
-                          <span>{objective.label}</span>
+                          <span>{obj.label}</span>
                         </div>
                       ))}
                     </div>
-                  ) : null}
+                  )}
+
                   <div className="campaign-footer">
                     <div className="campaign-stars" aria-label={`${stars} étoiles`}>
                       <span className={stars >= 1 ? "is-lit" : ""}>★</span>
                       <span className={stars >= 2 ? "is-lit" : ""}>★</span>
                       <span className={stars >= 3 ? "is-lit" : ""}>★</span>
                     </div>
-                    <span className="muted">{bestScore > 0 ? `Meilleur score ${bestScore.toFixed(1)}/100` : "Pas encore jouée"}</span>
+                    <span className="muted">
+                      {bestScore > 0 ? `Meilleur score : ${bestScore.toFixed(1)}/100` : "Pas encore jouée"}
+                    </span>
                     <button
-                      className="primary-button"
+                      className="primary-button campaign-launch-button"
                       disabled={status === "locked" || launchMutation.isPending || !player}
                       onClick={() => launchMutation.mutate(mission)}
                     >
-                      {!player ? "Connexion requise" : isPending ? "Initialisation..." : status === "completed" ? "Rejouer" : "Lancer"}
+                      {!player
+                        ? "🔑 Connexion requise"
+                        : isPending
+                        ? "Initialisation…"
+                        : status === "completed"
+                        ? "↺ Rejouer"
+                        : "🚀 Lancer"}
                     </button>
                   </div>
                 </article>
@@ -200,6 +246,7 @@ export function CampaignMap() {
             );
           })}
         </section>
+
       </div>
     </div>
   );

@@ -101,6 +101,7 @@ class HumanRouteOptionsRequest(BaseModel):
     to_id: int
     sleigh_id: int = Field(default=0, ge=0)
     speed_multiplier: float = Field(default=1.0, gt=0)
+    vehicle_capacity: int | None = Field(default=None, ge=1)
     k: int = Field(default=3, ge=1, le=5)
 
 
@@ -203,3 +204,41 @@ class DebriefResponse(BaseModel):
     score: dict
     human: dict
     analysis: dict
+
+
+class VersusMatchCreateRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    mode: Literal["private", "queue", "invite"] = "private"
+    template_id: str = Field(default="paris_duel", min_length=3, max_length=80)
+    winner_rule: str = Field(default="score_time", min_length=3, max_length=40)
+
+
+class VersusMatchJoinRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    join_code: str = Field(min_length=4, max_length=16)
+
+
+class VersusQueueRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    template_id: str = Field(default="paris_duel", min_length=3, max_length=80)
+    winner_rule: str = Field(default="score_time", min_length=3, max_length=40)
+
+
+class VersusInviteCreateRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    invitee_player_id: str = Field(min_length=3, max_length=80)
+    template_id: str = Field(default="paris_duel", min_length=3, max_length=80)
+    winner_rule: str = Field(default="score_time", min_length=3, max_length=40)
+
+
+class VersusInviteDecisionRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+
+
+class VersusReadyRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    ready: bool = True
+
+
+class VersusSubmitRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)

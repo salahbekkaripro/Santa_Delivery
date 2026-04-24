@@ -17,6 +17,16 @@ function asDistance(meters: number) {
   return `${(meters / 1000).toFixed(2)} km`;
 }
 
+function StarRow({ stars, max = 3 }: { stars: number; max?: number }) {
+  return (
+    <div className="stars-row">
+      {Array.from({ length: max }, (_, i) => (
+        <span key={i} style={{ opacity: i < stars ? 1 : 0.2 }}>⭐</span>
+      ))}
+    </div>
+  );
+}
+
 export function DebriefView({ missionId }: { missionId: string }) {
   const { player } = usePlayer();
   const debriefQuery = useQuery({
@@ -51,19 +61,31 @@ export function DebriefView({ missionId }: { missionId: string }) {
   }, [campaignLevel, campaignScore, debriefData]);
 
   if (debriefQuery.isLoading) {
-    return <div className="page-shell">Chargement du debriefing...</div>;
+    return (
+      <div className="page-shell">
+        <div className="page-stack">
+          <div className="hero" style={{ height: 160 }}>
+            <div className="skeleton-bar h-lg w-60" style={{ marginBottom: 12 }} />
+            <div className="skeleton-bar h-sm w-80" />
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (debriefQuery.error || !debriefQuery.data) {
-    return <div className="page-shell error-box">Debriefing indisponible.</div>;
+    return <div className="page-shell error-box">Débriefing indisponible.</div>;
   }
 
   const debriefPayload: DebriefPayload = debriefQuery.data;
   const analysis = debriefPayload.analysis;
   const humanDeltaS = Number(analysis.human_vs_ai_delta_s ?? 0);
   const aiStrategy = analysis.ai_strategy ?? debriefPayload.results.ai_strategy;
+  const aiLearning = aiStrategy?.learning;
+  const aiProfileOrigin = aiStrategy?.profile_origin ?? (aiLearning ? "learned" : "preset");
   const scoreBreakdown = debriefPayload.score.breakdown;
   const secondaryObjectives = analysis.secondary_objectives ?? [];
+  const humanBeatAI = debriefPayload.score.human_beat_ai;
 
   const chartData = [
     {
@@ -81,38 +103,50 @@ export function DebriefView({ missionId }: { missionId: string }) {
   return (
     <div className="page-shell">
       <div className="page-stack">
+
+        {/* HERO */}
         <section className="hero">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div className="score-hero-layout">
             <div>
-              <h1>Debriefing mission</h1>
-              <p>
-                Rang {debriefPayload.score.rank} · {debriefPayload.score.rank_title} · score {debriefPayload.score.value}/100
-              </p>
+              <h1>Débriefing</h1>
+              <div className="score-big-display" style={{ marginTop: 8 }}>
+                <span className="score-big-number">{debriefPayload.score.value}</span>
+                <span className="score-big-denom">/100</span>
+              </div>
+              <span className="score-rank-badge">
+                {debriefPayload.score.rank} · {debriefPayload.score.rank_title}
+              </span>
+              {campaignLevel > 0 && <StarRow stars={earnedStars} />}
             </div>
-            {player ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {player ? (
+                <button
+                  className="primary-button"
+                  onClick={() => leaderboardMutation.mutate()}
+                  disabled={leaderboardMutation.isPending}
+                >
+                  {leaderboardMutation.isPending ? "Enregistrement…" : `🏆 Enregistrer ${player.display_name}`}
+                </button>
+              ) : (
+                <Link className="primary-button" href={`/login?redirect=${encodeURIComponent(`/mission/${missionId}/debrief`)}`}>
+                  Se connecter pour enregistrer
+                </Link>
+              )}
               <button
-                className="primary-button"
-                onClick={() => leaderboardMutation.mutate()}
-                disabled={leaderboardMutation.isPending}
+                className="secondary-button"
+                style={{ background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.24)", color: "white" }}
+                onClick={() => window.print()}
               >
-                {leaderboardMutation.isPending ? "Enregistrement..." : `Enregistrer ${player.display_name}`}
+                📜 Imprimer le certificat
               </button>
-            ) : (
-              <Link className="primary-button" href={`/login?redirect=${encodeURIComponent(`/mission/${missionId}/debrief`)}`}>
-                Se connecter pour enregistrer
-              </Link>
-            )}
-            <button 
-              className="secondary-button" 
-              style={{ background: "#fff", border: "1px solid var(--border)" }}
-              onClick={() => window.print()}
-            >
-              📜 Imprimer mon Certificat
-            </button>
+              <div className="hero-badge" style={{ justifyContent: "center", padding: "8px 16px" }}>
+                {humanBeatAI ? "🏆 Vous avez battu l'IA !" : "🤖 L'IA vous précède — revanche ?"}
+              </div>
+            </div>
           </div>
         </section>
 
-        {/* --- Hidden Certificate for Print --- */}
+        {/* Certificat caché pour impression */}
         <div className="certificate-only">
           <div className="certificate-header">📜 CERTIFICAT D&apos;EXCELLENCE LOGISTIQUE</div>
           <p>Le Pôle Nord est fier de décerner ce titre à :</p>
@@ -120,26 +154,12 @@ export function DebriefView({ missionId }: { missionId: string }) {
           <div className="certificate-seal">🎅</div>
           <p>Pour avoir accompli la mission dans la zone :</p>
           <h3>{debriefPayload.mission.zone}</h3>
-          
           <div className="certificate-stats">
-            <div>
-              <strong>Score Final</strong>
-              <div style={{ fontSize: "32px" }}>{debriefPayload.score.value}/100</div>
-            </div>
-            <div>
-              <strong>Rang</strong>
-              <div style={{ fontSize: "32px" }}>{debriefPayload.score.rank}</div>
-            </div>
-            <div>
-              <strong>CO2 Économisé</strong>
-              <div>{debriefPayload.benchmark.savings.co2_saved_kg} kg</div>
-            </div>
-            <div>
-              <strong>Gain de temps</strong>
-              <div>{debriefPayload.benchmark.savings.time_saved_pct}%</div>
-            </div>
+            <div><strong>Score Final</strong><div style={{ fontSize: "32px" }}>{debriefPayload.score.value}/100</div></div>
+            <div><strong>Rang</strong><div style={{ fontSize: "32px" }}>{debriefPayload.score.rank}</div></div>
+            <div><strong>CO₂ Économisé</strong><div>{debriefPayload.benchmark.savings.co2_saved_kg} kg</div></div>
+            <div><strong>Gain de temps</strong><div>{debriefPayload.benchmark.savings.time_saved_pct}%</div></div>
           </div>
-          
           <p style={{ marginTop: "60px", fontStyle: "italic" }}>
             &quot;Par les pouvoirs conférés par Saint Nicolas, l&apos;optimisation est désormais votre seconde nature.&quot;
           </p>
@@ -148,6 +168,7 @@ export function DebriefView({ missionId }: { missionId: string }) {
           </div>
         </div>
 
+        {/* GRAPHIQUE + MÉTRIQUES CLÉS */}
         <section className="grid-2">
           <div className="chart-container">
             <strong>Comparaison de performance</strong>
@@ -158,18 +179,18 @@ export function DebriefView({ missionId }: { missionId: string }) {
                 <YAxis />
                 <Tooltip />
                 <Legend />
-                <Bar dataKey="Humain" fill="#c1452f" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Humain" fill="#9e2f3f" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="IA" fill="#17324d" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="grid-2" style={{ gap: "16px" }}>
-            <div className="metric-card">
-              <div className="metric-label">Gain temps vs Naïf</div>
+          <div className="grid-2" style={{ gap: "14px", alignContent: "start" }}>
+            <div className="metric-card is-good">
+              <div className="metric-label">Gain vs Naïf</div>
               <div className="metric-value">{debriefPayload.benchmark.savings.time_saved_pct}%</div>
             </div>
-            <div className="metric-card">
-              <div className="metric-label">CO2 economise</div>
+            <div className="metric-card is-good">
+              <div className="metric-label">CO₂ économisé</div>
               <div className="metric-value">{debriefPayload.benchmark.savings.co2_saved_kg} kg</div>
             </div>
             <div className="metric-card">
@@ -177,126 +198,158 @@ export function DebriefView({ missionId }: { missionId: string }) {
               <div className="metric-value">{debriefPayload.benchmark.budget?.remaining ?? 0} €</div>
             </div>
             <div className="metric-card">
-              <div className="metric-label">Clients humains</div>
+              <div className="metric-label">Clients livrés</div>
               <div className="metric-value">{debriefPayload.human.assigned_clients.length}</div>
             </div>
-            {scoreBreakdown ? (
-              <div className="metric-card">
-                <div className="metric-label">Bonus profil IA</div>
-                <div className="metric-value">+{scoreBreakdown.ai_profile_bonus}</div>
-              </div>
-            ) : null}
-            {scoreBreakdown ? (
-              <div className="metric-card">
-                <div className="metric-label">Bonus victoire</div>
-                <div className="metric-value">+{scoreBreakdown.human_bonus}</div>
-              </div>
-            ) : null}
+            {scoreBreakdown && (
+              <>
+                <div className="metric-card is-accent">
+                  <div className="metric-label">Bonus profil IA</div>
+                  <div className="metric-value">+{scoreBreakdown.ai_profile_bonus}</div>
+                </div>
+                <div className={`metric-card ${humanBeatAI ? "is-good" : ""}`}>
+                  <div className="metric-label">Bonus duel</div>
+                  <div className="metric-value">+{scoreBreakdown.human_bonus}</div>
+                </div>
+              </>
+            )}
           </div>
         </section>
 
+        {/* RÉSUMÉ + COMPARAISON */}
         <section className="grid-3">
           <div className="panel stack">
-            <strong>Resume IA</strong>
-            <span className="muted">Temps total: {asMinutes(debriefPayload.results.total_time_s)}</span>
-            <span className="muted">Poids livre: {debriefPayload.results.total_weight_kg} kg</span>
-            <span className="muted">Points non servis: {analysis.dropped_points.length}</span>
-            <span className="muted">Bonus humain: {debriefPayload.score.human_beat_ai ? "oui" : "non"}</span>
-            {aiStrategy ? <span className="muted">Profil IA: {aiStrategy.label} · {aiStrategy.description}</span> : null}
-          </div>
-          <div className="panel stack">
-            <strong>Comparaison</strong>
-            <span className="muted">Humain: {asMinutes(debriefPayload.human.summary.total_time_s)}</span>
-            <span className="muted">IA: {asMinutes(debriefPayload.results.total_time_s)}</span>
+            <strong>🤖 Résumé IA</strong>
             <span className="muted">
-              Ecart humain vs IA: {humanDeltaS > 0 ? `+${asMinutes(humanDeltaS)}` : humanDeltaS < 0 ? `-${asMinutes(Math.abs(humanDeltaS))}` : "0 min"}
+              Origine : {aiProfileOrigin === "learned" ? "Modèle apprenant" : "Preset mission"}
             </span>
-            <span className="muted">Gain vs naif: {asMinutes(analysis.naive_vs_ai_delta_s)}</span>
-            {aiStrategy ? (
+            <span className="muted">Temps total : {asMinutes(debriefPayload.results.total_time_s)}</span>
+            <span className="muted">Poids livré : {debriefPayload.results.total_weight_kg} kg</span>
+            <span className="muted">Points non servis : {analysis.dropped_points.length}</span>
+            {aiStrategy && (
               <span className="muted">
-                Réglage IA: {aiStrategy.optimization_target} · {aiStrategy.num_vehicles} traineau(x) · {aiStrategy.vehicle_capacity} kg
+                Profil : {aiStrategy.label} · {aiStrategy.description}
               </span>
-            ) : null}
-            {scoreBreakdown ? (
-              <span className="muted">
-                Score: base {scoreBreakdown.base_score} + IA {scoreBreakdown.ai_profile_bonus} + incidents {scoreBreakdown.incident_bonus} + duel {scoreBreakdown.human_bonus}
-              </span>
-            ) : null}
-            {campaignLevel > 0 ? <span className="muted">Campagne: mission {campaignLevel} · {earnedStars} etoile(s)</span> : null}
+            )}
+            {aiLearning && (
+              <>
+                <span className="muted">Confiance modèle : {(aiLearning.confidence * 100).toFixed(0)}%</span>
+                <span className="muted">Contexte : {aiLearning.context_key}</span>
+              </>
+            )}
           </div>
+
+          <div className="panel stack">
+            <strong>⚖️ Comparaison</strong>
+            <span className="muted">Humain : {asMinutes(debriefPayload.human.summary.total_time_s)}</span>
+            <span className="muted">IA : {asMinutes(debriefPayload.results.total_time_s)}</span>
+            <span className="muted">
+              Écart : {humanDeltaS > 0 ? `+${asMinutes(humanDeltaS)}` : humanDeltaS < 0 ? `-${asMinutes(Math.abs(humanDeltaS))}` : "Égalité"}
+            </span>
+            <span className="muted">Gain vs naïf : {asMinutes(analysis.naive_vs_ai_delta_s)}</span>
+            {scoreBreakdown && (
+              <span className="muted" style={{ fontSize: "0.8rem" }}>
+                Score : {scoreBreakdown.base_score} (base) + {scoreBreakdown.ai_profile_bonus} (IA) + {scoreBreakdown.incident_bonus} (incidents) + {scoreBreakdown.human_bonus} (duel)
+              </span>
+            )}
+            {campaignLevel > 0 && (
+              <span className="muted">Campagne : mission {campaignLevel} · {earnedStars} ⭐</span>
+            )}
+            {aiLearning && (
+              <span className="muted" style={{ fontSize: "0.8rem" }}>
+                Top profils proposés : {aiLearning.top_candidates.map((candidate) => candidate.label).join(" · ")}
+              </span>
+            )}
+          </div>
+
           <div className="panel stack">
             <strong>Navigation</strong>
-            {campaignLevel > 0 ? (
-              <Link className="secondary-button" href="/campaign">
-                Retour a la campagne
-              </Link>
-            ) : null}
-            {campaignLevel >= campaignTotalLevels ? (
-              <Link className="secondary-button" href="/campaign/finale">
-                Voir la finale de campagne
-              </Link>
-            ) : null}
+            {campaignLevel > 0 && (
+              <Link className="secondary-button" href="/campaign">← Retour campagne</Link>
+            )}
+            {campaignLevel >= campaignTotalLevels && (
+              <Link className="secondary-button" href="/campaign/finale">🎉 Voir la finale</Link>
+            )}
             <Link className="secondary-button" href={`/mission/${missionId}/results`}>
-              Retour aux resultats
+              Retour aux résultats
             </Link>
             <Link className="primary-button" href={`/mission/${missionId}`}>
-              Revenir a la mission
+              ← Revenir à la mission
             </Link>
           </div>
         </section>
 
+        {/* TRAÎNEAUX */}
         <section className="grid-2">
           <div className="panel stack">
-            <strong>Analyse par traineau humain</strong>
-            {debriefPayload.human.sleighs && debriefPayload.human.sleighs.length > 0 ? (
-              debriefPayload.human.sleighs.map((sleigh: HumanSleighSummary) => (
-                <span key={`human-${sleigh.sleigh_id}`} className="muted">
-                  T#{sleigh.sleigh_id + 1} · {sleigh.stop_count} stop(s) · {asMinutes(sleigh.time_s)} · {asDistance(sleigh.dist_m)} · retour {sleigh.return_arrival_clock ?? "--:--"}
-                </span>
-              ))
-            ) : (
-              <span className="muted">Pas de trace humaine detaillee.</span>
-            )}
-          </div>
-          <div className="panel stack">
-            <strong>Analyse par traineau IA</strong>
-            {analysis.ai_sleighs && analysis.ai_sleighs.length > 0 ? (
-              analysis.ai_sleighs.map((sleigh: AISleighSummary) => (
-                <span key={`ai-${sleigh.sleigh_id}`} className="muted">
-                  T#{sleigh.sleigh_id + 1} · {sleigh.stop_count} stop(s) · {asMinutes(sleigh.time_s)} · {sleigh.weight_kg} kg
-                </span>
-              ))
-            ) : (
-              <span className="muted">Pas de tournee IA detaillee.</span>
-            )}
-          </div>
-        </section>
-
-        <section className="panel stack">
-          <strong>Recommandations</strong>
-          {analysis.recommendations.map((recommendation: string) => (
-            <span key={recommendation} className="muted">
-              {recommendation}
-            </span>
-          ))}
-        </section>
-
-        {secondaryObjectives.length > 0 ? (
-          <section className="panel stack">
-            <strong>Objectifs secondaires</strong>
-            <div className="objective-results">
-              {secondaryObjectives.map((objective) => (
-                <div key={`${objective.code}-${objective.label}`} className={`objective-result ${objective.completed ? "is-complete" : "is-pending"}`}>
-                  <div>
-                    <strong>{objective.completed ? "Validé" : "Raté"}</strong>
-                    <span className="muted">{objective.label}</span>
+            <strong>Traîneaux humain</strong>
+            {(debriefPayload.human.sleighs ?? []).length > 0 ? (
+              (debriefPayload.human.sleighs ?? []).map((sleigh: HumanSleighSummary) => (
+                <div key={`human-${sleigh.sleigh_id}`} className="sleigh-row">
+                  <span className="sleigh-row-id">#{sleigh.sleigh_id + 1}</span>
+                  <div className="sleigh-row-stats">
+                    <span>{sleigh.stop_count} stops</span>
+                    <span>{asMinutes(sleigh.time_s)}</span>
+                    <span>{asDistance(sleigh.dist_m)}</span>
+                    {sleigh.return_arrival_clock && <span>retour {sleigh.return_arrival_clock}</span>}
                   </div>
-                  <span className="muted">{objective.progress_label}</span>
+                </div>
+              ))
+            ) : (
+              <span className="muted">Pas de trace humaine détaillée.</span>
+            )}
+          </div>
+
+          <div className="panel stack">
+            <strong>Traîneaux IA</strong>
+            {analysis.ai_sleighs?.length > 0 ? (
+              analysis.ai_sleighs.map((sleigh: AISleighSummary) => (
+                <div key={`ai-${sleigh.sleigh_id}`} className="sleigh-row">
+                  <span className="sleigh-row-id" style={{ background: "var(--accent)" }}>#{sleigh.sleigh_id + 1}</span>
+                  <div className="sleigh-row-stats">
+                    <span>{sleigh.stop_count} stops</span>
+                    <span>{asMinutes(sleigh.time_s)}</span>
+                    <span>{sleigh.weight_kg} kg</span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <span className="muted">Pas de tournée IA détaillée.</span>
+            )}
+          </div>
+        </section>
+
+        {/* RECOMMANDATIONS */}
+        <section className="panel stack">
+          <strong>💡 Recommandations</strong>
+          <div className="recommendation-list">
+            {analysis.recommendations.map((rec: string) => (
+              <div key={rec} className="recommendation-item">
+                <span className="recommendation-icon">→</span>
+                <span>{rec}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* OBJECTIFS SECONDAIRES */}
+        {secondaryObjectives.length > 0 && (
+          <section className="panel stack">
+            <strong>🎯 Objectifs secondaires</strong>
+            <div className="objective-results">
+              {secondaryObjectives.map((obj) => (
+                <div key={`${obj.code}-${obj.label}`} className={`objective-result ${obj.completed ? "is-complete" : "is-pending"}`}>
+                  <div>
+                    <strong>{obj.completed ? "✓ Validé" : "✗ Raté"}</strong>
+                    <span className="muted">{obj.label}</span>
+                  </div>
+                  <span className="muted">{obj.progress_label}</span>
                 </div>
               ))}
             </div>
           </section>
-        ) : null}
+        )}
+
       </div>
     </div>
   );

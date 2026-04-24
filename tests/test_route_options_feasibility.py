@@ -58,8 +58,8 @@ class RouteOptionsFeasibilityTests(unittest.TestCase):
 
         self.assertEqual(len(annotated), 1)
         self.assertFalse(annotated[0]["is_feasible"])
-        self.assertIn("Surcharge", annotated[0]["feasibility_badges"])
-        self.assertIn("Risque retard", annotated[0]["feasibility_badges"])
+        self.assertTrue(any(badge.startswith("Surcharge +") for badge in annotated[0]["feasibility_badges"]))
+        self.assertTrue(any(badge.startswith("Retard +") for badge in annotated[0]["feasibility_badges"]))
         self.assertGreater(annotated[0]["projected_overload_kg"], 0.0)
 
     def test_sorts_feasible_options_first(self):

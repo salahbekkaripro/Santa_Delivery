@@ -123,6 +123,67 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("player_id", columns)
         self.assertIn("idx_leaderboard_player_id", indexes)
 
+    def test_create_versus_match_and_participants(self):
+        repository.upsert_player(
+            player_id="p1",
+            display_name="Host",
+            db_path=self.db_path,
+        )
+        repository.upsert_player(
+            player_id="p2",
+            display_name="Guest",
+            db_path=self.db_path,
+        )
+        repository.create_versus_match(
+            match_id="match-1",
+            mode="private",
+            template_id="paris_duel",
+            winner_rule="score_time",
+            host_player_id="p1",
+            join_code="ABC123",
+            status="waiting_opponent",
+            db_path=self.db_path,
+        )
+        repository.add_versus_participant("match-1", "p2", seat=1, db_path=self.db_path)
+        repository.update_versus_match("match-1", status="waiting_ready", db_path=self.db_path)
+
+        match = repository.get_versus_match("match-1", db_path=self.db_path)
+        participants = repository.list_versus_participants("match-1", db_path=self.db_path)
+
+        self.assertIsNotNone(match)
+        self.assertEqual(match["status"], "waiting_ready")
+        self.assertEqual(len(participants), 2)
+        self.assertEqual(participants[0]["player_id"], "p1")
+        self.assertEqual(participants[1]["player_id"], "p2")
+
+    def test_versus_queue_and_invites(self):
+        repository.upsert_player(
+            player_id="p1",
+            display_name="Host",
+            db_path=self.db_path,
+        )
+        repository.upsert_player(
+            player_id="p2",
+            display_name="Guest",
+            db_path=self.db_path,
+        )
+        repository.enqueue_versus_player("p1", "paris_duel", "score_time", db_path=self.db_path)
+        opponent = repository.find_versus_queue_opponent("p2", "paris_duel", "score_time", db_path=self.db_path)
+        self.assertIsNotNone(opponent)
+        self.assertEqual(opponent["player_id"], "p1")
+
+        repository.create_versus_invite(
+            invite_id="invite-1",
+            inviter_player_id="p1",
+            invitee_player_id="p2",
+            template_id="paris_duel",
+            winner_rule="score_time",
+            db_path=self.db_path,
+        )
+        invites = repository.list_pending_versus_invites("p2", db_path=self.db_path)
+        self.assertEqual(len(invites), 1)
+        self.assertEqual(invites[0]["invite_id"], "invite-1")
+
 
 if __name__ == "__main__":
     unittest.main()

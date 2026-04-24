@@ -22,6 +22,13 @@ from backend.app.schemas import (
     ResetPasswordRequest,
     SolveMissionRequest,
     SolveMissionResponse,
+    VersusInviteCreateRequest,
+    VersusInviteDecisionRequest,
+    VersusMatchCreateRequest,
+    VersusMatchJoinRequest,
+    VersusQueueRequest,
+    VersusReadyRequest,
+    VersusSubmitRequest,
 )
 from backend.app import services
 
@@ -125,6 +132,7 @@ def get_human_route_options(mission_id: str, payload: HumanRouteOptionsRequest) 
             to_id=payload.to_id,
             sleigh_id=payload.sleigh_id,
             speed_multiplier=payload.speed_multiplier,
+            vehicle_capacity=payload.vehicle_capacity,
             k=payload.k,
         )
     except FileNotFoundError as exc:
@@ -207,6 +215,68 @@ def solve_mission(mission_id: str, payload: SolveMissionRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/missions/{mission_id}/solve-learned", response_model=SolveMissionResponse)
+def solve_mission_learned(mission_id: str, payload: SolveMissionRequest) -> dict:
+    try:
+        return services.solve_mission_learned(mission_id, payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ai-learning/train")
+def train_ai_learning(limit: int = 500) -> dict:
+    try:
+        return services.train_ai_learning_model(limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ai-learning/evaluate")
+def evaluate_ai_learning(limit: int = 800, holdout_ratio: float = 0.25) -> dict:
+    try:
+        return services.evaluate_ai_learning_model(limit=limit, holdout_ratio=holdout_ratio)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/missions/{mission_id}/ai-learning/recommendation")
+def get_ai_learning_recommendation(mission_id: str) -> dict:
+    try:
+        return services.get_ai_learning_recommendation(mission_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ortools-tuner/train")
+def train_ortools_tuner(limit: int = 1500) -> dict:
+    try:
+        return services.train_ortools_tuner_model(limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ortools-tuner/evaluate")
+def evaluate_ortools_tuner(limit: int = 2000, holdout_ratio: float = 0.25) -> dict:
+    try:
+        return services.evaluate_ortools_tuner_model(limit=limit, holdout_ratio=holdout_ratio)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/missions/{mission_id}/ortools-tuner/recommendation")
+def get_ortools_tuner_recommendation(mission_id: str) -> dict:
+    try:
+        return services.get_ortools_tuner_recommendation(mission_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/missions/{mission_id}/comparison", response_model=ComparisonResponse)
 def get_comparison(mission_id: str) -> dict:
     try:
@@ -234,3 +304,131 @@ def save_leaderboard(mission_id: str, payload: LeaderboardSaveRequest) -> dict:
 @app.get("/api/leaderboard")
 def list_leaderboard(limit: int = 20) -> dict:
     return services.list_leaderboard(limit=limit)
+
+
+@app.get("/api/versus/templates")
+def list_versus_templates() -> dict:
+    return services.list_versus_templates()
+
+
+@app.post("/api/versus/matches")
+def create_versus_match(payload: VersusMatchCreateRequest) -> dict:
+    try:
+        return services.create_versus_match(payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/versus/matches/join")
+def join_versus_match(payload: VersusMatchJoinRequest) -> dict:
+    try:
+        return services.join_versus_match(payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/versus/queue/enter")
+def enter_versus_queue(payload: VersusQueueRequest) -> dict:
+    try:
+        return services.enter_versus_queue(payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/versus/queue/leave")
+def leave_versus_queue(payload: VersusQueueRequest) -> dict:
+    try:
+        return services.leave_versus_queue(payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/versus/invites")
+def create_versus_invite(payload: VersusInviteCreateRequest) -> dict:
+    try:
+        return services.create_versus_invite(payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/versus/invites")
+def list_versus_invites(player_id: str) -> dict:
+    try:
+        return services.list_versus_invites(player_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/versus/invites/{invite_id}/accept")
+def accept_versus_invite(invite_id: str, payload: VersusInviteDecisionRequest) -> dict:
+    try:
+        return services.accept_versus_invite(invite_id, payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/versus/invites/{invite_id}/decline")
+def decline_versus_invite(invite_id: str, payload: VersusInviteDecisionRequest) -> dict:
+    try:
+        return services.decline_versus_invite(invite_id, payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/versus/matches/{match_id}/ready")
+def set_versus_ready(match_id: str, payload: VersusReadyRequest) -> dict:
+    try:
+        return services.set_versus_ready(match_id, payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/versus/matches/{match_id}/state")
+def get_versus_match_state(match_id: str, player_id: str) -> dict:
+    try:
+        return services.get_versus_match_state(match_id, player_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/versus/matches/{match_id}/submit")
+def submit_versus_attempt(match_id: str, payload: VersusSubmitRequest) -> dict:
+    try:
+        return services.submit_versus_attempt(match_id, payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/versus/leaderboard")
+def list_versus_leaderboard(limit: int = 20) -> dict:
+    return services.list_versus_leaderboard(limit=limit)

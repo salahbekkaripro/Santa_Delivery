@@ -44,7 +44,7 @@ export default function SearchAreaMapClient({
         <Circle
           center={[centerLat, centerLon]}
           radius={radiusKm * 1000}
-          pathOptions={{ color: "#c1452f", weight: 2, fillColor: "#c1452f", fillOpacity: 0.12 }}
+          pathOptions={{ color: "#9e2f3f", weight: 2, fillColor: "#9e2f3f", fillOpacity: 0.12 }}
         />
         <CircleMarker
           center={[centerLat, centerLon]}

@@ -57,6 +57,62 @@ export type AIStrategy = {
   max_route_time_s: number;
   drop_penalty: number;
   global_span_cost: number;
+  profile_origin?: "learned" | "preset";
+  learning?: AiLearningRecommendation;
+};
+
+export type AiLearningCandidate = {
+  profile: string;
+  label: string;
+  expected_cost: number;
+  support: number;
+};
+
+export type AiLearningRecommendation = {
+  profile: string;
+  label: string;
+  context_key: string;
+  confidence: number;
+  top_candidates: AiLearningCandidate[];
+  model: {
+    version: string;
+    sample_count: number;
+    trained_at?: string | null;
+  };
+};
+
+export type AiLearningTrainResponse = {
+  status: string;
+  model_version: string;
+  model_path: string;
+  sample_count: number;
+  context_count: number;
+  profiles: string[];
+  trained_at: string;
+};
+
+export type AiLearningEvaluationExample = {
+  context_key: string;
+  true_best_profile: string;
+  predicted_profile: string;
+  true_best_cost: number;
+  predicted_cost: number;
+};
+
+export type AiLearningEvaluationResponse = {
+  status: string;
+  model_version: string;
+  target: string;
+  sample_count_total: number;
+  sample_count_train: number;
+  sample_count_holdout: number;
+  holdout_ratio: number;
+  split_strategy?: string;
+  sample_match_rate: number;
+  contexts_evaluated: number;
+  context_top1_accuracy: number;
+  avg_context_regret: number;
+  examples: AiLearningEvaluationExample[];
 };
 
 export type ClientPoint = {
@@ -205,6 +261,11 @@ export type SolveResponse = {
   ai_segments: RouteSegment[];
   ai_stop_meta: Record<number, { vehicle_id: number; stop_order: number; arrival_eta_s: number; arrival_clock: string }>;
   comparison: ComparisonPayload;
+  learning?: {
+    used_model: boolean;
+    model_path: string;
+    recommendation: AiLearningRecommendation;
+  };
 };
 
 export type HumanSleighSummary = {
@@ -277,4 +338,85 @@ export type AdjacentNode = {
   dist_m: number;
   time_s: number;
   label: string;
+};
+
+export type VersusWinnerRule = "score_time" | "time" | "objectives";
+export type VersusMode = "private" | "queue" | "invite";
+
+export type VersusTemplate = {
+  template_id: string;
+  label: string;
+  description: string;
+};
+
+export type VersusParticipant = {
+  player_id: string;
+  display_name?: string | null;
+  callsign?: string | null;
+  avatar?: string | null;
+  seat: number;
+  state: "joined" | "ready" | "live" | "submitted" | "forfeit";
+  mission_id?: string | null;
+  ready_at?: string | null;
+  submitted_at?: string | null;
+  score?: number | null;
+  total_time_s?: number | null;
+  objectives_completed?: number;
+  is_valid_submission?: boolean;
+  forfeit_at?: string | null;
+  last_seen_at?: string | null;
+  forfeit_deadline_at?: string | null;
+  is_self: boolean;
+};
+
+export type VersusMatch = {
+  match_id: string;
+  mode: VersusMode;
+  template_id: string;
+  template_label?: string | null;
+  winner_rule: VersusWinnerRule;
+  join_code?: string | null;
+  host_player_id: string;
+  status: "waiting_opponent" | "waiting_ready" | "live" | "finished";
+  reference_mission_id?: string | null;
+  started_at?: string | null;
+  started_elapsed_s?: number | null;
+  completed_at?: string | null;
+  winner_player_id?: string | null;
+  result_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+  participants: VersusParticipant[];
+  current_player_mission_id?: string | null;
+};
+
+export type VersusInvite = {
+  invite_id: string;
+  inviter_player_id: string;
+  invitee_player_id: string;
+  template_id: string;
+  winner_rule: VersusWinnerRule;
+  status: "pending" | "accepted" | "declined";
+  match_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  responded_at?: string | null;
+  inviter_display_name?: string | null;
+  inviter_callsign?: string | null;
+  inviter_avatar?: string | null;
+};
+
+export type VersusLeaderboardEntry = {
+  match_id: string;
+  winner_player_id: string;
+  winner_display_name?: string | null;
+  winner_callsign?: string | null;
+  winner_avatar?: string | null;
+  loser_player_id?: string | null;
+  loser_display_name?: string | null;
+  winner_score?: number | null;
+  winner_time_s?: number | null;
+  winner_rule: VersusWinnerRule;
+  template_id: string;
+  created_at: string;
 };

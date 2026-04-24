@@ -24,85 +24,66 @@ export function LoginForm({ redirectTo = "/" }: { redirectTo?: string }) {
       }
       router.push("/");
     },
-    onError: (mutationError: Error) => {
-      setError(mutationError.message);
-    }
+    onError: (mutationError: Error) => setError(mutationError.message)
   });
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!email.trim()) {
-      setError("L'email est requis.");
-      return;
-    }
-    if (!password.trim()) {
-      setError("Le mot de passe est requis.");
-      return;
-    }
-
+    if (!email.trim()) { setError("L'email est requis."); return; }
+    if (!password.trim()) { setError("Le mot de passe est requis."); return; }
     loginMutation.mutate({ email, password });
   }
 
   return (
-    <div className="page-shell campaign-shell">
-      <div className="page-stack campaign-stack">
-        <section className="campaign-hero">
-          <div className="campaign-hero-copy">
-            <span className="salon-badge">Connexion joueur</span>
-            <h1>Reconnecte ton compte</h1>
-            <p>
-              Le compte connecté servira pour la campagne, les scores enregistrés et les futurs modes compétitifs.
-            </p>
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="auth-card-hero">
+          <span className="auth-card-icon">🎅</span>
+          <h1>Bon retour</h1>
+          <p>Connecte-toi pour reprendre ta campagne et sauvegarder tes scores au Panthéon.</p>
+          <div className="auth-snowflakes">
+            <span>❄️</span><span>🎄</span><span>⭐</span><span>🎄</span><span>❄️</span>
           </div>
-          <div className="campaign-hero-stats">
-            <div className="campaign-stat-card">
-              <span>Entrée</span>
-              <strong>Email + mot de passe</strong>
+        </div>
+        <div className="auth-card-body">
+          <form onSubmit={handleSubmit} className="auth-form auth-form-gap-lg">
+            <label className="field">
+              <span>Email</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="capitaine@pole-nord.com"
+                autoComplete="email"
+              />
+            </label>
+            <label className="field">
+              <span>Mot de passe</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="current-password"
+              />
+            </label>
+
+            {error && <div className="error-box">{error}</div>}
+
+            <button className="primary-button" type="submit" disabled={loginMutation.isPending}>
+              {loginMutation.isPending ? "Connexion…" : "Se connecter →"}
+            </button>
+
+            <div className="auth-links-row auth-links-row-center">
+              <Link className="secondary-button" href={`/register?redirect=${encodeURIComponent(redirectTo)}`}>
+                Créer un compte
+              </Link>
+              <Link className="secondary-button" href="/forgot-password">
+                Mot de passe oublié ?
+              </Link>
             </div>
-            <div className="campaign-stat-card">
-              <span>Effet</span>
-              <strong>Profil chargé en local</strong>
-            </div>
-          </div>
-        </section>
-
-        <form className="panel stack login-form" onSubmit={handleSubmit}>
-          <label className="field">
-            <span>Email</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="capitaine@pole-nord.com"
-              autoComplete="email"
-            />
-          </label>
-          <label className="field">
-            <span>Mot de passe</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="8 caractères minimum"
-              autoComplete="current-password"
-            />
-          </label>
-
-          {error ? <div className="error-box">{error}</div> : null}
-
-          <div className="auth-links-row">
-            <Link className="secondary-button" href={`/register?redirect=${encodeURIComponent(redirectTo)}`}>
-              Créer un compte
-            </Link>
-            <Link className="secondary-button" href="/forgot-password">
-              Mot de passe oublié
-            </Link>
-          </div>
-
-          <button className="primary-button" type="submit" disabled={loginMutation.isPending}>
-            {loginMutation.isPending ? "Connexion..." : "Se connecter"}
-          </button>
-        </form>
+          </form>
+        </div>
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import random
 import secrets
+import shutil
 import sqlite3
 import unicodedata
 import uuid
@@ -20,7 +21,7 @@ from final_scripts.solve_santa_final import solve_vrp
 from backend.app import repository
 from scripts.benchmark_engine import calculate_benchmark
 from scripts.generator_engine import generate_new_zone
-from scripts.mission_paths import MissionPaths, mission_paths
+from scripts.mission_paths import MissionPaths, ROOT_DIR, mission_paths
 from scripts.routing_payloads import (
     DEFAULT_DEPARTURE_TIME,
     WEATHER_MAP,
@@ -137,6 +138,26 @@ AI_PROFILE_PRESETS = {
     },
 }
 
+AI_LEARNING_MODEL_FILE = ROOT_DIR / "cache" / "api_missions" / "ai_learning_model.json"
+AI_LEARNING_MODEL_VERSION = "2.0"
+AI_LEARNING_MIN_SAMPLES = 8
+AI_LEARNING_SMOOTHING_ALPHA = 3.0
+AI_LEARNING_HOLDOUT_RATIO = 0.25
+ORTOOLS_TUNER_MODEL_FILE = ROOT_DIR / "cache" / "api_missions" / "ortools_tuner_model.json"
+ORTOOLS_TUNER_MODEL_VERSION = "1.0"
+ORTOOLS_TUNER_MIN_SAMPLES = 12
+ORTOOLS_TUNER_SMOOTHING_ALPHA = 3.0
+ORTOOLS_TUNER_HOLDOUT_RATIO = 0.25
+ORTOOLS_TUNER_FIELDS = (
+    "first_solution_strategy",
+    "local_search_metaheuristic",
+    "solver_time_limit_s",
+    "time_slack_s",
+    "max_route_time_s",
+    "drop_penalty",
+    "global_span_cost",
+)
+
 PASSWORD_HASH_ITERATIONS = 120_000
 PASSWORD_RESET_TTL_MINUTES = 30
 SEARCH_MIN_RADIUS_KM = 0.5
@@ -151,6 +172,56 @@ _route_options_cache_lock = Lock()
 _graph_cache: OrderedDict[tuple[str, int], object] = OrderedDict()
 _graph_cache_lock = Lock()
 DEFAULT_DEPARTURE_TIME_S = parse_clock_to_seconds(DEFAULT_DEPARTURE_TIME)
+VERSUS_FORFEIT_TIMEOUT_SECONDS = 300
+VERSUS_WINNER_RULES = {"score_time", "time", "objectives"}
+VERSUS_MATCH_MODES = {"private", "queue", "invite"}
+VERSUS_TEMPLATES = {
+    "paris_duel": {
+        "template_id": "paris_duel",
+        "label": "Paris Rush",
+        "description": "Duel urbain rapide sans incidents.",
+        "mission": {
+            "zone": "Le Marais, Paris",
+            "city": "Paris",
+            "num_clients": 22,
+            "budget": 2600,
+            "sleigh_cost": 650,
+            "weather_key": "Clear",
+            "random_incidents": False,
+            "ai_profile": "Express",
+        },
+    },
+    "berlin_rain_duel": {
+        "template_id": "berlin_rain_duel",
+        "label": "Berlin Rain Clash",
+        "description": "Meteo pluie et densite moyenne.",
+        "mission": {
+            "zone": "Mitte, Berlin",
+            "city": "Berlin",
+            "num_clients": 28,
+            "budget": 3200,
+            "sleigh_cost": 700,
+            "weather_key": "Rain",
+            "random_incidents": False,
+            "ai_profile": "Prudent",
+        },
+    },
+    "montreal_snow_duel": {
+        "template_id": "montreal_snow_duel",
+        "label": "Montreal Snow Battle",
+        "description": "Neige et incidents actifs.",
+        "mission": {
+            "zone": "Le Plateau-Mont-Royal, Montreal, Quebec, Canada",
+            "city": "Montreal",
+            "num_clients": 34,
+            "budget": 3800,
+            "sleigh_cost": 800,
+            "weather_key": "Snow",
+            "random_incidents": True,
+            "ai_profile": "Championne",
+        },
+    },
+}
 
 
 def _read_json(path: str | Path, default=None):
@@ -367,12 +438,15 @@ def _annotate_route_options_feasibility(
                 badges.append("Déjà assigné")
             if projected_overload_kg > 0:
                 is_feasible = False
-                badges.append("Surcharge")
+                overload_kg = int(np.ceil(projected_overload_kg))
+                badges.append(f"Surcharge +{max(1, overload_kg)} kg")
             if slack_s < 0:
                 is_feasible = False
-                badges.append("Risque retard")
+                delay_min = int(np.ceil(abs(float(slack_s)) / 60.0))
+                badges.append(f"Retard +{max(1, delay_min)} min")
             elif slack_s < 900:
-                badges.append("Risque retard")
+                margin_min = int(np.floor(max(float(slack_s), 0.0) / 60.0))
+                badges.append(f"Marge {max(0, margin_min)} min")
 
         if not badges:
             badges.append("Sûr")
@@ -548,6 +622,892 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
         "max_route_time_s": max_route_time_s,
         "drop_penalty": int(preset["drop_penalty"]),
         "global_span_cost": int(preset["global_span_cost"]),
+    }
+
+
+def _client_bucket(num_clients: int) -> str:
+    if num_clients <= 15:
+        return "small"
+    if num_clients <= 35:
+        return "medium"
+    return "large"
+
+
+def _safe_float(value, default: float | None = None) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if np.isfinite(parsed) else default
+
+
+def _weather_bucket(weather_key: str) -> str:
+    normalized = str(weather_key or "clear").strip().lower()
+    if normalized in {"clear", "clouds"}:
+        return "clearish"
+    if normalized in {"rain", "drizzle"}:
+        return "rainy"
+    if normalized in {"snow"}:
+        return "snowy"
+    if normalized in {"thunderstorm", "storm"}:
+        return "stormy"
+    if normalized in {"real", "random"}:
+        return normalized
+    return "other"
+
+
+def _budget_bucket(mission: dict, num_clients: int) -> str:
+    budget = max(0.0, float(mission.get("budget", 0.0)))
+    if budget <= 0:
+        return "unknown"
+    budget_per_client = budget / float(max(1, num_clients))
+    if budget_per_client < 80.0:
+        return "tight"
+    if budget_per_client < 140.0:
+        return "balanced"
+    return "relaxed"
+
+
+def _sleigh_cost_bucket(mission: dict) -> str:
+    sleigh_cost = max(0.0, float(mission.get("sleigh_cost", 0.0)))
+    if sleigh_cost <= 0:
+        return "unknown"
+    if sleigh_cost <= 550.0:
+        return "light"
+    if sleigh_cost <= 750.0:
+        return "standard"
+    return "expensive"
+
+
+def _density_bucket(mission: dict, num_clients: int) -> str:
+    radius_km = _safe_float(mission.get("search_radius_km"))
+    if radius_km is None or radius_km <= 0:
+        return "unknown"
+    area_km2 = float(np.pi) * radius_km * radius_km
+    density = float(num_clients) / max(area_km2, 1e-6)
+    if density < 1.5:
+        return "sparse"
+    if density < 3.5:
+        return "urban"
+    return "dense"
+
+
+def _mission_learning_context(mission: dict) -> str:
+    weather_key = _weather_bucket(str(mission.get("weather_key", "clear")))
+    random_incidents = 1 if bool(mission.get("random_incidents", False)) else 0
+    num_clients = max(1, int(mission.get("num_clients", 1)))
+    budget = _budget_bucket(mission, num_clients)
+    sleigh_cost = _sleigh_cost_bucket(mission)
+    density = _density_bucket(mission, num_clients)
+    return (
+        f"weather:{weather_key}|incidents:{random_incidents}|clients:{_client_bucket(num_clients)}"
+        f"|budget:{budget}|sleigh:{sleigh_cost}|density:{density}"
+    )
+
+
+def _extract_training_profile(results: dict) -> str | None:
+    ai_strategy = results.get("ai_strategy", {}) if isinstance(results, dict) else {}
+    profile = _normalize_ai_profile(ai_strategy.get("profile"))
+    if profile in AI_PROFILE_PRESETS:
+        return profile
+    return None
+
+
+def _compute_training_cost(mission: dict, results: dict, benchmark: dict | None = None) -> float | None:
+    if not isinstance(results, dict):
+        return None
+    total_time_s = _safe_float(results.get("total_time_s"))
+    if total_time_s is None or total_time_s <= 0:
+        return None
+
+    num_clients = max(1, int(mission.get("num_clients", 1)))
+    dropped_count = len(results.get("dropped_points", [])) if isinstance(results.get("dropped_points", []), list) else 0
+    drop_ratio = float(dropped_count) / float(num_clients)
+
+    benchmark_payload = benchmark if isinstance(benchmark, dict) else {}
+    optimized_payload = benchmark_payload.get("optimized", {}) if isinstance(benchmark_payload.get("optimized", {}), dict) else {}
+    total_dist_m = _safe_float(optimized_payload.get("total_dist_m"))
+    if total_dist_m is None:
+        total_dist_m = _safe_float(results.get("total_dist_m"), 0.0)
+    dist_per_client_km = max(0.0, float(total_dist_m or 0.0) / 1000.0 / float(num_clients))
+
+    ai_strategy = results.get("ai_strategy", {}) if isinstance(results.get("ai_strategy", {}), dict) else {}
+    tours = results.get("tours", []) if isinstance(results.get("tours", []), list) else []
+    strategy_vehicles = int(ai_strategy.get("num_vehicles", 0))
+    used_vehicles = strategy_vehicles if strategy_vehicles > 0 else max(1, len(tours))
+    budget = max(0.0, float(mission.get("budget", 0.0)))
+    sleigh_cost = max(0.0, float(mission.get("sleigh_cost", 0.0)))
+    estimated_spend = float(used_vehicles) * sleigh_cost
+    if budget > 0:
+        budget_over_ratio = max(0.0, (estimated_spend - budget) / budget)
+    else:
+        budget_over_ratio = 0.0 if estimated_spend <= 0 else 1.0
+
+    weather_factor = _safe_float((results.get("weather") or {}).get("factor"), 1.0) or 1.0
+    weather_penalty = max(0.0, float(weather_factor) - 1.0)
+
+    time_per_client_s = float(total_time_s) / float(num_clients)
+    composite_cost = (
+        time_per_client_s
+        + 95.0 * dist_per_client_km
+        + 2400.0 * drop_ratio
+        + 1200.0 * budget_over_ratio
+        + 180.0 * weather_penalty
+    )
+    return max(0.0, float(composite_cost))
+
+
+def _iter_solved_training_snapshots(limit: int = 500) -> list[dict]:
+    snapshots = repository.list_mission_snapshots(limit=max(1, int(limit)))
+    solved_ids = [str(snapshot["mission_id"]) for snapshot in snapshots if snapshot.get("status") == "solved"]
+    solved_payloads: list[dict] = []
+    for mission_id in solved_ids:
+        snapshot = repository.get_mission_snapshot(mission_id)
+        if not snapshot:
+            continue
+        if not snapshot.get("mission") or not snapshot.get("results"):
+            continue
+        solved_payloads.append(snapshot)
+    return solved_payloads
+
+
+def _init_profile_stats() -> dict[str, dict]:
+    return {profile: {"count": 0, "sum_cost": 0.0} for profile in AI_PROFILE_PRESETS}
+
+
+def _extract_training_samples(snapshots: list[dict]) -> list[dict]:
+    samples: list[dict] = []
+    for snapshot in snapshots:
+        mission = snapshot.get("mission") or {}
+        results = snapshot.get("results") or {}
+        benchmark = snapshot.get("benchmark") or {}
+        profile = _extract_training_profile(results)
+        if not profile:
+            continue
+        cost = _compute_training_cost(mission, results, benchmark=benchmark)
+        if cost is None:
+            continue
+        samples.append(
+            {
+                "mission_id": str(snapshot.get("mission_id", "")),
+                "profile": profile,
+                "cost": float(cost),
+                "context_key": _mission_learning_context(mission),
+                "updated_at": str(snapshot.get("updated_at") or snapshot.get("created_at") or ""),
+                "mission": mission,
+            }
+        )
+    return samples
+
+
+def _build_learning_model_payload(samples: list[dict]) -> dict:
+    context_stats: dict[str, dict[str, dict]] = {}
+    global_stats = _init_profile_stats()
+
+    for sample in samples:
+        context_key = str(sample["context_key"])
+        profile = str(sample["profile"])
+        cost = float(sample["cost"])
+        context_profile_stats = context_stats.setdefault(context_key, _init_profile_stats())
+        context_profile_stats[profile]["count"] += 1
+        context_profile_stats[profile]["sum_cost"] += cost
+        global_stats[profile]["count"] += 1
+        global_stats[profile]["sum_cost"] += cost
+
+    profile_means: dict[str, dict] = {}
+    all_costs: list[float] = []
+    for profile, stats in global_stats.items():
+        count = int(stats["count"])
+        sum_cost = float(stats["sum_cost"])
+        mean_cost = (sum_cost / count) if count else None
+        profile_means[profile] = {"count": count, "mean_cost": mean_cost}
+        if mean_cost is not None:
+            all_costs.append(float(mean_cost))
+
+    if not all_costs:
+        raise ValueError("Aucune performance exploitable n'a été trouvée dans l'historique.")
+
+    overall_mean_cost = float(np.mean(np.array(all_costs, dtype=float)))
+    serialized_contexts: dict[str, dict] = {}
+    for context_key, per_profile in context_stats.items():
+        serialized_contexts[context_key] = {}
+        for profile, stats in per_profile.items():
+            count = int(stats["count"])
+            if count <= 0:
+                continue
+            serialized_contexts[context_key][profile] = {
+                "count": count,
+                "mean_cost": float(stats["sum_cost"]) / float(count),
+            }
+
+    return {
+        "version": AI_LEARNING_MODEL_VERSION,
+        "trained_at": _utcnow().isoformat(),
+        "sample_count": len(samples),
+        "context_count": len(serialized_contexts),
+        "smoothing_alpha": AI_LEARNING_SMOOTHING_ALPHA,
+        "overall_mean_cost": overall_mean_cost,
+        "global_profiles": profile_means,
+        "contexts": serialized_contexts,
+        "context_schema": ["weather", "incidents", "clients", "budget", "sleigh", "density"],
+        "target": "composite_cost",
+    }
+
+
+def train_ai_learning_model(limit: int = 500) -> dict:
+    solved_snapshots = _iter_solved_training_snapshots(limit=limit)
+    samples = _extract_training_samples(solved_snapshots)
+    sample_count = len(samples)
+
+    if sample_count < AI_LEARNING_MIN_SAMPLES:
+        raise ValueError(
+            f"Pas assez de données pour entraîner le modèle ({sample_count} échantillon(s), minimum {AI_LEARNING_MIN_SAMPLES})."
+        )
+
+    model_payload = _build_learning_model_payload(samples)
+    _write_json(AI_LEARNING_MODEL_FILE, model_payload)
+    return {
+        "status": "trained",
+        "model_version": AI_LEARNING_MODEL_VERSION,
+        "model_path": str(AI_LEARNING_MODEL_FILE),
+        "sample_count": sample_count,
+        "context_count": int(model_payload["context_count"]),
+        "profiles": sorted(AI_PROFILE_PRESETS.keys()),
+        "trained_at": model_payload["trained_at"],
+        "target": model_payload["target"],
+    }
+
+
+def load_ai_learning_model() -> dict | None:
+    payload = _read_json(AI_LEARNING_MODEL_FILE)
+    if not isinstance(payload, dict):
+        return None
+    if not payload.get("contexts") or not payload.get("global_profiles"):
+        return None
+    return payload
+
+
+def _expected_profile_cost(model: dict, context_key: str, profile: str) -> tuple[float, int]:
+    alpha = float(model.get("smoothing_alpha", AI_LEARNING_SMOOTHING_ALPHA))
+    overall_mean_cost = float(model.get("overall_mean_cost", 3600.0))
+    global_profiles = model.get("global_profiles", {})
+    context_profiles = model.get("contexts", {}).get(context_key, {})
+
+    global_profile = global_profiles.get(profile, {})
+    global_mean = global_profile.get("mean_cost")
+    if global_mean is None:
+        base_mean = overall_mean_cost
+    else:
+        base_mean = float(global_mean)
+
+    context_profile = context_profiles.get(profile)
+    if not context_profile:
+        return base_mean, 0
+
+    context_count = max(0, int(context_profile.get("count", 0)))
+    context_mean = float(context_profile.get("mean_cost", base_mean))
+    blended_mean = (context_count * context_mean + alpha * base_mean) / (context_count + alpha)
+    return blended_mean, context_count
+
+
+def _rank_profiles_for_context(model: dict, context_key: str) -> list[dict]:
+    ranked_profiles: list[dict] = []
+    for profile in sorted(AI_PROFILE_PRESETS.keys()):
+        expected_cost, support = _expected_profile_cost(model, context_key, profile)
+        ranked_profiles.append(
+            {
+                "profile": profile,
+                "label": AI_PROFILE_PRESETS[profile]["label"],
+                "expected_cost": round(float(expected_cost), 3),
+                "support": int(support),
+            }
+        )
+    ranked_profiles.sort(key=lambda item: (float(item["expected_cost"]), -int(item["support"])))
+    return ranked_profiles
+
+
+def recommend_ai_profile_for_mission(mission: dict, *, model: dict | None = None) -> dict:
+    model_payload = model or load_ai_learning_model()
+    if not model_payload:
+        raise FileNotFoundError("Modèle apprenant introuvable. Lancez d'abord /api/ai-learning/train.")
+
+    context_key = _mission_learning_context(mission)
+    ranked_profiles = _rank_profiles_for_context(model_payload, context_key)
+    best = ranked_profiles[0]
+    runner_up = ranked_profiles[1] if len(ranked_profiles) > 1 else ranked_profiles[0]
+    margin = max(0.0, float(runner_up["expected_cost"]) - float(best["expected_cost"]))
+    margin_ratio = margin / max(float(runner_up["expected_cost"]), 1e-6)
+    confidence = min(0.95, 0.35 + 0.10 * float(np.log1p(best["support"])) + 0.50 * margin_ratio)
+    return {
+        "profile": best["profile"],
+        "label": best["label"],
+        "context_key": context_key,
+        "confidence": round(float(confidence), 3),
+        "top_candidates": ranked_profiles[:3],
+        "model": {
+            "version": model_payload.get("version", AI_LEARNING_MODEL_VERSION),
+            "sample_count": int(model_payload.get("sample_count", 0)),
+            "trained_at": model_payload.get("trained_at"),
+        },
+    }
+
+
+def get_ai_learning_recommendation(mission_id: str) -> dict:
+    _, mission, _ = load_mission_bundle(mission_id)
+    recommendation = recommend_ai_profile_for_mission(mission)
+    return {"mission_id": mission_id, "recommendation": recommendation}
+
+
+def _extract_ortools_policy(ai_strategy: dict) -> dict | None:
+    if not isinstance(ai_strategy, dict):
+        return None
+    required_text_fields = ("first_solution_strategy", "local_search_metaheuristic")
+    required_int_fields = (
+        "solver_time_limit_s",
+        "time_slack_s",
+        "max_route_time_s",
+        "drop_penalty",
+        "global_span_cost",
+    )
+    optimization_target = str(ai_strategy.get("optimization_target", "time"))
+    if optimization_target not in {"time", "distance"}:
+        optimization_target = "time"
+
+    policy: dict[str, str | int] = {"optimization_target": optimization_target}
+    for field in required_text_fields:
+        value = str(ai_strategy.get(field, "")).strip()
+        if not value:
+            return None
+        policy[field] = value
+    for field in required_int_fields:
+        value = ai_strategy.get(field)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        policy[field] = parsed
+    return policy
+
+
+def _ortools_policy_id(policy: dict) -> str:
+    payload = json.dumps(policy, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _extract_ortools_tuner_samples(snapshots: list[dict]) -> list[dict]:
+    samples: list[dict] = []
+    for snapshot in snapshots:
+        mission = snapshot.get("mission") or {}
+        results = snapshot.get("results") or {}
+        benchmark = snapshot.get("benchmark") or {}
+        profile = _extract_training_profile(results)
+        if not profile:
+            continue
+        ai_strategy = results.get("ai_strategy", {}) if isinstance(results.get("ai_strategy", {}), dict) else {}
+        policy = _extract_ortools_policy(ai_strategy)
+        if not policy:
+            continue
+        cost = _compute_training_cost(mission, results, benchmark=benchmark)
+        if cost is None:
+            continue
+        samples.append(
+            {
+                "mission_id": str(snapshot.get("mission_id", "")),
+                "profile": str(profile),
+                "policy_id": _ortools_policy_id(policy),
+                "policy": policy,
+                "cost": float(cost),
+                "context_key": _mission_learning_context(mission),
+                "updated_at": str(snapshot.get("updated_at") or snapshot.get("created_at") or ""),
+            }
+        )
+    return samples
+
+
+def _build_ortools_tuner_model_payload(samples: list[dict]) -> dict:
+    context_stats: dict[str, dict[str, dict[str, dict]]] = {}
+    global_stats: dict[str, dict[str, dict]] = {}
+
+    for sample in samples:
+        context_key = str(sample["context_key"])
+        profile = str(sample["profile"])
+        policy_id = str(sample["policy_id"])
+        policy = dict(sample["policy"])
+        cost = float(sample["cost"])
+
+        per_context_profile = context_stats.setdefault(context_key, {}).setdefault(profile, {})
+        context_entry = per_context_profile.setdefault(policy_id, {"count": 0, "sum_cost": 0.0})
+        context_entry["count"] += 1
+        context_entry["sum_cost"] += cost
+
+        per_global_profile = global_stats.setdefault(profile, {})
+        global_entry = per_global_profile.setdefault(policy_id, {"count": 0, "sum_cost": 0.0, "policy": policy})
+        global_entry["count"] += 1
+        global_entry["sum_cost"] += cost
+
+    serialized_global: dict[str, dict[str, dict]] = {}
+    global_means: list[float] = []
+    for profile, policies in sorted(global_stats.items()):
+        serialized_global[profile] = {}
+        for policy_id, stats in sorted(policies.items()):
+            count = int(stats["count"])
+            if count <= 0:
+                continue
+            mean_cost = float(stats["sum_cost"]) / float(count)
+            serialized_global[profile][policy_id] = {
+                "count": count,
+                "mean_cost": mean_cost,
+                "policy": dict(stats["policy"]),
+            }
+            global_means.append(mean_cost)
+
+    if not global_means:
+        raise ValueError("Aucune configuration OR-Tools exploitable n'a été trouvée.")
+
+    serialized_contexts: dict[str, dict[str, dict[str, dict]]] = {}
+    for context_key, profiles in sorted(context_stats.items()):
+        serialized_contexts[context_key] = {}
+        for profile, policies in sorted(profiles.items()):
+            serialized_contexts[context_key][profile] = {}
+            for policy_id, stats in sorted(policies.items()):
+                count = int(stats["count"])
+                if count <= 0:
+                    continue
+                serialized_contexts[context_key][profile][policy_id] = {
+                    "count": count,
+                    "mean_cost": float(stats["sum_cost"]) / float(count),
+                }
+
+    return {
+        "version": ORTOOLS_TUNER_MODEL_VERSION,
+        "trained_at": _utcnow().isoformat(),
+        "sample_count": len(samples),
+        "context_count": len(serialized_contexts),
+        "profile_count": len(serialized_global),
+        "smoothing_alpha": ORTOOLS_TUNER_SMOOTHING_ALPHA,
+        "overall_mean_cost": float(np.mean(np.array(global_means, dtype=float))),
+        "global_policies": serialized_global,
+        "contexts": serialized_contexts,
+        "target": "composite_cost",
+    }
+
+
+def train_ortools_tuner_model(limit: int = 1500) -> dict:
+    solved_snapshots = _iter_solved_training_snapshots(limit=limit)
+    samples = _extract_ortools_tuner_samples(solved_snapshots)
+    sample_count = len(samples)
+    if sample_count < ORTOOLS_TUNER_MIN_SAMPLES:
+        raise ValueError(
+            f"Pas assez de données pour entraîner l'auto-tuner OR-Tools ({sample_count} échantillon(s), minimum {ORTOOLS_TUNER_MIN_SAMPLES})."
+        )
+
+    model_payload = _build_ortools_tuner_model_payload(samples)
+    _write_json(ORTOOLS_TUNER_MODEL_FILE, model_payload)
+    return {
+        "status": "trained",
+        "model_version": ORTOOLS_TUNER_MODEL_VERSION,
+        "model_path": str(ORTOOLS_TUNER_MODEL_FILE),
+        "sample_count": sample_count,
+        "context_count": int(model_payload["context_count"]),
+        "profile_count": int(model_payload["profile_count"]),
+        "trained_at": model_payload["trained_at"],
+        "target": model_payload["target"],
+        "fields": list(ORTOOLS_TUNER_FIELDS),
+    }
+
+
+def load_ortools_tuner_model() -> dict | None:
+    payload = _read_json(ORTOOLS_TUNER_MODEL_FILE)
+    if not isinstance(payload, dict):
+        return None
+    if not payload.get("global_policies") or not payload.get("contexts"):
+        return None
+    return payload
+
+
+def _expected_ortools_policy_cost(model: dict, context_key: str, profile: str, policy_id: str) -> tuple[float, int]:
+    alpha = float(model.get("smoothing_alpha", ORTOOLS_TUNER_SMOOTHING_ALPHA))
+    overall_mean_cost = float(model.get("overall_mean_cost", 3600.0))
+    global_policies = model.get("global_policies", {}).get(profile, {})
+    global_policy = global_policies.get(policy_id)
+    if not global_policy:
+        return overall_mean_cost, 0
+    base_mean = float(global_policy.get("mean_cost", overall_mean_cost))
+    context_policy = model.get("contexts", {}).get(context_key, {}).get(profile, {}).get(policy_id)
+    if not context_policy:
+        return base_mean, 0
+    context_count = max(0, int(context_policy.get("count", 0)))
+    context_mean = float(context_policy.get("mean_cost", base_mean))
+    blended_mean = (context_count * context_mean + alpha * base_mean) / (context_count + alpha)
+    return blended_mean, context_count
+
+
+def _rank_ortools_policies_for_context(model: dict, context_key: str, profile: str) -> list[dict]:
+    normalized_profile = _normalize_ai_profile(profile)
+    global_policies = model.get("global_policies", {}).get(normalized_profile, {})
+    ranked_policies: list[dict] = []
+    for policy_id, policy_stats in sorted(global_policies.items()):
+        expected_cost, support = _expected_ortools_policy_cost(model, context_key, normalized_profile, str(policy_id))
+        policy_payload = dict(policy_stats.get("policy", {}))
+        ranked_policies.append(
+            {
+                "policy_id": str(policy_id),
+                "expected_cost": round(float(expected_cost), 3),
+                "support": int(support),
+                "policy": policy_payload,
+            }
+        )
+    ranked_policies.sort(key=lambda item: (float(item["expected_cost"]), -int(item["support"])))
+    return ranked_policies
+
+
+def recommend_ortools_tuning_for_mission(mission: dict, profile: str, *, model: dict | None = None) -> dict:
+    model_payload = model or load_ortools_tuner_model()
+    if not model_payload:
+        raise FileNotFoundError("Auto-tuner OR-Tools introuvable. Lancez d'abord /api/ortools-tuner/train.")
+
+    normalized_profile = _normalize_ai_profile(profile)
+    context_key = _mission_learning_context(mission)
+    ranked_policies = _rank_ortools_policies_for_context(model_payload, context_key, normalized_profile)
+    if not ranked_policies:
+        raise ValueError(f"Aucune configuration OR-Tools disponible pour le profil '{normalized_profile}'.")
+
+    best = ranked_policies[0]
+    runner_up = ranked_policies[1] if len(ranked_policies) > 1 else ranked_policies[0]
+    margin = max(0.0, float(runner_up["expected_cost"]) - float(best["expected_cost"]))
+    margin_ratio = margin / max(float(runner_up["expected_cost"]), 1e-6)
+    confidence = min(0.95, 0.35 + 0.10 * float(np.log1p(best["support"])) + 0.50 * margin_ratio)
+    return {
+        "profile": normalized_profile,
+        "context_key": context_key,
+        "policy_id": best["policy_id"],
+        "policy": dict(best["policy"]),
+        "confidence": round(float(confidence), 3),
+        "top_candidates": ranked_policies[:3],
+        "model": {
+            "version": model_payload.get("version", ORTOOLS_TUNER_MODEL_VERSION),
+            "sample_count": int(model_payload.get("sample_count", 0)),
+            "trained_at": model_payload.get("trained_at"),
+        },
+    }
+
+
+def _apply_ortools_tuning_policy(ai_strategy: dict, policy: dict) -> dict:
+    tuned = dict(ai_strategy)
+    for field in ("optimization_target", *ORTOOLS_TUNER_FIELDS):
+        if field not in policy:
+            continue
+        if field in {"first_solution_strategy", "local_search_metaheuristic", "optimization_target"}:
+            tuned[field] = str(policy[field])
+        else:
+            tuned[field] = int(policy[field])
+    return tuned
+
+
+def get_ortools_tuner_recommendation(mission_id: str) -> dict:
+    _, mission, _ = load_mission_bundle(mission_id)
+    profile = _normalize_ai_profile(mission.get("ai_profile"))
+    recommendation = recommend_ortools_tuning_for_mission(mission, profile)
+    return {"mission_id": mission_id, "recommendation": recommendation}
+
+
+def evaluate_ortools_tuner_model(limit: int = 2000, holdout_ratio: float = ORTOOLS_TUNER_HOLDOUT_RATIO) -> dict:
+    solved_snapshots = _iter_solved_training_snapshots(limit=limit)
+    samples = _extract_ortools_tuner_samples(solved_snapshots)
+
+    min_required = max(ORTOOLS_TUNER_MIN_SAMPLES * 2, 24)
+    if len(samples) < min_required:
+        raise ValueError(
+            f"Pas assez de données pour évaluer l'auto-tuner OR-Tools ({len(samples)} échantillon(s), minimum {min_required})."
+        )
+
+    ratio = max(0.10, min(0.50, float(holdout_ratio)))
+    train_samples, holdout_samples = _split_samples_stratified_by_context_profile(samples, ratio)
+    model_payload = _build_ortools_tuner_model_payload(train_samples)
+
+    sample_match_count = 0
+    holdout_context_stats: dict[str, dict] = {}
+    for sample in holdout_samples:
+        context_key = str(sample["context_key"])
+        profile = str(sample["profile"])
+        policy_id = str(sample["policy_id"])
+        observed_cost = float(sample["cost"])
+        ranked = _rank_ortools_policies_for_context(model_payload, context_key, profile)
+        if ranked and str(ranked[0]["policy_id"]) == policy_id:
+            sample_match_count += 1
+
+        bucket_key = f"{context_key}|profile:{profile}"
+        bucket = holdout_context_stats.setdefault(
+            bucket_key,
+            {"context_key": context_key, "profile": profile, "policies": {}},
+        )
+        policy_stats = bucket["policies"].setdefault(policy_id, {"count": 0, "sum_cost": 0.0})
+        policy_stats["count"] += 1
+        policy_stats["sum_cost"] += observed_cost
+
+    context_total = 0
+    context_hit_count = 0
+    regrets: list[float] = []
+    context_examples: list[dict] = []
+
+    for bucket_key, bucket in sorted(holdout_context_stats.items()):
+        means = {
+            policy_id: float(stats["sum_cost"]) / float(stats["count"])
+            for policy_id, stats in bucket["policies"].items()
+            if int(stats["count"]) > 0
+        }
+        if len(means) < 2:
+            continue
+        context_key = str(bucket["context_key"])
+        profile = str(bucket["profile"])
+        true_best_policy_id = min(means.items(), key=lambda item: item[1])[0]
+        ranked = _rank_ortools_policies_for_context(model_payload, context_key, profile)
+        predicted_policy_id = str(ranked[0]["policy_id"]) if ranked else true_best_policy_id
+        context_total += 1
+        if predicted_policy_id == true_best_policy_id:
+            context_hit_count += 1
+        if predicted_policy_id in means:
+            regret = max(0.0, float(means[predicted_policy_id]) - float(means[true_best_policy_id]))
+            regrets.append(regret)
+        if len(context_examples) < 5:
+            context_examples.append(
+                {
+                    "context_key": context_key,
+                    "profile": profile,
+                    "true_best_policy_id": true_best_policy_id,
+                    "predicted_policy_id": predicted_policy_id,
+                    "true_best_cost": round(float(means[true_best_policy_id]), 3),
+                    "predicted_cost": round(float(means.get(predicted_policy_id, means[true_best_policy_id])), 3),
+                }
+            )
+
+    sample_match_rate = float(sample_match_count) / float(len(holdout_samples))
+    context_top1_accuracy = (float(context_hit_count) / float(context_total)) if context_total else 0.0
+    avg_regret = float(np.mean(np.array(regrets, dtype=float))) if regrets else 0.0
+
+    return {
+        "status": "evaluated",
+        "model_version": ORTOOLS_TUNER_MODEL_VERSION,
+        "target": model_payload.get("target", "composite_cost"),
+        "sample_count_total": len(samples),
+        "sample_count_train": len(train_samples),
+        "sample_count_holdout": len(holdout_samples),
+        "holdout_ratio": ratio,
+        "split_strategy": "stratified_by_context_profile",
+        "sample_match_rate": round(sample_match_rate, 4),
+        "contexts_evaluated": context_total,
+        "context_top1_accuracy": round(context_top1_accuracy, 4),
+        "avg_context_regret": round(avg_regret, 4),
+        "examples": context_examples,
+    }
+
+
+def _sample_sort_key(sample: dict) -> tuple[str, str]:
+    return (str(sample.get("updated_at", "")), str(sample.get("mission_id", "")))
+
+
+def _split_samples_stratified_by_context_profile(samples: list[dict], ratio: float) -> tuple[list[dict], list[dict]]:
+    total = len(samples)
+    target_holdout = max(AI_LEARNING_MIN_SAMPLES, int(round(total * ratio)))
+    target_holdout = min(target_holdout, total - AI_LEARNING_MIN_SAMPLES)
+    if target_holdout <= 0:
+        raise ValueError("Découpage train/holdout impossible avec les données actuelles.")
+
+    strata: dict[tuple[str, str], list[dict]] = {}
+    for sample in samples:
+        context_key = str(sample.get("context_key", "unknown"))
+        profile = str(sample.get("profile", "express"))
+        strata.setdefault((context_key, profile), []).append(sample)
+    for stratum_samples in strata.values():
+        stratum_samples.sort(key=_sample_sort_key)
+
+    def allocate(caps: dict[tuple[str, str], int], seed: bool) -> tuple[dict[tuple[str, str], int], int]:
+        allocations: dict[tuple[str, str], int] = {key: 0 for key in strata}
+        remaining = int(target_holdout)
+
+        if seed and remaining > 0:
+            seed_candidates = [key for key, cap in caps.items() if int(cap) > 0]
+            ranked_seed_candidates = sorted(
+                seed_candidates,
+                key=lambda key: (len(strata[key]), key[0], key[1]),
+                reverse=True,
+            )
+            if remaining >= len(ranked_seed_candidates):
+                chosen = ranked_seed_candidates
+            else:
+                chosen = ranked_seed_candidates[:remaining]
+            for key in chosen:
+                allocations[key] += 1
+                remaining -= 1
+
+        if remaining <= 0:
+            return allocations, 0
+
+        effective_total = sum(len(strata[key]) for key, cap in caps.items() if int(cap) > int(allocations.get(key, 0)))
+        if effective_total <= 0:
+            return allocations, remaining
+
+        remainders: dict[tuple[str, str], float] = {}
+        allocated = 0
+        for key, stratum_samples in strata.items():
+            current = int(allocations.get(key, 0))
+            cap = int(caps.get(key, 0))
+            cap_left = max(0, cap - current)
+            if cap_left <= 0:
+                remainders[key] = 0.0
+                continue
+            quota = (float(len(stratum_samples)) * float(remaining)) / float(max(1, effective_total))
+            base = min(cap_left, int(np.floor(quota)))
+            allocations[key] = current + base
+            remainders[key] = quota - float(base)
+            allocated += base
+
+        remaining_after_base = remaining - allocated
+        if remaining_after_base <= 0:
+            return allocations, 0
+
+        ranking = sorted(
+            strata.keys(),
+            key=lambda key: (
+                float(remainders.get(key, 0.0)),
+                int(caps.get(key, 0)) - int(allocations.get(key, 0)),
+                len(strata[key]),
+                key,
+            ),
+            reverse=True,
+        )
+
+        while remaining_after_base > 0:
+            progressed = False
+            for key in ranking:
+                if int(allocations.get(key, 0)) >= int(caps.get(key, 0)):
+                    continue
+                allocations[key] = int(allocations.get(key, 0)) + 1
+                remaining_after_base -= 1
+                progressed = True
+                if remaining_after_base == 0:
+                    break
+            if not progressed:
+                break
+        return allocations, remaining_after_base
+
+    preferred_caps = {key: max(0, len(stratum_samples) - 1) for key, stratum_samples in strata.items()}
+    allocations, remaining = allocate(preferred_caps, seed=True)
+    if remaining > 0:
+        relaxed_caps = {key: len(stratum_samples) for key, stratum_samples in strata.items()}
+        allocations, remaining = allocate(relaxed_caps, seed=False)
+    if remaining > 0:
+        raise ValueError("Découpage stratifié impossible avec les données actuelles.")
+
+    train_samples: list[dict] = []
+    holdout_samples: list[dict] = []
+    for key, stratum_samples in strata.items():
+        context_key, profile = key
+        holdout_count = int(allocations.get(key, 0))
+        if holdout_count <= 0:
+            train_samples.extend(stratum_samples)
+            continue
+        ranked = sorted(
+            stratum_samples,
+            key=lambda sample: hashlib.sha1(
+                (
+                    f"{context_key}|{profile}|{sample.get('mission_id', '')}|"
+                    f"{sample.get('updated_at', '')}|{sample.get('profile', '')}"
+                ).encode("utf-8")
+            ).hexdigest(),
+        )
+        holdout_ids = {str(sample.get("mission_id", "")) for sample in ranked[:holdout_count]}
+        for sample in stratum_samples:
+            if str(sample.get("mission_id", "")) in holdout_ids:
+                holdout_samples.append(sample)
+            else:
+                train_samples.append(sample)
+
+    if len(train_samples) < AI_LEARNING_MIN_SAMPLES or len(holdout_samples) < AI_LEARNING_MIN_SAMPLES:
+        raise ValueError("Découpage train/holdout impossible avec les données actuelles.")
+
+    train_samples.sort(key=_sample_sort_key)
+    holdout_samples.sort(key=_sample_sort_key)
+    return train_samples, holdout_samples
+
+
+def evaluate_ai_learning_model(limit: int = 800, holdout_ratio: float = AI_LEARNING_HOLDOUT_RATIO) -> dict:
+    solved_snapshots = _iter_solved_training_snapshots(limit=limit)
+    samples = _extract_training_samples(solved_snapshots)
+
+    min_required = max(AI_LEARNING_MIN_SAMPLES * 2, 16)
+    if len(samples) < min_required:
+        raise ValueError(
+            f"Pas assez de données pour évaluer le modèle ({len(samples)} échantillon(s), minimum {min_required})."
+        )
+
+    ratio = max(0.10, min(0.50, float(holdout_ratio)))
+    train_samples, holdout_samples = _split_samples_stratified_by_context_profile(samples, ratio)
+    model_payload = _build_learning_model_payload(train_samples)
+
+    sample_match_count = 0
+    holdout_context_stats: dict[str, dict[str, dict]] = {}
+    for sample in holdout_samples:
+        context_key = str(sample["context_key"])
+        profile = str(sample["profile"])
+        observed_cost = float(sample["cost"])
+        ranked = _rank_profiles_for_context(model_payload, context_key)
+        if ranked and ranked[0]["profile"] == profile:
+            sample_match_count += 1
+        context_profiles = holdout_context_stats.setdefault(context_key, {})
+        profile_stats = context_profiles.setdefault(profile, {"count": 0, "sum_cost": 0.0})
+        profile_stats["count"] += 1
+        profile_stats["sum_cost"] += observed_cost
+
+    context_total = 0
+    context_hit_count = 0
+    regrets: list[float] = []
+    context_examples: list[dict] = []
+
+    for context_key, profiles in sorted(holdout_context_stats.items()):
+        means = {profile: float(stats["sum_cost"]) / float(stats["count"]) for profile, stats in profiles.items() if int(stats["count"]) > 0}
+        if len(means) < 2:
+            continue
+        true_best_profile = min(means.items(), key=lambda item: item[1])[0]
+        ranked = _rank_profiles_for_context(model_payload, context_key)
+        predicted_profile = ranked[0]["profile"] if ranked else "express"
+        context_total += 1
+        if predicted_profile == true_best_profile:
+            context_hit_count += 1
+        if predicted_profile in means:
+            regret = max(0.0, float(means[predicted_profile]) - float(means[true_best_profile]))
+            regrets.append(regret)
+        if len(context_examples) < 5:
+            context_examples.append(
+                {
+                    "context_key": context_key,
+                    "true_best_profile": true_best_profile,
+                    "predicted_profile": predicted_profile,
+                    "true_best_cost": round(float(means[true_best_profile]), 3),
+                    "predicted_cost": round(float(means.get(predicted_profile, means[true_best_profile])), 3),
+                }
+            )
+
+    sample_match_rate = float(sample_match_count) / float(len(holdout_samples))
+    context_top1_accuracy = (float(context_hit_count) / float(context_total)) if context_total else 0.0
+    avg_regret = float(np.mean(np.array(regrets, dtype=float))) if regrets else 0.0
+
+    return {
+        "status": "evaluated",
+        "model_version": AI_LEARNING_MODEL_VERSION,
+        "target": model_payload.get("target", "composite_cost"),
+        "sample_count_total": len(samples),
+        "sample_count_train": len(train_samples),
+        "sample_count_holdout": len(holdout_samples),
+        "holdout_ratio": ratio,
+        "split_strategy": "stratified_by_context_profile",
+        "sample_match_rate": round(sample_match_rate, 4),
+        "contexts_evaluated": context_total,
+        "context_top1_accuracy": round(context_top1_accuracy, 4),
+        "avg_context_regret": round(avg_regret, 4),
+        "examples": context_examples,
     }
 
 
@@ -903,6 +1863,7 @@ def get_human_route_options(
     to_id: int,
     sleigh_id: int,
     speed_multiplier: float,
+    vehicle_capacity: int | None = None,
     k: int = 3,
 ) -> dict:
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
@@ -941,6 +1902,8 @@ def get_human_route_options(
         _route_options_cache_set(cache_key, options)
     human_state = human_state_from_payload(human_state_payload)
     human_state.speed_multiplier = speed_multiplier
+    if vehicle_capacity is not None:
+        human_state.vehicle_capacity = int(vehicle_capacity)
     options = _annotate_route_options_feasibility(
         df,
         human_state,
@@ -1283,7 +2246,13 @@ def _build_incident_matrix(paths: MissionPaths, mission: dict) -> str | None:
     return str(paths.incident_matrix_file)
 
 
-def solve_mission(mission_id: str, payload: dict) -> dict:
+def _solve_mission_internal(
+    mission_id: str,
+    payload: dict,
+    *,
+    mission_for_strategy: dict | None = None,
+    ai_strategy_override: dict | None = None,
+) -> dict:
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
     df = read_points(paths.data_file)
     graph = load_graph(paths.graph_file)
@@ -1295,7 +2264,8 @@ def solve_mission(mission_id: str, payload: dict) -> dict:
 
     weather = load_weather(paths.weather_file, mission.get("weather_key"))
     incident_matrix_path = _build_incident_matrix(paths, mission)
-    ai_strategy = resolve_ai_strategy(mission, payload)
+    strategy_mission = mission_for_strategy or mission
+    ai_strategy = deepcopy(ai_strategy_override) if ai_strategy_override else resolve_ai_strategy(strategy_mission, payload)
     results = solve_vrp(
         num_vehicles=int(ai_strategy["num_vehicles"]),
         vehicle_capacity=int(ai_strategy["vehicle_capacity"]),
@@ -1354,6 +2324,63 @@ def solve_mission(mission_id: str, payload: dict) -> dict:
         status="solved",
     )
     return solve_payload
+
+
+def solve_mission(mission_id: str, payload: dict) -> dict:
+    return _solve_mission_internal(mission_id, payload)
+
+
+def solve_mission_learned(mission_id: str, payload: dict) -> dict:
+    _, mission, _ = load_mission_bundle(mission_id)
+    model_payload = load_ai_learning_model()
+    if not model_payload:
+        train_ai_learning_model(limit=1000)
+        model_payload = load_ai_learning_model()
+    if not model_payload:
+        raise RuntimeError("Modèle apprenant indisponible après entraînement.")
+
+    recommendation = recommend_ai_profile_for_mission(mission, model=model_payload)
+    recommended_profile = recommendation["profile"]
+    mission_with_learned_profile = {**mission, "ai_profile": recommended_profile}
+    ai_strategy = resolve_ai_strategy(mission_with_learned_profile, payload)
+    ai_strategy["profile_origin"] = "learned"
+    ai_strategy["learning"] = recommendation
+    ortools_tuning: dict | None = None
+
+    tuner_model = load_ortools_tuner_model()
+    if not tuner_model:
+        try:
+            train_ortools_tuner_model(limit=2000)
+            tuner_model = load_ortools_tuner_model()
+        except ValueError:
+            tuner_model = None
+    if tuner_model:
+        try:
+            ortools_tuning = recommend_ortools_tuning_for_mission(
+                mission,
+                recommended_profile,
+                model=tuner_model,
+            )
+            ai_strategy = _apply_ortools_tuning_policy(ai_strategy, ortools_tuning["policy"])
+            ai_strategy["ortools_tuning"] = ortools_tuning
+            ai_strategy["tuning_origin"] = "learned_ortools"
+        except ValueError:
+            ortools_tuning = None
+
+    result = _solve_mission_internal(
+        mission_id,
+        payload,
+        mission_for_strategy=mission_with_learned_profile,
+        ai_strategy_override=ai_strategy,
+    )
+    result["learning"] = {
+        "used_model": True,
+        "model_path": str(AI_LEARNING_MODEL_FILE),
+        "recommendation": recommendation,
+        "ortools_tuning": ortools_tuning,
+        "ortools_model_path": str(ORTOOLS_TUNER_MODEL_FILE) if ortools_tuning else None,
+    }
+    return result
 
 
 def get_comparison(mission_id: str) -> dict:
@@ -1669,3 +2696,619 @@ def reset_password(payload: dict) -> dict:
     if not player:
         raise ValueError("Compte introuvable pour la réinitialisation")
     return _public_player(player)
+
+
+def _now_iso() -> str:
+    return _utcnow().isoformat()
+
+
+def _require_player(player_id: str) -> dict:
+    normalized = str(player_id or "").strip()
+    if not normalized:
+        raise ValueError("player_id requis")
+    player = repository.get_player(normalized)
+    if not player:
+        raise FileNotFoundError("Joueur introuvable")
+    return player
+
+
+def _normalize_versus_template_id(value: str | None) -> str:
+    template_id = str(value or "paris_duel").strip().lower()
+    if template_id not in VERSUS_TEMPLATES:
+        raise ValueError("Template versus inconnu")
+    return template_id
+
+
+def _normalize_versus_winner_rule(value: str | None) -> str:
+    normalized = str(value or "score_time").strip().lower()
+    aliases = {
+        "score+temps": "score_time",
+        "score_temps": "score_time",
+        "score_time": "score_time",
+        "temps": "time",
+        "time": "time",
+        "objectifs": "objectives",
+        "objectives": "objectives",
+    }
+    winner_rule = aliases.get(normalized, normalized)
+    if winner_rule not in VERSUS_WINNER_RULES:
+        raise ValueError("Règle de victoire inconnue")
+    return winner_rule
+
+
+def _normalize_versus_mode(value: str | None) -> str:
+    mode = str(value or "private").strip().lower()
+    if mode not in VERSUS_MATCH_MODES:
+        raise ValueError("Mode versus inconnu")
+    return mode
+
+
+def _iso_to_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return _parse_datetime(str(value))
+    except ValueError:
+        return None
+
+
+def _score_of(participant: dict) -> float:
+    return float(participant.get("score") or 0.0)
+
+
+def _time_of(participant: dict) -> float:
+    value = _safe_float(participant.get("total_time_s"))
+    return float(value) if value is not None else float("inf")
+
+
+def _objective_count_of(participant: dict) -> int:
+    return int(participant.get("objectives_completed") or 0)
+
+
+def _submission_order_value(participant: dict) -> str:
+    return str(participant.get("submitted_at") or participant.get("created_at") or "")
+
+
+def _generate_join_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    for _ in range(40):
+        candidate = "".join(secrets.choice(alphabet) for _ in range(6))
+        if not repository.get_versus_match_by_join_code(candidate):
+            return candidate
+    raise RuntimeError("Impossible de générer un code de partie unique")
+
+
+def _template_payload_for_mission(template_id: str) -> dict:
+    template = VERSUS_TEMPLATES[_normalize_versus_template_id(template_id)]
+    mission_payload = dict(template["mission"])
+    mission_payload.setdefault("secondary_objectives", [
+        {"code": "assign_all_clients", "label": "Affecter tous les clients"},
+        {"code": "beat_ai", "label": "Battre l'IA"},
+    ])
+    mission_payload.setdefault("level", None)
+    return mission_payload
+
+
+def _clone_reference_mission(reference_mission_id: str, new_mission_id: str, match_id: str) -> None:
+    source_paths = mission_paths(reference_mission_id)
+    target_paths = mission_paths(new_mission_id)
+    if target_paths.root_dir.exists():
+        shutil.rmtree(target_paths.root_dir)
+    shutil.copytree(source_paths.root_dir, target_paths.root_dir)
+
+    mission_payload = _read_json(target_paths.mission_file, {}) or {}
+    mission_payload["mission_id"] = new_mission_id
+    mission_payload["versus_match_id"] = match_id
+    _write_json(target_paths.mission_file, mission_payload)
+    _write_json(target_paths.human_state_file, default_human_state())
+
+    for artifact in (target_paths.results_file, target_paths.benchmark_file, target_paths.output_html_file):
+        if Path(artifact).exists():
+            Path(artifact).unlink()
+
+    weather = load_weather(target_paths.weather_file, mission_payload.get("weather_key"))
+    incidents_payload = _read_json(target_paths.incidents_file, {"count": 0, "segments": []})
+    repository.upsert_mission(
+        mission_id=new_mission_id,
+        root_dir=str(target_paths.root_dir),
+        mission=mission_payload,
+        weather=weather,
+        incidents=incidents_payload,
+        human_state=default_human_state(),
+        status="created",
+    )
+
+
+def _create_versus_match_pair(
+    *,
+    mode: str,
+    host_player_id: str,
+    opponent_player_id: str,
+    template_id: str,
+    winner_rule: str,
+    join_code: str | None = None,
+) -> str:
+    match_id = uuid.uuid4().hex[:14]
+    repository.create_versus_match(
+        match_id=match_id,
+        mode=mode,
+        template_id=template_id,
+        winner_rule=winner_rule,
+        host_player_id=host_player_id,
+        join_code=join_code,
+        status="waiting_ready",
+    )
+    repository.add_versus_participant(match_id=match_id, player_id=opponent_player_id, seat=1, state="joined")
+    repository.remove_versus_queue_player(host_player_id)
+    repository.remove_versus_queue_player(opponent_player_id)
+    return match_id
+
+
+def _touch_versus_participant(match_id: str, player_id: str) -> None:
+    match = repository.get_versus_match(match_id)
+    if not match or match.get("status") != "live":
+        return
+    repository.update_versus_participant(match_id, player_id, last_seen_at=_now_iso())
+
+
+def _select_winner_from_submissions(participants: list[dict], winner_rule: str) -> dict:
+    if winner_rule == "time":
+        ranked = sorted(
+            participants,
+            key=lambda item: (_time_of(item), -_score_of(item), _submission_order_value(item)),
+        )
+        return ranked[0]
+    if winner_rule == "objectives":
+        ranked = sorted(
+            participants,
+            key=lambda item: (-_objective_count_of(item), _time_of(item), _submission_order_value(item)),
+        )
+        return ranked[0]
+    ranked = sorted(
+        participants,
+        key=lambda item: (-_score_of(item), _time_of(item), _submission_order_value(item)),
+    )
+    return ranked[0]
+
+
+def _resolve_versus_match(match_id: str, reason: str = "submitted") -> dict | None:
+    match = repository.get_versus_match(match_id)
+    if not match:
+        return None
+    if str(match.get("status")) == "finished":
+        return match
+
+    participants = repository.list_versus_participants(match_id)
+    if len(participants) < 2:
+        return match
+
+    submitted = [p for p in participants if p.get("state") == "submitted" and int(p.get("is_valid_submission") or 0) == 1]
+    forfeits = [p for p in participants if p.get("state") == "forfeit"]
+    winner: dict | None = None
+    result_reason = reason
+
+    if len(submitted) == 2:
+        winner = _select_winner_from_submissions(submitted, str(match.get("winner_rule") or "score_time"))
+        result_reason = "submitted"
+    elif len(forfeits) == 1:
+        loser_id = str(forfeits[0]["player_id"])
+        winner = next((p for p in participants if str(p["player_id"]) != loser_id), None)
+        result_reason = "forfeit_timeout"
+    elif len(submitted) == 1 and len(forfeits) == 1:
+        winner = submitted[0]
+        result_reason = "forfeit_timeout"
+
+    if not winner:
+        return match
+
+    now_iso = _now_iso()
+    winner_id = str(winner["player_id"])
+    loser = next((p for p in participants if str(p["player_id"]) != winner_id), None)
+    loser_id = str(loser["player_id"]) if loser else None
+    repository.update_versus_match(
+        match_id,
+        status="finished",
+        completed_at=now_iso,
+        winner_player_id=winner_id,
+        result_reason=result_reason,
+    )
+    repository.save_versus_leaderboard_entry(
+        match_id=match_id,
+        winner_player_id=winner_id,
+        loser_player_id=loser_id,
+        winner_score=_safe_float(winner.get("score")),
+        winner_time_s=_safe_float(winner.get("total_time_s")),
+        winner_rule=str(match.get("winner_rule") or "score_time"),
+        template_id=str(match.get("template_id") or "paris_duel"),
+    )
+    return repository.get_versus_match(match_id)
+
+
+def _apply_versus_forfeit_timeout(match_id: str) -> None:
+    match = repository.get_versus_match(match_id)
+    if not match or str(match.get("status")) != "live":
+        return
+    participants = repository.list_versus_participants(match_id)
+    if not participants:
+        return
+    now_dt = _utcnow()
+    updated = False
+    for participant in participants:
+        state = str(participant.get("state") or "")
+        if state in {"submitted", "forfeit"}:
+            continue
+        last_seen = _iso_to_datetime(participant.get("last_seen_at")) or _iso_to_datetime(match.get("started_at"))
+        if not last_seen:
+            continue
+        if (now_dt - last_seen).total_seconds() <= VERSUS_FORFEIT_TIMEOUT_SECONDS:
+            continue
+        repository.update_versus_participant(
+            match_id,
+            str(participant["player_id"]),
+            state="forfeit",
+            forfeit_at=_now_iso(),
+        )
+        updated = True
+    if updated:
+        _resolve_versus_match(match_id, reason="forfeit_timeout")
+
+
+def _start_versus_match_if_ready(match_id: str) -> None:
+    match = repository.get_versus_match(match_id)
+    if not match or str(match.get("status")) != "waiting_ready":
+        return
+    participants = repository.list_versus_participants(match_id)
+    if len(participants) != 2:
+        return
+    if any(str(participant.get("state")) != "ready" for participant in participants):
+        return
+
+    template_payload = _template_payload_for_mission(str(match["template_id"]))
+    reference_bundle = create_mission(template_payload)
+    reference_mission_id = str(reference_bundle["mission_id"])
+    now_iso = _now_iso()
+    for participant in participants:
+        player_mission_id = uuid.uuid4().hex[:12]
+        _clone_reference_mission(reference_mission_id, player_mission_id, str(match_id))
+        repository.update_versus_participant(
+            str(match_id),
+            str(participant["player_id"]),
+            state="live",
+            mission_id=player_mission_id,
+            last_seen_at=now_iso,
+        )
+
+    repository.update_versus_match(
+        str(match_id),
+        status="live",
+        started_at=now_iso,
+        reference_mission_id=reference_mission_id,
+        result_reason=None,
+        winner_player_id=None,
+        completed_at=None,
+    )
+
+
+def _build_versus_match_state(match_id: str, viewer_player_id: str) -> dict:
+    match = repository.get_versus_match(match_id)
+    if not match:
+        raise FileNotFoundError("Match versus introuvable")
+    participants = repository.list_versus_participants(match_id)
+    if not any(str(participant["player_id"]) == str(viewer_player_id) for participant in participants):
+        raise ValueError("Accès interdit à ce match")
+
+    started_at_dt = _iso_to_datetime(match.get("started_at"))
+    template = VERSUS_TEMPLATES.get(str(match.get("template_id") or ""), {})
+    now_dt = _utcnow()
+    state_participants: list[dict] = []
+    for participant in participants:
+        last_seen_dt = _iso_to_datetime(participant.get("last_seen_at")) or started_at_dt
+        deadline_dt = None
+        if str(match.get("status")) == "live" and str(participant.get("state")) not in {"submitted", "forfeit"} and last_seen_dt:
+            deadline_dt = last_seen_dt + timedelta(seconds=VERSUS_FORFEIT_TIMEOUT_SECONDS)
+        state_participants.append(
+            {
+                "player_id": participant["player_id"],
+                "display_name": participant.get("display_name"),
+                "callsign": participant.get("callsign"),
+                "avatar": participant.get("avatar"),
+                "seat": int(participant.get("seat") or 0),
+                "state": participant.get("state"),
+                "mission_id": participant.get("mission_id"),
+                "ready_at": participant.get("ready_at"),
+                "submitted_at": participant.get("submitted_at"),
+                "score": _safe_float(participant.get("score")),
+                "total_time_s": _safe_float(participant.get("total_time_s")),
+                "objectives_completed": int(participant.get("objectives_completed") or 0),
+                "is_valid_submission": bool(int(participant.get("is_valid_submission") or 0)),
+                "forfeit_at": participant.get("forfeit_at"),
+                "last_seen_at": participant.get("last_seen_at"),
+                "forfeit_deadline_at": deadline_dt.isoformat() if deadline_dt else None,
+                "is_self": str(participant["player_id"]) == str(viewer_player_id),
+            }
+        )
+
+    self_participant = next((item for item in state_participants if item["is_self"]), None)
+    started_elapsed_s = None
+    if started_at_dt:
+        started_elapsed_s = max(0, int((now_dt - started_at_dt).total_seconds()))
+
+    return {
+        "match_id": match["match_id"],
+        "mode": match.get("mode"),
+        "template_id": match.get("template_id"),
+        "template_label": template.get("label"),
+        "winner_rule": match.get("winner_rule"),
+        "join_code": match.get("join_code"),
+        "host_player_id": match.get("host_player_id"),
+        "status": match.get("status"),
+        "reference_mission_id": match.get("reference_mission_id"),
+        "started_at": match.get("started_at"),
+        "started_elapsed_s": started_elapsed_s,
+        "completed_at": match.get("completed_at"),
+        "winner_player_id": match.get("winner_player_id"),
+        "result_reason": match.get("result_reason"),
+        "created_at": match.get("created_at"),
+        "updated_at": match.get("updated_at"),
+        "participants": state_participants,
+        "current_player_mission_id": self_participant.get("mission_id") if self_participant else None,
+    }
+
+
+def _completed_secondary_objectives_count(debrief: dict) -> int:
+    objectives = (((debrief or {}).get("analysis") or {}).get("secondary_objectives") or [])
+    if not isinstance(objectives, list):
+        return 0
+    return sum(1 for objective in objectives if bool((objective or {}).get("completed")))
+
+
+def list_versus_templates() -> dict:
+    templates = []
+    for template in VERSUS_TEMPLATES.values():
+        templates.append(
+            {
+                "template_id": template["template_id"],
+                "label": template["label"],
+                "description": template["description"],
+            }
+        )
+    return {"templates": templates}
+
+
+def create_versus_match(payload: dict) -> dict:
+    host_player_id = str(payload.get("player_id") or payload.get("host_player_id") or "")
+    _require_player(host_player_id)
+    mode = _normalize_versus_mode(payload.get("mode"))
+    if mode != "private":
+        raise ValueError("Utilisez les endpoints dédiés pour ce mode (queue/invite).")
+    template_id = _normalize_versus_template_id(payload.get("template_id"))
+    winner_rule = _normalize_versus_winner_rule(payload.get("winner_rule"))
+    match_id = uuid.uuid4().hex[:14]
+    repository.create_versus_match(
+        match_id=match_id,
+        mode=mode,
+        template_id=template_id,
+        winner_rule=winner_rule,
+        host_player_id=host_player_id,
+        join_code=_generate_join_code(),
+        status="waiting_opponent",
+    )
+    return _build_versus_match_state(match_id, host_player_id)
+
+
+def join_versus_match(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    _require_player(player_id)
+    join_code = str(payload.get("join_code") or "").strip().upper()
+    if not join_code:
+        raise ValueError("Code de partie requis")
+    match = repository.get_versus_match_by_join_code(join_code)
+    if not match:
+        raise FileNotFoundError("Code de partie invalide")
+    if str(match.get("mode")) != "private":
+        raise ValueError("Cette partie n'accepte pas de jonction par code")
+    if str(match.get("status")) != "waiting_opponent":
+        raise RuntimeError("Cette partie n'est plus disponible")
+
+    participants = repository.list_versus_participants(str(match["match_id"]))
+    if any(str(participant["player_id"]) == player_id for participant in participants):
+        raise RuntimeError("Vous êtes déjà dans cette partie")
+    repository.add_versus_participant(str(match["match_id"]), player_id, seat=1, state="joined")
+    repository.update_versus_match(str(match["match_id"]), status="waiting_ready")
+    repository.remove_versus_queue_player(player_id)
+    return _build_versus_match_state(str(match["match_id"]), player_id)
+
+
+def enter_versus_queue(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    _require_player(player_id)
+    template_id = _normalize_versus_template_id(payload.get("template_id"))
+    winner_rule = _normalize_versus_winner_rule(payload.get("winner_rule"))
+
+    existing_match = repository.get_latest_versus_match_for_player(player_id, statuses=("waiting_ready", "live"))
+    if existing_match:
+        return {
+            "status": "matched",
+            "match": _build_versus_match_state(str(existing_match["match_id"]), player_id),
+        }
+
+    opponent = repository.find_versus_queue_opponent(player_id, template_id, winner_rule)
+    if opponent:
+        host_player_id = str(opponent["player_id"])
+        match_id = _create_versus_match_pair(
+            mode="queue",
+            host_player_id=host_player_id,
+            opponent_player_id=player_id,
+            template_id=template_id,
+            winner_rule=winner_rule,
+        )
+        return {
+            "status": "matched",
+            "match": _build_versus_match_state(match_id, player_id),
+        }
+
+    queue_entry = repository.enqueue_versus_player(player_id, template_id, winner_rule)
+    return {"status": "queued", "queue_entry": queue_entry}
+
+
+def leave_versus_queue(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    _require_player(player_id)
+    repository.remove_versus_queue_player(player_id)
+    return {"status": "left"}
+
+
+def create_versus_invite(payload: dict) -> dict:
+    inviter_player_id = str(payload.get("player_id") or payload.get("inviter_player_id") or "")
+    invitee_player_id = str(payload.get("invitee_player_id") or "")
+    _require_player(inviter_player_id)
+    _require_player(invitee_player_id)
+    if inviter_player_id == invitee_player_id:
+        raise ValueError("Impossible de vous inviter vous-même")
+
+    template_id = _normalize_versus_template_id(payload.get("template_id"))
+    winner_rule = _normalize_versus_winner_rule(payload.get("winner_rule"))
+    invite_id = uuid.uuid4().hex[:16]
+    invite = repository.create_versus_invite(
+        invite_id=invite_id,
+        inviter_player_id=inviter_player_id,
+        invitee_player_id=invitee_player_id,
+        template_id=template_id,
+        winner_rule=winner_rule,
+    )
+    return {"invite": invite}
+
+
+def list_versus_invites(player_id: str) -> dict:
+    _require_player(player_id)
+    return {"invites": repository.list_pending_versus_invites(player_id)}
+
+
+def accept_versus_invite(invite_id: str, payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    _require_player(player_id)
+    invite = repository.get_versus_invite(invite_id)
+    if not invite:
+        raise FileNotFoundError("Invitation introuvable")
+    if str(invite.get("invitee_player_id")) != player_id:
+        raise ValueError("Cette invitation ne vous est pas destinée")
+    if str(invite.get("status")) != "pending":
+        raise RuntimeError("Invitation déjà traitée")
+
+    match_id = _create_versus_match_pair(
+        mode="invite",
+        host_player_id=str(invite["inviter_player_id"]),
+        opponent_player_id=player_id,
+        template_id=_normalize_versus_template_id(str(invite["template_id"])),
+        winner_rule=_normalize_versus_winner_rule(str(invite["winner_rule"])),
+    )
+    repository.update_versus_invite(invite_id, status="accepted", match_id=match_id, responded_at=_now_iso())
+    return {"status": "accepted", "match": _build_versus_match_state(match_id, player_id)}
+
+
+def decline_versus_invite(invite_id: str, payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    _require_player(player_id)
+    invite = repository.get_versus_invite(invite_id)
+    if not invite:
+        raise FileNotFoundError("Invitation introuvable")
+    if str(invite.get("invitee_player_id")) != player_id:
+        raise ValueError("Cette invitation ne vous est pas destinée")
+    if str(invite.get("status")) != "pending":
+        raise RuntimeError("Invitation déjà traitée")
+    repository.update_versus_invite(invite_id, status="declined", responded_at=_now_iso())
+    return {"status": "declined"}
+
+
+def set_versus_ready(match_id: str, payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    ready = bool(payload.get("ready", True))
+    _require_player(player_id)
+    match = repository.get_versus_match(match_id)
+    if not match:
+        raise FileNotFoundError("Match versus introuvable")
+    participant = repository.get_versus_participant(match_id, player_id)
+    if not participant:
+        raise ValueError("Vous ne participez pas à ce match")
+    if str(match.get("status")) == "finished":
+        return _build_versus_match_state(match_id, player_id)
+    if str(match.get("status")) == "waiting_opponent":
+        raise RuntimeError("En attente d'un adversaire")
+
+    repository.update_versus_participant(
+        match_id,
+        player_id,
+        state="ready" if ready else "joined",
+        ready_at=_now_iso() if ready else None,
+    )
+    _start_versus_match_if_ready(match_id)
+    return _build_versus_match_state(match_id, player_id)
+
+
+def get_versus_match_state(match_id: str, player_id: str) -> dict:
+    _require_player(player_id)
+    participant = repository.get_versus_participant(match_id, player_id)
+    if not participant:
+        raise ValueError("Vous ne participez pas à ce match")
+    _touch_versus_participant(match_id, player_id)
+    _apply_versus_forfeit_timeout(match_id)
+    return _build_versus_match_state(match_id, player_id)
+
+
+def submit_versus_attempt(match_id: str, payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    _require_player(player_id)
+    match = repository.get_versus_match(match_id)
+    if not match:
+        raise FileNotFoundError("Match versus introuvable")
+    if str(match.get("status")) == "finished":
+        raise RuntimeError("Ce match est déjà terminé")
+    if str(match.get("status")) != "live":
+        raise RuntimeError("Le match n'a pas encore démarré")
+
+    participant = repository.get_versus_participant(match_id, player_id)
+    if not participant:
+        raise ValueError("Vous ne participez pas à ce match")
+    if str(participant.get("state")) == "submitted":
+        raise RuntimeError("Tentative déjà soumise")
+    if str(participant.get("state")) == "forfeit":
+        raise RuntimeError("Impossible de soumettre après forfait")
+
+    mission_id = str(participant.get("mission_id") or "")
+    if not mission_id:
+        raise RuntimeError("Mission versus non assignée")
+
+    _touch_versus_participant(match_id, player_id)
+    _apply_versus_forfeit_timeout(match_id)
+
+    try:
+        debrief_payload = get_debrief(mission_id)
+    except FileNotFoundError as exc:
+        raise ValueError("Résous d'abord la mission avant de soumettre.") from exc
+
+    mission_payload = get_mission(mission_id)
+    total_clients = len(mission_payload.get("clients", []))
+    assigned_clients = set(int(client_id) for client_id in (debrief_payload.get("human", {}).get("assigned_clients", []) or []))
+    if len(assigned_clients) < total_clients:
+        raise ValueError("Soumission invalide: tous les clients doivent être assignés.")
+
+    score_value = float(((debrief_payload.get("score") or {}).get("value") or 0.0))
+    total_time_s = float((((debrief_payload.get("human") or {}).get("summary") or {}).get("total_time_s") or 0.0))
+    objectives_completed = _completed_secondary_objectives_count(debrief_payload)
+    repository.update_versus_participant(
+        match_id,
+        player_id,
+        state="submitted",
+        submitted_at=_now_iso(),
+        score=score_value,
+        total_time_s=total_time_s,
+        objectives_completed=objectives_completed,
+        is_valid_submission=1,
+    )
+
+    _resolve_versus_match(match_id, reason="submitted")
+    return _build_versus_match_state(match_id, player_id)
+
+
+def list_versus_leaderboard(limit: int = 20) -> dict:
+    return {"entries": repository.list_versus_leaderboard(limit=limit)}

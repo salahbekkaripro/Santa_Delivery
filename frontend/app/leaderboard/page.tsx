@@ -2,71 +2,257 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { getLeaderboard } from "@/lib/api";
-import { LeaderboardEntry } from "@/lib/types";
+import { useEffect, useState } from "react";
+import { getLeaderboard, getVersusLeaderboard } from "@/lib/api";
+import { LeaderboardEntry, VersusLeaderboardEntry } from "@/lib/types";
+
+const medals = ["🥇", "🥈", "🥉"];
+const podiumClass = ["rank-1", "rank-2", "rank-3"];
 
 export default function LeaderboardPage() {
-  const leaderboardQuery = useQuery({
-    queryKey: ["leaderboard"],
-    queryFn: () => getLeaderboard()
+  const [mode, setMode] = useState<"solo" | "versus">("solo");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const queryMode = new URLSearchParams(window.location.search).get("mode");
+    setMode(queryMode === "versus" ? "versus" : "solo");
+  }, []);
+
+  const soloLeaderboardQuery = useQuery({
+    queryKey: ["leaderboard", "solo"],
+    queryFn: () => getLeaderboard(),
+    enabled: mode === "solo",
   });
 
-  if (leaderboardQuery.isLoading) {
-    return <div className="page-shell">Chargement du Panthéon...</div>;
+  const versusLeaderboardQuery = useQuery({
+    queryKey: ["leaderboard", "versus"],
+    queryFn: () => getVersusLeaderboard(),
+    enabled: mode === "versus",
+  });
+
+  if (soloLeaderboardQuery.isLoading || versusLeaderboardQuery.isLoading) {
+    return (
+      <div className="page-shell">
+        <div className="page-stack">
+          <div className="hero" style={{ height: 140 }}>
+            <div className="skeleton-bar h-lg w-60" style={{ marginBottom: 12 }} />
+            <div className="skeleton-bar h-sm w-80" />
+          </div>
+        </div>
+      </div>
+    );
   }
 
-  const entries = leaderboardQuery.data?.entries ?? [];
+  const soloEntries = soloLeaderboardQuery.data?.entries ?? [];
+  const versusEntries = versusLeaderboardQuery.data?.entries ?? [];
+  const topScore = mode === "versus" ? Number(versusEntries[0]?.winner_score ?? 0) : Number(soloEntries[0]?.score ?? 0);
+  const avgScore =
+    (mode === "versus" ? versusEntries.length : soloEntries.length) > 0
+      ? (
+          (mode === "versus" ? versusEntries : soloEntries).reduce((sum, entry) => {
+            if (mode === "versus") {
+              return sum + Number((entry as VersusLeaderboardEntry).winner_score ?? 0);
+            }
+            return sum + Number((entry as LeaderboardEntry).score ?? 0);
+          }, 0) / (mode === "versus" ? versusEntries.length : soloEntries.length)
+        )
+      : 0;
+  const distinctZones = mode === "versus"
+    ? new Set(versusEntries.map((entry) => entry.template_id)).size
+    : new Set(soloEntries.map((entry) => entry.zone)).size;
+
+  if (mode === "versus") {
+    return (
+      <div className="page-shell">
+        <div className="page-stack">
+          <section className="hero">
+            <div className="lb-hero-head">
+              <div>
+                <h1>⚔️ Classement Versus</h1>
+                <div className="hero-badges lb-hero-badges">
+                  <span className="hero-badge">Duels PVP en direct</span>
+                  <span className="hero-badge">{versusEntries.length} duel{versusEntries.length !== 1 ? "s" : ""} enregistré{versusEntries.length !== 1 ? "s" : ""}</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Link className="secondary-button lb-back-link" href="/leaderboard">
+                  Solo
+                </Link>
+                <Link className="secondary-button lb-back-link" href="/">
+                  ← Accueil
+                </Link>
+              </div>
+            </div>
+          </section>
+
+          {versusEntries.length > 0 && (
+            <section className="lb-summary-grid">
+              <div className="metric-card">
+                <div className="metric-label">Meilleur score gagnant</div>
+                <div className="metric-value">{topScore.toFixed(1)}</div>
+              </div>
+              <div className="metric-card">
+                <div className="metric-label">Score moyen gagnant</div>
+                <div className="metric-value">{avgScore.toFixed(1)}</div>
+              </div>
+              <div className="metric-card">
+                <div className="metric-label">Templates disputés</div>
+                <div className="metric-value">{distinctZones}</div>
+              </div>
+            </section>
+          )}
+
+          <section className="panel stack">
+            <strong>Historique des victoires</strong>
+            {versusEntries.length === 0 ? (
+              <span className="muted">Aucun duel terminé pour le moment.</span>
+            ) : (
+              <div className="lb-list">
+                {versusEntries.map((entry, index) => (
+                  <div key={`${entry.match_id}-${index}`} className="lb-row">
+                    <span className="lb-rank">#{index + 1}</span>
+                    <span className="lb-row-avatar">{entry.winner_avatar ?? "🎅"}</span>
+                    <div className="lb-row-meta">
+                      <div className="lb-row-name">{entry.winner_display_name ?? entry.winner_player_id}</div>
+                      <div className="lb-zone">
+                        {entry.template_id} · {entry.winner_rule} · {new Date(entry.created_at).toLocaleDateString("fr-FR")}
+                      </div>
+                      <div className="lb-callsign">vs {entry.loser_display_name ?? entry.loser_player_id ?? "—"}</div>
+                    </div>
+                    <span className="lb-score">{Number(entry.winner_score ?? 0).toFixed(1)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  const podium = soloEntries.slice(0, 3);
+  const rest = soloEntries.slice(3);
+  const soloTopScore = Number(soloEntries[0]?.score ?? 0);
+  const soloAvgScore = soloEntries.length > 0
+    ? soloEntries.reduce((sum, entry) => sum + Number(entry.score ?? 0), 0) / soloEntries.length
+    : 0;
+  const soloDistinctZones = new Set(soloEntries.map((entry) => entry.zone)).size;
 
   return (
     <div className="page-shell">
       <div className="page-stack">
+
+        {/* HERO */}
         <section className="hero">
-          <h1>Le Panthéon des Livreurs</h1>
-          <p>Les meilleures performances de livraison à travers le monde.</p>
+          <div className="lb-hero-head">
+            <div>
+                <h1>🏆 Le Panthéon Solo</h1>
+              <div className="hero-badges lb-hero-badges">
+                <span className="hero-badge">❄️ Meilleurs agents de livraison</span>
+                <span className="hero-badge">{soloEntries.length} score{soloEntries.length !== 1 ? "s" : ""} enregistré{soloEntries.length !== 1 ? "s" : ""}</span>
+              </div>
+            </div>
+            <Link className="secondary-button lb-back-link" href="/">
+              ← Retour à l&apos;accueil
+            </Link>
+            <Link className="secondary-button lb-back-link" href="/leaderboard?mode=versus">
+              Voir le versus
+            </Link>
+          </div>
         </section>
 
-        <section className="panel stack">
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border)" }}>
-                <th style={{ padding: "12px" }}>Rang</th>
-                <th style={{ padding: "12px" }}>Nom</th>
-                <th style={{ padding: "12px" }}>Zone</th>
-                <th style={{ padding: "12px" }}>Score</th>
-                <th style={{ padding: "12px" }}>Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((entry: LeaderboardEntry, index: number) => (
-                <tr key={`${entry.mission_id}-${index}`} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "12px" }}><strong>{entry.rank}</strong></td>
-                  <td style={{ padding: "12px" }}>
-                    <div className="leaderboard-player">
-                      <span className="leaderboard-player-avatar">{entry.avatar ?? "🎅"}</span>
-                      <div className="leaderboard-player-copy">
-                        <strong>{entry.player_name}</strong>
-                        <span className="muted">{entry.callsign || "Profil joueur"}</span>
-                      </div>
-                    </div>
-                  </td>
-                  <td style={{ padding: "12px" }}>{entry.zone}</td>
-                  <td style={{ padding: "12px" }}>{entry.score}/100</td>
-                  <td style={{ padding: "12px" }}>{new Date(entry.created_at).toLocaleDateString()}</td>
-                </tr>
+        {soloEntries.length > 0 && (
+          <section className="lb-summary-grid">
+            <div className="metric-card">
+              <div className="metric-label">Meilleur score</div>
+              <div className="metric-value">{soloTopScore}/100</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Score moyen</div>
+              <div className="metric-value">{soloAvgScore.toFixed(1)}</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Zones disputées</div>
+              <div className="metric-value">{soloDistinctZones}</div>
+            </div>
+          </section>
+        )}
+
+        {/* PODIUM top 3 */}
+        {podium.length > 0 && (
+          <section>
+            <div className="lb-podium">
+              {/* 2e place à gauche */}
+              {podium[1] ? (
+                <div className={`lb-podium-card ${podiumClass[1]}`}>
+                  <span className="lb-medal">{medals[1]}</span>
+                  <span className="lb-podium-avatar">{podium[1].avatar ?? "🎅"}</span>
+                  <span className="lb-podium-name">{podium[1].player_name}</span>
+                  {podium[1].callsign && <span className="lb-callsign">{podium[1].callsign}</span>}
+                  <span className="lb-podium-score">{podium[1].score}</span>
+                  <span className="lb-podium-zone">{podium[1].zone}</span>
+                </div>
+              ) : <div />}
+
+              {/* 1ère place au centre */}
+              <div className={`lb-podium-card ${podiumClass[0]}`}>
+                <span className="lb-medal">{medals[0]}</span>
+                <span className="lb-podium-avatar">{podium[0].avatar ?? "🎅"}</span>
+                <span className="lb-podium-name">{podium[0].player_name}</span>
+                {podium[0].callsign && <span className="lb-callsign">{podium[0].callsign}</span>}
+                <span className="lb-podium-score">{podium[0].score}</span>
+                <span className="lb-podium-zone">{podium[0].zone}</span>
+              </div>
+
+              {/* 3e place à droite */}
+              {podium[2] ? (
+                <div className={`lb-podium-card ${podiumClass[2]}`}>
+                  <span className="lb-medal">{medals[2]}</span>
+                  <span className="lb-podium-avatar">{podium[2].avatar ?? "🎅"}</span>
+                  <span className="lb-podium-name">{podium[2].player_name}</span>
+                  {podium[2].callsign && <span className="lb-callsign">{podium[2].callsign}</span>}
+                  <span className="lb-podium-score">{podium[2].score}</span>
+                  <span className="lb-podium-zone">{podium[2].zone}</span>
+                </div>
+              ) : <div />}
+            </div>
+          </section>
+        )}
+
+        {/* LISTE depuis la 4e place */}
+        {rest.length > 0 && (
+          <section className="panel stack">
+            <strong>Classement général</strong>
+            <div className="lb-list">
+              {rest.map((entry: LeaderboardEntry, i: number) => (
+                <div key={`${entry.mission_id}-${i}`} className="lb-row">
+                  <span className="lb-rank">#{i + 4}</span>
+                  <span className="lb-row-avatar">{entry.avatar ?? "🎅"}</span>
+                  <div className="lb-row-meta">
+                    <div className="lb-row-name">{entry.player_name}</div>
+                    {entry.callsign && <div className="lb-callsign">{entry.callsign}</div>}
+                    <div className="lb-zone">{entry.zone} · {new Date(entry.created_at).toLocaleDateString("fr-FR")}</div>
+                  </div>
+                  <span className="lb-score">{entry.score}/100</span>
+                </div>
               ))}
-              {entries.length === 0 && (
-                <tr>
-                  <td colSpan={5} style={{ padding: "20px", textAlign: "center" }} className="muted">
-                    Aucun score enregistré pour le moment. Soyez le premier !
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-          <Link href="/" className="secondary-button" style={{ textAlign: "center" }}>
-            Retour à l&apos;accueil
-          </Link>
-        </section>
+            </div>
+          </section>
+        )}
+
+        {soloEntries.length === 0 && (
+          <section className="panel lb-empty">
+            <div className="lb-empty-icon">❄️</div>
+            <strong>Aucun score enregistré pour le moment</strong>
+            <p className="muted">Termine une mission et entre au Panthéon pour être le premier !</p>
+            <Link className="primary-button lb-empty-cta" href="/campaign">
+              Commencer une mission
+            </Link>
+          </section>
+        )}
+
       </div>
     </div>
   );

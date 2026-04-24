@@ -155,9 +155,9 @@ export default function MapboxSurfaceClient({
       m.addSource("adjacents", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       m.addSource("future-adjacents", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
 
-      m.addLayer({ id: "human-layer", type: "line", source: "human-routes", paint: { "line-color": "#c1452f", "line-width": 4, "line-dasharray": [2, 2] } });
+      m.addLayer({ id: "human-layer", type: "line", source: "human-routes", paint: { "line-color": "#9e2f3f", "line-width": 4, "line-dasharray": [2, 2] } });
       m.addLayer({ id: "ai-layer", type: "line", source: "ai-routes", paint: { "line-color": "#143c5a", "line-width": 5, "line-opacity": 0.8 } });
-      m.addLayer({ id: "preview-layer", type: "line", source: "previews", paint: { "line-color": "#d97706", "line-width": 6 } });
+      m.addLayer({ id: "preview-layer", type: "line", source: "previews", paint: { "line-color": "#b8892f", "line-width": 6 } });
       m.addLayer({ id: "incident-layer", type: "line", source: "incidents", paint: { "line-color": "#991b1b", "line-width": 5, "line-dasharray": [1, 2] } });
 
       m.addLayer({ id: "future-adjacent-layer", type: "line", source: "future-adjacents", paint: { "line-color": "#3b82f6", "line-width": 2, "line-dasharray": [2, 2], "line-opacity": 0.2 } });
@@ -344,7 +344,7 @@ export default function MapboxSurfaceClient({
 
       const isAssigned = assigned.has(c.id);
       const isSelected = selectedClientId === c.id;
-      const color = isAssigned ? "#1f8f5f" : isSelected ? "#d97706" : "#c1452f";
+      const color = isAssigned ? "#1f8f5f" : isSelected ? "#b8892f" : "#9e2f3f";
       if (el.dataset.fill !== color) {
         el.style.backgroundColor = color;
         el.dataset.fill = color;

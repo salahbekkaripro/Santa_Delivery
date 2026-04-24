@@ -49,3 +49,5 @@ daily_reports/
 *.swo
 frontend/node_modules/
 frontend/.next/
+frontend/playwright-report/
+frontend/test-results/
