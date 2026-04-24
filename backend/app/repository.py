@@ -1093,3 +1093,46 @@ def list_versus_leaderboard(limit: int = 20, db_path: str | Path | None = None) 
         payload["mission_config"] = _json_loads(payload.pop("mission_config_json", None))
         payloads.append(payload)
     return payloads
+
+
+def list_versus_player_history(
+    max_matches: int = 500,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            WITH recent_matches AS (
+                SELECT
+                    match_id,
+                    winner_player_id,
+                    winner_rule,
+                    completed_at,
+                    created_at
+                FROM versus_matches
+                WHERE status = 'finished'
+                ORDER BY COALESCE(completed_at, created_at) DESC
+                LIMIT ?
+            )
+            SELECT
+                matches.match_id,
+                matches.winner_player_id,
+                matches.winner_rule,
+                matches.completed_at,
+                matches.created_at,
+                participants.player_id,
+                participants.total_time_s,
+                participants.score,
+                participants.is_valid_submission,
+                players.display_name,
+                players.callsign,
+                players.avatar
+            FROM recent_matches AS matches
+            INNER JOIN versus_participants AS participants ON participants.match_id = matches.match_id
+            LEFT JOIN players ON players.player_id = participants.player_id
+            ORDER BY COALESCE(matches.completed_at, matches.created_at) DESC, participants.seat ASC
+            """,
+            (int(max_matches),),
+        ).fetchall()
+    return [dict(row) for row in rows]

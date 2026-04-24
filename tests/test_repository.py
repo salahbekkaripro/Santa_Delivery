@@ -240,6 +240,85 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(stored_invite["map_source"], "custom")
         self.assertEqual(stored_invite["mission_config"]["num_clients"], 30)
 
+    def test_list_versus_player_history_returns_finished_match_rows(self):
+        repository.upsert_player(player_id="p1", display_name="Alpha", db_path=self.db_path)
+        repository.upsert_player(player_id="p2", display_name="Bravo", db_path=self.db_path)
+        repository.upsert_player(player_id="p3", display_name="Charlie", db_path=self.db_path)
+
+        repository.create_versus_match(
+            match_id="m1",
+            mode="private",
+            template_id="paris_duel",
+            map_source="template",
+            mission_config=None,
+            winner_rule="score_time",
+            host_player_id="p1",
+            join_code="A1B2C3",
+            status="waiting_opponent",
+            db_path=self.db_path,
+        )
+        repository.add_versus_participant("m1", "p2", seat=1, db_path=self.db_path)
+        repository.update_versus_participant("m1", "p1", state="submitted", total_time_s=600, is_valid_submission=1, db_path=self.db_path)
+        repository.update_versus_participant("m1", "p2", state="submitted", total_time_s=720, is_valid_submission=1, db_path=self.db_path)
+        repository.update_versus_match(
+            "m1",
+            status="finished",
+            winner_player_id="p1",
+            completed_at="2026-04-24T12:00:00+00:00",
+            db_path=self.db_path,
+        )
+
+        repository.create_versus_match(
+            match_id="m2",
+            mode="invite",
+            template_id="paris_duel",
+            map_source="template",
+            mission_config=None,
+            winner_rule="time",
+            host_player_id="p2",
+            join_code="D4E5F6",
+            status="waiting_opponent",
+            db_path=self.db_path,
+        )
+        repository.add_versus_participant("m2", "p1", seat=1, db_path=self.db_path)
+        repository.update_versus_participant("m2", "p2", state="submitted", total_time_s=540, is_valid_submission=1, db_path=self.db_path)
+        repository.update_versus_participant("m2", "p1", state="submitted", total_time_s=580, is_valid_submission=1, db_path=self.db_path)
+        repository.update_versus_match(
+            "m2",
+            status="finished",
+            winner_player_id="p2",
+            completed_at="2026-04-24T13:00:00+00:00",
+            db_path=self.db_path,
+        )
+
+        repository.create_versus_match(
+            match_id="m3",
+            mode="private",
+            template_id="paris_duel",
+            map_source="template",
+            mission_config=None,
+            winner_rule="objectives",
+            host_player_id="p1",
+            join_code="G7H8J9",
+            status="waiting_opponent",
+            db_path=self.db_path,
+        )
+        repository.add_versus_participant("m3", "p3", seat=1, db_path=self.db_path)
+        repository.update_versus_participant("m3", "p1", state="forfeit", is_valid_submission=0, db_path=self.db_path)
+        repository.update_versus_participant("m3", "p3", state="submitted", total_time_s=660, is_valid_submission=1, db_path=self.db_path)
+        repository.update_versus_match(
+            "m3",
+            status="finished",
+            winner_player_id="p3",
+            completed_at="2026-04-24T14:00:00+00:00",
+            db_path=self.db_path,
+        )
+
+        history = repository.list_versus_player_history(max_matches=10, db_path=self.db_path)
+        self.assertEqual(len(history), 6)
+        self.assertEqual(history[0]["match_id"], "m3")
+        self.assertIn(history[0]["winner_rule"], {"score_time", "time", "objectives"})
+
 
 if __name__ == "__main__":
     unittest.main()

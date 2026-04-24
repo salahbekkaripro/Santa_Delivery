@@ -3,12 +3,22 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getLeaderboard, getVersusLeaderboard } from "@/lib/api";
-import { LeaderboardEntry, VersusLeaderboardEntry } from "@/lib/types";
+import { getLeaderboard, getVersusLeaderboard, getVersusPlayerStats } from "@/lib/api";
+import { LeaderboardEntry, VersusLeaderboardEntry, VersusPlayerStatsEntry } from "@/lib/types";
 import { ruleLabel } from "@/lib/versus";
 
 const medals = ["🥇", "🥈", "🥉"];
 const podiumClass = ["rank-1", "rank-2", "rank-3"];
+
+function formatAverageTime(seconds?: number | null) {
+  if (seconds == null || Number.isNaN(seconds)) {
+    return "—";
+  }
+  if (seconds >= 60) {
+    return `${(seconds / 60).toFixed(1)} min`;
+  }
+  return `${Math.round(seconds)} s`;
+}
 
 export default function LeaderboardPage() {
   const [mode, setMode] = useState<"solo" | "versus">("solo");
@@ -33,7 +43,13 @@ export default function LeaderboardPage() {
     enabled: mode === "versus",
   });
 
-  if (soloLeaderboardQuery.isLoading || versusLeaderboardQuery.isLoading) {
+  const versusStatsQuery = useQuery({
+    queryKey: ["leaderboard", "versus", "player-stats"],
+    queryFn: () => getVersusPlayerStats(20, 1000),
+    enabled: mode === "versus",
+  });
+
+  if (soloLeaderboardQuery.isLoading || versusLeaderboardQuery.isLoading || (mode === "versus" && versusStatsQuery.isLoading)) {
     return (
       <div className="page-shell">
         <div className="page-stack">
@@ -48,6 +64,7 @@ export default function LeaderboardPage() {
 
   const soloEntries = soloLeaderboardQuery.data?.entries ?? [];
   const versusEntries = versusLeaderboardQuery.data?.entries ?? [];
+  const versusPlayerStats = versusStatsQuery.data?.entries ?? [];
   const topScore = mode === "versus" ? Number(versusEntries[0]?.winner_score ?? 0) : Number(soloEntries[0]?.score ?? 0);
   const avgScore =
     (mode === "versus" ? versusEntries.length : soloEntries.length) > 0
@@ -104,6 +121,32 @@ export default function LeaderboardPage() {
               </div>
             </section>
           )}
+
+          <section className="panel stack">
+            <strong>Historique par joueur</strong>
+            {versusPlayerStats.length === 0 ? (
+              <span className="muted">Aucune statistique joueur disponible pour le moment.</span>
+            ) : (
+              <div className="lb-list">
+                {versusPlayerStats.map((entry: VersusPlayerStatsEntry, index: number) => (
+                  <div key={`${entry.player_id}-${index}`} className="lb-row">
+                    <span className="lb-rank">#{index + 1}</span>
+                    <span className="lb-row-avatar">{entry.avatar ?? "🎅"}</span>
+                    <div className="lb-row-meta">
+                      <div className="lb-row-name">{entry.display_name ?? entry.player_id}</div>
+                      <div className="lb-zone">
+                        Winrate {entry.winrate_pct.toFixed(1)}% · {entry.wins}V-{entry.losses}D · {entry.matches_played} match{entry.matches_played !== 1 ? "s" : ""}
+                      </div>
+                      <div className="lb-callsign">
+                        Règle favorite: {ruleLabel(entry.favorite_rule)} · Temps moyen: {formatAverageTime(entry.average_time_s)}
+                      </div>
+                    </div>
+                    <span className="lb-score">{entry.winrate_pct.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
 
           <section className="panel stack">
             <strong>Historique des victoires</strong>

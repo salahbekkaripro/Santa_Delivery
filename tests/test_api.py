@@ -368,6 +368,13 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json(), {"entries": []})
         list_versus_leaderboard_mock.assert_called_once_with(limit=5)
 
+    @patch("backend.app.services.list_versus_player_stats", return_value={"entries": []})
+    def test_list_versus_player_stats_success(self, list_versus_player_stats_mock):
+        response = self.client.get("/api/versus/stats?limit=7&max_matches=300")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"entries": []})
+        list_versus_player_stats_mock.assert_called_once_with(limit=7, max_matches=300)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -467,3 +467,17 @@ export type VersusLeaderboardEntry = {
   map_label?: string | null;
   created_at: string;
 };
+
+export type VersusPlayerStatsEntry = {
+  player_id: string;
+  display_name?: string | null;
+  callsign?: string | null;
+  avatar?: string | null;
+  matches_played: number;
+  wins: number;
+  losses: number;
+  winrate_pct: number;
+  favorite_rule: VersusWinnerRule;
+  average_time_s?: number | null;
+  last_match_at?: string | null;
+};

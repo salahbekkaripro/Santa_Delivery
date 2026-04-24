@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 import unicodedata
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -3544,3 +3544,92 @@ def list_versus_leaderboard(limit: int = 20) -> dict:
         payload["map_label"] = payload["mission_summary"].get("template_label") or str(entry.get("template_id") or "template")
         enriched.append(payload)
     return {"entries": enriched}
+
+
+def list_versus_player_stats(limit: int = 20, max_matches: int = 500) -> dict:
+    rows = repository.list_versus_player_history(max_matches=max_matches)
+    by_player: dict[str, dict] = {}
+
+    for row in rows:
+        player_id = str(row.get("player_id") or "")
+        if not player_id:
+            continue
+        payload = by_player.setdefault(
+            player_id,
+            {
+                "player_id": player_id,
+                "display_name": row.get("display_name"),
+                "callsign": row.get("callsign"),
+                "avatar": row.get("avatar"),
+                "matches_played": 0,
+                "wins": 0,
+                "losses": 0,
+                "favorite_rule": None,
+                "average_time_s": None,
+                "last_match_at": None,
+                "_rule_counts": defaultdict(int),
+                "_time_sum": 0.0,
+                "_time_count": 0,
+            },
+        )
+
+        payload["matches_played"] += 1
+        if str(row.get("winner_player_id") or "") == player_id:
+            payload["wins"] += 1
+        else:
+            payload["losses"] += 1
+
+        winner_rule = _normalize_versus_winner_rule(str(row.get("winner_rule") or "score_time"))
+        payload["_rule_counts"][winner_rule] += 1
+
+        if int(row.get("is_valid_submission") or 0) == 1:
+            total_time_s = _safe_float(row.get("total_time_s"))
+            if total_time_s is not None and total_time_s >= 0:
+                payload["_time_sum"] += float(total_time_s)
+                payload["_time_count"] += 1
+
+        match_timestamp = str(row.get("completed_at") or row.get("created_at") or "")
+        current_match_dt = _iso_to_datetime(match_timestamp)
+        previous_match_dt = _iso_to_datetime(payload.get("last_match_at"))
+        if match_timestamp and (
+            not payload["last_match_at"]
+            or (current_match_dt is not None and (previous_match_dt is None or current_match_dt > previous_match_dt))
+        ):
+            payload["last_match_at"] = match_timestamp
+
+    entries: list[dict] = []
+    for player_stats in by_player.values():
+        rule_counts: defaultdict[str, int] = player_stats.pop("_rule_counts")
+        if rule_counts:
+            favorite_rule = sorted(
+                rule_counts.items(),
+                key=lambda item: (-int(item[1]), item[0]),
+            )[0][0]
+        else:
+            favorite_rule = "score_time"
+        player_stats["favorite_rule"] = favorite_rule
+
+        time_count = int(player_stats.pop("_time_count"))
+        time_sum = float(player_stats.pop("_time_sum"))
+        player_stats["average_time_s"] = (time_sum / time_count) if time_count > 0 else None
+
+        matches_played = int(player_stats.get("matches_played") or 0)
+        wins = int(player_stats.get("wins") or 0)
+        player_stats["winrate_pct"] = (wins / matches_played * 100.0) if matches_played > 0 else 0.0
+        entries.append(player_stats)
+
+    entries.sort(
+        key=lambda item: (
+            -float(item.get("winrate_pct") or 0.0),
+            -int(item.get("wins") or 0),
+            -int(item.get("matches_played") or 0),
+            _iso_to_datetime(item.get("last_match_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+    )
+
+    for item in entries:
+        item["winrate_pct"] = round(float(item.get("winrate_pct") or 0.0), 1)
+        average_time_s = item.get("average_time_s")
+        item["average_time_s"] = round(float(average_time_s), 1) if average_time_s is not None else None
+
+    return {"entries": entries[: max(0, int(limit))]}

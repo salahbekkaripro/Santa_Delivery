@@ -432,3 +432,8 @@ def submit_versus_attempt(match_id: str, payload: VersusSubmitRequest) -> dict:
 @app.get("/api/versus/leaderboard")
 def list_versus_leaderboard(limit: int = 20) -> dict:
     return services.list_versus_leaderboard(limit=limit)
+
+
+@app.get("/api/versus/stats")
+def list_versus_player_stats(limit: int = 20, max_matches: int = 500) -> dict:
+    return services.list_versus_player_stats(limit=limit, max_matches=max_matches)

@@ -18,6 +18,7 @@ import type {
   VersusMapSource,
   VersusMatch,
   VersusMissionConfig,
+  VersusPlayerStatsEntry,
   VersusTemplate,
   VersusWinnerRule
 } from "@/lib/types";
@@ -428,4 +429,10 @@ export function submitVersusAttempt(matchId: string, payload: { player_id: strin
 
 export function getVersusLeaderboard(limit: number = 20) {
   return apiFetch<{ entries: VersusLeaderboardEntry[] }>(`/api/versus/leaderboard?limit=${limit}`);
+}
+
+export function getVersusPlayerStats(limit: number = 20, maxMatches: number = 500) {
+  return apiFetch<{ entries: VersusPlayerStatsEntry[] }>(
+    `/api/versus/stats?limit=${limit}&max_matches=${maxMatches}`,
+  );
 }
