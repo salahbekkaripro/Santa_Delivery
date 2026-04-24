@@ -311,6 +311,28 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["match_id"], "match123")
         create_versus_match_mock.assert_called_once()
 
+    @patch("backend.app.services.create_versus_match", return_value=VERSUS_MATCH_RESPONSE)
+    def test_create_versus_match_custom_map_payload(self, create_versus_match_mock):
+        response = self.client.post(
+            "/api/versus/matches",
+            json={
+                "player_id": "player001",
+                "mode": "private",
+                "map_source": "custom",
+                "winner_rule": "time",
+                "mission_config": {
+                    "zone": "Lyon Centre",
+                    "num_clients": 20,
+                    "budget": 2200,
+                    "sleigh_cost": 500,
+                    "weather_key": "Rain",
+                    "random_incidents": True,
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        create_versus_match_mock.assert_called_once()
+
     @patch("backend.app.services.join_versus_match", side_effect=RuntimeError("Partie indisponible"))
     def test_join_versus_match_conflict(self, _join_versus_match_mock):
         response = self.client.post(

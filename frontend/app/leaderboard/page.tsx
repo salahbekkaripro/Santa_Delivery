@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getLeaderboard, getVersusLeaderboard } from "@/lib/api";
 import { LeaderboardEntry, VersusLeaderboardEntry } from "@/lib/types";
+import { ruleLabel } from "@/lib/versus";
 
 const medals = ["🥇", "🥈", "🥉"];
 const podiumClass = ["rank-1", "rank-2", "rank-3"];
@@ -60,7 +61,7 @@ export default function LeaderboardPage() {
         )
       : 0;
   const distinctZones = mode === "versus"
-    ? new Set(versusEntries.map((entry) => entry.template_id)).size
+    ? new Set(versusEntries.map((entry) => entry.map_label ?? entry.mission_summary?.template_label ?? entry.template_id)).size
     : new Set(soloEntries.map((entry) => entry.zone)).size;
 
   if (mode === "versus") {
@@ -98,7 +99,7 @@ export default function LeaderboardPage() {
                 <div className="metric-value">{avgScore.toFixed(1)}</div>
               </div>
               <div className="metric-card">
-                <div className="metric-label">Templates disputés</div>
+                <div className="metric-label">Cartes disputées</div>
                 <div className="metric-value">{distinctZones}</div>
               </div>
             </section>
@@ -117,7 +118,7 @@ export default function LeaderboardPage() {
                     <div className="lb-row-meta">
                       <div className="lb-row-name">{entry.winner_display_name ?? entry.winner_player_id}</div>
                       <div className="lb-zone">
-                        {entry.template_id} · {entry.winner_rule} · {new Date(entry.created_at).toLocaleDateString("fr-FR")}
+                        {(entry.map_label ?? entry.mission_summary?.template_label ?? entry.template_id)} · {ruleLabel(entry.winner_rule)} · {new Date(entry.created_at).toLocaleDateString("fr-FR")}
                       </div>
                       <div className="lb-callsign">vs {entry.loser_display_name ?? entry.loser_player_id ?? "—"}</div>
                     </div>

@@ -5,12 +5,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { usePlayer } from "@/components/player-provider";
 import { getVersusMatchState, setVersusReady, submitVersusAttempt } from "@/lib/api";
-
-function ruleLabel(rule: string) {
-  if (rule === "time") return "Temps";
-  if (rule === "objectives") return "Objectifs";
-  return "Score + temps";
-}
+import { ruleLabel } from "@/lib/versus";
 
 function statusLabel(status: string) {
   if (status === "waiting_opponent") return "En attente adversaire";
@@ -91,6 +86,7 @@ export function VersusMatchView({ matchId }: { matchId: string }) {
   const isFinished = payload.status === "finished";
   const isSelfReady = selfParticipant?.state === "ready" || selfParticipant?.state === "live" || selfParticipant?.state === "submitted";
   const canSubmit = isLive && selfParticipant?.state !== "submitted" && selfParticipant?.state !== "forfeit";
+  const mapSummary = payload.mission_summary;
 
   return (
     <div className="page-shell">
@@ -103,6 +99,24 @@ export function VersusMatchView({ matchId }: { matchId: string }) {
             <span className="hero-badge">Chrono: {asClock(payload.started_elapsed_s)}</span>
             {payload.join_code && <span className="hero-badge">Code: {payload.join_code}</span>}
           </div>
+        </section>
+
+        <section className="panel stack">
+          <strong>Carte du match</strong>
+          <span>
+            Source: {payload.map_source === "custom" ? "Custom" : "Template"} · {mapSummary?.template_label ?? payload.template_id}
+          </span>
+          <span className="muted">
+            Zone: {mapSummary?.zone ?? "--"} · Colis: {mapSummary?.num_clients ?? "--"} · Météo: {mapSummary?.weather_key ?? "--"}
+          </span>
+          <span className="muted">
+            Budget: {mapSummary?.budget ?? "--"} · Coût traîneau: {mapSummary?.sleigh_cost ?? "--"} · IA: {mapSummary?.ai_profile ?? "--"}
+          </span>
+          {(typeof mapSummary?.center_lat === "number" || typeof mapSummary?.center_lon === "number" || typeof mapSummary?.search_radius_km === "number") && (
+            <span className="muted">
+              Centre: {mapSummary?.center_lat ?? "--"}, {mapSummary?.center_lon ?? "--"} · Rayon: {mapSummary?.search_radius_km ?? "--"} km
+            </span>
+          )}
         </section>
 
         <section className="grid-2">
@@ -173,7 +187,7 @@ export function VersusMatchView({ matchId }: { matchId: string }) {
         )}
 
         <section className="panel stack">
-          <Link className="secondary-button" href="/versus">← Retour au lobby versus</Link>
+          <Link className="secondary-button" href="/versus">← Retour choix mode</Link>
         </section>
       </div>
     </div>

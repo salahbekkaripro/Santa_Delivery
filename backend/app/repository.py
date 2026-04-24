@@ -107,6 +107,8 @@ def init_db(db_path: str | Path | None = None) -> None:
                 match_id TEXT PRIMARY KEY,
                 mode TEXT NOT NULL,
                 template_id TEXT NOT NULL,
+                map_source TEXT NOT NULL DEFAULT 'template',
+                mission_config_json TEXT,
                 winner_rule TEXT NOT NULL,
                 join_code TEXT,
                 host_player_id TEXT NOT NULL,
@@ -146,6 +148,8 @@ def init_db(db_path: str | Path | None = None) -> None:
                 inviter_player_id TEXT NOT NULL,
                 invitee_player_id TEXT NOT NULL,
                 template_id TEXT NOT NULL,
+                map_source TEXT NOT NULL DEFAULT 'template',
+                mission_config_json TEXT,
                 winner_rule TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 match_id TEXT,
@@ -184,6 +188,10 @@ def init_db(db_path: str | Path | None = None) -> None:
         _ensure_column(conn, "players", "password_hash", "password_hash TEXT")
         _ensure_column(conn, "players", "last_login_at", "last_login_at TEXT")
         _ensure_column(conn, "leaderboard", "player_id", "player_id TEXT")
+        _ensure_column(conn, "versus_matches", "map_source", "map_source TEXT NOT NULL DEFAULT 'template'")
+        _ensure_column(conn, "versus_matches", "mission_config_json", "mission_config_json TEXT")
+        _ensure_column(conn, "versus_invites", "map_source", "map_source TEXT NOT NULL DEFAULT 'template'")
+        _ensure_column(conn, "versus_invites", "mission_config_json", "mission_config_json TEXT")
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_mission_snapshots_updated_at
@@ -554,6 +562,8 @@ _VERSUS_MATCH_FIELDS = {
     "winner_player_id",
     "result_reason",
     "join_code",
+    "map_source",
+    "mission_config_json",
 }
 
 _VERSUS_PARTICIPANT_FIELDS = {
@@ -574,6 +584,8 @@ def create_versus_match(
     match_id: str,
     mode: str,
     template_id: str,
+    map_source: str,
+    mission_config: dict | None,
     winner_rule: str,
     host_player_id: str,
     join_code: str | None = None,
@@ -586,11 +598,23 @@ def create_versus_match(
         conn.execute(
             """
             INSERT INTO versus_matches (
-                match_id, mode, template_id, winner_rule, join_code, host_player_id, status, created_at, updated_at
+                match_id, mode, template_id, map_source, mission_config_json, winner_rule, join_code, host_player_id, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (match_id, mode, template_id, winner_rule, join_code, host_player_id, status, now, now),
+            (
+                match_id,
+                mode,
+                template_id,
+                map_source,
+                _json_dumps(mission_config),
+                winner_rule,
+                join_code,
+                host_player_id,
+                status,
+                now,
+                now,
+            ),
         )
         conn.execute(
             """
@@ -610,7 +634,7 @@ def get_versus_match(match_id: str, db_path: str | Path | None = None) -> dict |
     with connect(db_path) as conn:
         row = conn.execute(
             """
-            SELECT match_id, mode, template_id, winner_rule, join_code, host_player_id, status,
+            SELECT match_id, mode, template_id, map_source, mission_config_json, winner_rule, join_code, host_player_id, status,
                    reference_mission_id, started_at, completed_at, winner_player_id, result_reason,
                    created_at, updated_at
             FROM versus_matches
@@ -618,7 +642,11 @@ def get_versus_match(match_id: str, db_path: str | Path | None = None) -> dict |
             """,
             (match_id,),
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    payload = dict(row)
+    payload["mission_config"] = _json_loads(payload.pop("mission_config_json", None))
+    return payload
 
 
 def get_versus_match_by_join_code(join_code: str, db_path: str | Path | None = None) -> dict | None:
@@ -626,7 +654,7 @@ def get_versus_match_by_join_code(join_code: str, db_path: str | Path | None = N
     with connect(db_path) as conn:
         row = conn.execute(
             """
-            SELECT match_id, mode, template_id, winner_rule, join_code, host_player_id, status,
+            SELECT match_id, mode, template_id, map_source, mission_config_json, winner_rule, join_code, host_player_id, status,
                    reference_mission_id, started_at, completed_at, winner_player_id, result_reason,
                    created_at, updated_at
             FROM versus_matches
@@ -634,7 +662,11 @@ def get_versus_match_by_join_code(join_code: str, db_path: str | Path | None = N
             """,
             (join_code,),
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    payload = dict(row)
+    payload["mission_config"] = _json_loads(payload.pop("mission_config_json", None))
+    return payload
 
 
 def list_versus_participants(match_id: str, db_path: str | Path | None = None) -> list[dict]:
@@ -761,6 +793,8 @@ def update_versus_match(
     payload = {key: value for key, value in fields.items() if key in _VERSUS_MATCH_FIELDS}
     if not payload:
         return
+    if "mission_config_json" in payload and isinstance(payload["mission_config_json"], dict):
+        payload["mission_config_json"] = _json_dumps(payload["mission_config_json"])
     init_db(db_path)
     payload["updated_at"] = _utcnow()
     keys = list(payload.keys())
@@ -872,6 +906,8 @@ def create_versus_invite(
     inviter_player_id: str,
     invitee_player_id: str,
     template_id: str,
+    map_source: str,
+    mission_config: dict | None,
     winner_rule: str,
     db_path: str | Path | None = None,
 ) -> dict | None:
@@ -881,11 +917,21 @@ def create_versus_invite(
         conn.execute(
             """
             INSERT INTO versus_invites (
-                invite_id, inviter_player_id, invitee_player_id, template_id, winner_rule, status, created_at, updated_at
+                invite_id, inviter_player_id, invitee_player_id, template_id, map_source, mission_config_json, winner_rule, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
             """,
-            (invite_id, inviter_player_id, invitee_player_id, template_id, winner_rule, now, now),
+            (
+                invite_id,
+                inviter_player_id,
+                invitee_player_id,
+                template_id,
+                map_source,
+                _json_dumps(mission_config),
+                winner_rule,
+                now,
+                now,
+            ),
         )
         conn.commit()
     return get_versus_invite(invite_id, db_path=db_path)
@@ -901,6 +947,8 @@ def get_versus_invite(invite_id: str, db_path: str | Path | None = None) -> dict
                 invites.inviter_player_id,
                 invites.invitee_player_id,
                 invites.template_id,
+                invites.map_source,
+                invites.mission_config_json,
                 invites.winner_rule,
                 invites.status,
                 invites.match_id,
@@ -920,7 +968,11 @@ def get_versus_invite(invite_id: str, db_path: str | Path | None = None) -> dict
             """,
             (invite_id,),
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    payload = dict(row)
+    payload["mission_config"] = _json_loads(payload.pop("mission_config_json", None))
+    return payload
 
 
 def list_pending_versus_invites(invitee_player_id: str, db_path: str | Path | None = None) -> list[dict]:
@@ -933,6 +985,8 @@ def list_pending_versus_invites(invitee_player_id: str, db_path: str | Path | No
                 invites.inviter_player_id,
                 invites.invitee_player_id,
                 invites.template_id,
+                invites.map_source,
+                invites.mission_config_json,
                 invites.winner_rule,
                 invites.status,
                 invites.match_id,
@@ -949,7 +1003,12 @@ def list_pending_versus_invites(invitee_player_id: str, db_path: str | Path | No
             """,
             (invitee_player_id,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    payloads: list[dict] = []
+    for row in rows:
+        payload = dict(row)
+        payload["mission_config"] = _json_loads(payload.pop("mission_config_json", None))
+        payloads.append(payload)
+    return payloads
 
 
 def update_versus_invite(
@@ -1016,8 +1075,11 @@ def list_versus_leaderboard(limit: int = 20, db_path: str | Path | None = None) 
                 leaderboard.winner_time_s,
                 leaderboard.winner_rule,
                 leaderboard.template_id,
+                matches.map_source,
+                matches.mission_config_json,
                 leaderboard.created_at
             FROM versus_leaderboard AS leaderboard
+            LEFT JOIN versus_matches AS matches ON matches.match_id = leaderboard.match_id
             LEFT JOIN players AS winner ON winner.player_id = leaderboard.winner_player_id
             LEFT JOIN players AS loser ON loser.player_id = leaderboard.loser_player_id
             ORDER BY leaderboard.created_at DESC
@@ -1025,4 +1087,9 @@ def list_versus_leaderboard(limit: int = 20, db_path: str | Path | None = None) 
             """,
             (int(limit),),
         ).fetchall()
-    return [dict(row) for row in rows]
+    payloads: list[dict] = []
+    for row in rows:
+        payload = dict(row)
+        payload["mission_config"] = _json_loads(payload.pop("mission_config_json", None))
+        payloads.append(payload)
+    return payloads

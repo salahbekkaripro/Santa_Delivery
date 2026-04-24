@@ -175,6 +175,8 @@ DEFAULT_DEPARTURE_TIME_S = parse_clock_to_seconds(DEFAULT_DEPARTURE_TIME)
 VERSUS_FORFEIT_TIMEOUT_SECONDS = 300
 VERSUS_WINNER_RULES = {"score_time", "time", "objectives"}
 VERSUS_MATCH_MODES = {"private", "queue", "invite"}
+VERSUS_MAP_SOURCES = {"template", "custom"}
+VERSUS_CUSTOM_MAX_CLIENTS = 60
 VERSUS_TEMPLATES = {
     "paris_duel": {
         "template_id": "paris_duel",
@@ -2743,6 +2745,141 @@ def _normalize_versus_mode(value: str | None) -> str:
     return mode
 
 
+def _normalize_versus_map_source(value: str | None) -> str:
+    map_source = str(value or "template").strip().lower()
+    if map_source not in VERSUS_MAP_SOURCES:
+        raise ValueError("Source de carte inconnue")
+    return map_source
+
+
+def _sanitize_secondary_objectives(value: object) -> list[dict] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("secondary_objectives doit être une liste")
+    sanitized: list[dict] = []
+    for index, objective in enumerate(value):
+        if not isinstance(objective, dict):
+            raise ValueError(f"secondary_objectives[{index}] invalide")
+        code = str(objective.get("code", "")).strip()
+        label = str(objective.get("label", "")).strip()
+        if not code or not label:
+            raise ValueError("Chaque objectif secondaire doit contenir code et label")
+        payload: dict = {"code": code, "label": label}
+        target = objective.get("target")
+        if target is not None:
+            payload["target"] = float(target)
+        sanitized.append(payload)
+    return sanitized
+
+
+def _sanitize_and_validate_versus_mission_config(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("mission_config requis pour une carte custom")
+    source = dict(payload)
+
+    allowed_keys = {
+        "zone",
+        "city",
+        "center_lat",
+        "center_lon",
+        "search_radius_km",
+        "max_clients",
+        "num_clients",
+        "budget",
+        "sleigh_cost",
+        "weather_key",
+        "random_incidents",
+        "ai_profile",
+        "secondary_objectives",
+    }
+    unexpected_keys = set(source) - allowed_keys
+    if unexpected_keys:
+        unexpected = ", ".join(sorted(unexpected_keys))
+        raise ValueError(f"mission_config contient des champs interdits: {unexpected}")
+    sanitized = {key: source[key] for key in allowed_keys if key in source}
+    zone = str(sanitized.get("zone", "")).strip()
+    if not zone:
+        raise ValueError("mission_config.zone requis")
+    sanitized["zone"] = zone
+    city = sanitized.get("city")
+    if city is not None:
+        sanitized["city"] = str(city).strip()[:120] or None
+
+    num_clients = int(sanitized.get("num_clients", 0))
+    if num_clients < 1:
+        raise ValueError("mission_config.num_clients invalide")
+    if num_clients > VERSUS_CUSTOM_MAX_CLIENTS:
+        raise ValueError(f"En versus custom, le nombre maximal de colis est {VERSUS_CUSTOM_MAX_CLIENTS}.")
+    sanitized["num_clients"] = num_clients
+    sanitized["budget"] = max(0, int(sanitized.get("budget", 0)))
+    sanitized["sleigh_cost"] = max(0, int(sanitized.get("sleigh_cost", 0)))
+    sanitized["weather_key"] = str(sanitized.get("weather_key", "Clear")).strip() or "Clear"
+    sanitized["random_incidents"] = bool(sanitized.get("random_incidents", False))
+    ai_profile = sanitized.get("ai_profile")
+    sanitized["ai_profile"] = (str(ai_profile).strip() or None) if ai_profile is not None else None
+    sanitized["secondary_objectives"] = _sanitize_secondary_objectives(sanitized.get("secondary_objectives"))
+    sanitized["level"] = None
+
+    if sanitized.get("search_radius_km") is not None:
+        sanitized["search_radius_km"] = float(sanitized["search_radius_km"])
+    if sanitized.get("center_lat") is not None:
+        sanitized["center_lat"] = float(sanitized["center_lat"])
+    if sanitized.get("center_lon") is not None:
+        sanitized["center_lon"] = float(sanitized["center_lon"])
+    if sanitized.get("max_clients") is not None:
+        sanitized["max_clients"] = int(sanitized["max_clients"])
+
+    _validate_search_area_constraints(sanitized)
+    return sanitized
+
+
+def _mission_summary_from_payload(mission_payload: dict | None, *, map_source: str, template_id: str | None) -> dict:
+    mission = mission_payload or {}
+    objectives = mission.get("secondary_objectives")
+    secondary_count = len(objectives) if isinstance(objectives, list) else 0
+    summary = {
+        "map_source": map_source,
+        "template_id": template_id,
+        "zone": mission.get("zone"),
+        "city": mission.get("city"),
+        "num_clients": int(mission.get("num_clients", 0) or 0),
+        "weather_key": mission.get("weather_key"),
+        "random_incidents": bool(mission.get("random_incidents", False)),
+        "budget": int(mission.get("budget", 0) or 0),
+        "sleigh_cost": int(mission.get("sleigh_cost", 0) or 0),
+        "search_radius_km": _safe_float(mission.get("search_radius_km")),
+        "center_lat": _safe_float(mission.get("center_lat")),
+        "center_lon": _safe_float(mission.get("center_lon")),
+        "ai_profile": mission.get("ai_profile"),
+        "secondary_objectives_count": secondary_count,
+    }
+    if map_source == "template" and template_id in VERSUS_TEMPLATES:
+        template = VERSUS_TEMPLATES[str(template_id)]
+        summary["template_label"] = template.get("label")
+        summary["template_description"] = template.get("description")
+    elif map_source == "custom":
+        summary["template_label"] = f"Custom · {summary.get('zone') or 'Zone personnalisée'}"
+    return summary
+
+
+def _resolve_versus_map_payload(
+    payload: dict,
+    *,
+    custom_allowed: bool,
+) -> tuple[str, str, dict | None]:
+    map_source = _normalize_versus_map_source(payload.get("map_source"))
+    if map_source == "custom":
+        if not custom_allowed:
+            raise ValueError("La file auto accepte uniquement les templates prédéfinis.")
+        mission_config = _sanitize_and_validate_versus_mission_config(payload.get("mission_config"))
+        template_id = str(payload.get("template_id") or "custom_map").strip().lower() or "custom_map"
+        return map_source, template_id, mission_config
+
+    template_id = _normalize_versus_template_id(payload.get("template_id"))
+    return map_source, template_id, None
+
+
 def _iso_to_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -2789,6 +2926,16 @@ def _template_payload_for_mission(template_id: str) -> dict:
     return mission_payload
 
 
+def _mission_payload_for_match(match: dict) -> dict:
+    map_source = _normalize_versus_map_source(match.get("map_source"))
+    if map_source == "custom":
+        mission_config = match.get("mission_config")
+        if not isinstance(mission_config, dict):
+            raise ValueError("Configuration custom introuvable pour ce match")
+        return _sanitize_and_validate_versus_mission_config(mission_config)
+    return _template_payload_for_mission(str(match.get("template_id") or "paris_duel"))
+
+
 def _clone_reference_mission(reference_mission_id: str, new_mission_id: str, match_id: str) -> None:
     source_paths = mission_paths(reference_mission_id)
     target_paths = mission_paths(new_mission_id)
@@ -2825,6 +2972,8 @@ def _create_versus_match_pair(
     host_player_id: str,
     opponent_player_id: str,
     template_id: str,
+    map_source: str,
+    mission_config: dict | None,
     winner_rule: str,
     join_code: str | None = None,
 ) -> str:
@@ -2833,6 +2982,8 @@ def _create_versus_match_pair(
         match_id=match_id,
         mode=mode,
         template_id=template_id,
+        map_source=map_source,
+        mission_config=mission_config,
         winner_rule=winner_rule,
         host_player_id=host_player_id,
         join_code=join_code,
@@ -2963,8 +3114,8 @@ def _start_versus_match_if_ready(match_id: str) -> None:
     if any(str(participant.get("state")) != "ready" for participant in participants):
         return
 
-    template_payload = _template_payload_for_mission(str(match["template_id"]))
-    reference_bundle = create_mission(template_payload)
+    mission_payload = _mission_payload_for_match(match)
+    reference_bundle = create_mission(mission_payload)
     reference_mission_id = str(reference_bundle["mission_id"])
     now_iso = _now_iso()
     for participant in participants:
@@ -2998,7 +3149,13 @@ def _build_versus_match_state(match_id: str, viewer_player_id: str) -> dict:
         raise ValueError("Accès interdit à ce match")
 
     started_at_dt = _iso_to_datetime(match.get("started_at"))
-    template = VERSUS_TEMPLATES.get(str(match.get("template_id") or ""), {})
+    map_source = _normalize_versus_map_source(match.get("map_source"))
+    mission_payload = _mission_payload_for_match(match)
+    mission_summary = _mission_summary_from_payload(
+        mission_payload,
+        map_source=map_source,
+        template_id=str(match.get("template_id") or ""),
+    )
     now_dt = _utcnow()
     state_participants: list[dict] = []
     for participant in participants:
@@ -3037,7 +3194,10 @@ def _build_versus_match_state(match_id: str, viewer_player_id: str) -> dict:
         "match_id": match["match_id"],
         "mode": match.get("mode"),
         "template_id": match.get("template_id"),
-        "template_label": template.get("label"),
+        "map_source": map_source,
+        "mission_config": match.get("mission_config") if map_source == "custom" else None,
+        "mission_summary": mission_summary,
+        "template_label": mission_summary.get("template_label"),
         "winner_rule": match.get("winner_rule"),
         "join_code": match.get("join_code"),
         "host_player_id": match.get("host_player_id"),
@@ -3081,13 +3241,15 @@ def create_versus_match(payload: dict) -> dict:
     mode = _normalize_versus_mode(payload.get("mode"))
     if mode != "private":
         raise ValueError("Utilisez les endpoints dédiés pour ce mode (queue/invite).")
-    template_id = _normalize_versus_template_id(payload.get("template_id"))
+    map_source, template_id, mission_config = _resolve_versus_map_payload(payload, custom_allowed=True)
     winner_rule = _normalize_versus_winner_rule(payload.get("winner_rule"))
     match_id = uuid.uuid4().hex[:14]
     repository.create_versus_match(
         match_id=match_id,
         mode=mode,
         template_id=template_id,
+        map_source=map_source,
+        mission_config=mission_config,
         winner_rule=winner_rule,
         host_player_id=host_player_id,
         join_code=_generate_join_code(),
@@ -3122,6 +3284,9 @@ def join_versus_match(payload: dict) -> dict:
 def enter_versus_queue(payload: dict) -> dict:
     player_id = str(payload.get("player_id") or "")
     _require_player(player_id)
+    map_source = _normalize_versus_map_source(payload.get("map_source"))
+    if map_source != "template":
+        raise ValueError("La file auto accepte uniquement les templates prédéfinis.")
     template_id = _normalize_versus_template_id(payload.get("template_id"))
     winner_rule = _normalize_versus_winner_rule(payload.get("winner_rule"))
 
@@ -3140,6 +3305,8 @@ def enter_versus_queue(payload: dict) -> dict:
             host_player_id=host_player_id,
             opponent_player_id=player_id,
             template_id=template_id,
+            map_source="template",
+            mission_config=None,
             winner_rule=winner_rule,
         )
         return {
@@ -3166,7 +3333,7 @@ def create_versus_invite(payload: dict) -> dict:
     if inviter_player_id == invitee_player_id:
         raise ValueError("Impossible de vous inviter vous-même")
 
-    template_id = _normalize_versus_template_id(payload.get("template_id"))
+    map_source, template_id, mission_config = _resolve_versus_map_payload(payload, custom_allowed=True)
     winner_rule = _normalize_versus_winner_rule(payload.get("winner_rule"))
     invite_id = uuid.uuid4().hex[:16]
     invite = repository.create_versus_invite(
@@ -3174,14 +3341,45 @@ def create_versus_invite(payload: dict) -> dict:
         inviter_player_id=inviter_player_id,
         invitee_player_id=invitee_player_id,
         template_id=template_id,
+        map_source=map_source,
+        mission_config=mission_config,
         winner_rule=winner_rule,
     )
-    return {"invite": invite}
+    mission_payload = mission_config if map_source == "custom" else _template_payload_for_mission(template_id)
+    enriched = dict(invite or {})
+    enriched["mission_summary"] = _mission_summary_from_payload(
+        mission_payload,
+        map_source=map_source,
+        template_id=template_id,
+    )
+    return {"invite": enriched}
 
 
 def list_versus_invites(player_id: str) -> dict:
     _require_player(player_id)
-    return {"invites": repository.list_pending_versus_invites(player_id)}
+    invites = repository.list_pending_versus_invites(player_id)
+    enriched: list[dict] = []
+    for invite in invites:
+        map_source = _normalize_versus_map_source(invite.get("map_source"))
+        mission_payload: dict | None = None
+        if map_source == "custom" and isinstance(invite.get("mission_config"), dict):
+            try:
+                mission_payload = _sanitize_and_validate_versus_mission_config(invite.get("mission_config"))
+            except ValueError:
+                mission_payload = dict(invite.get("mission_config") or {})
+        elif map_source == "template":
+            template_id = str(invite.get("template_id") or "paris_duel")
+            if template_id in VERSUS_TEMPLATES:
+                mission_payload = _template_payload_for_mission(template_id)
+        payload = dict(invite)
+        payload["map_source"] = map_source
+        payload["mission_summary"] = _mission_summary_from_payload(
+            mission_payload,
+            map_source=map_source,
+            template_id=str(invite.get("template_id") or ""),
+        )
+        enriched.append(payload)
+    return {"invites": enriched}
 
 
 def accept_versus_invite(invite_id: str, payload: dict) -> dict:
@@ -3195,11 +3393,21 @@ def accept_versus_invite(invite_id: str, payload: dict) -> dict:
     if str(invite.get("status")) != "pending":
         raise RuntimeError("Invitation déjà traitée")
 
+    map_source = _normalize_versus_map_source(invite.get("map_source"))
+    mission_config: dict | None = None
+    if map_source == "custom":
+        mission_config = _sanitize_and_validate_versus_mission_config(invite.get("mission_config"))
+        template_id = str(invite.get("template_id") or "custom_map").strip().lower() or "custom_map"
+    else:
+        template_id = _normalize_versus_template_id(str(invite.get("template_id") or "paris_duel"))
+
     match_id = _create_versus_match_pair(
         mode="invite",
         host_player_id=str(invite["inviter_player_id"]),
         opponent_player_id=player_id,
-        template_id=_normalize_versus_template_id(str(invite["template_id"])),
+        template_id=template_id,
+        map_source=map_source,
+        mission_config=mission_config,
         winner_rule=_normalize_versus_winner_rule(str(invite["winner_rule"])),
     )
     repository.update_versus_invite(invite_id, status="accepted", match_id=match_id, responded_at=_now_iso())
@@ -3311,4 +3519,27 @@ def submit_versus_attempt(match_id: str, payload: dict) -> dict:
 
 
 def list_versus_leaderboard(limit: int = 20) -> dict:
-    return {"entries": repository.list_versus_leaderboard(limit=limit)}
+    entries = repository.list_versus_leaderboard(limit=limit)
+    enriched: list[dict] = []
+    for entry in entries:
+        map_source = _normalize_versus_map_source(entry.get("map_source"))
+        mission_payload: dict | None = None
+        if map_source == "custom" and isinstance(entry.get("mission_config"), dict):
+            try:
+                mission_payload = _sanitize_and_validate_versus_mission_config(entry.get("mission_config"))
+            except ValueError:
+                mission_payload = dict(entry.get("mission_config") or {})
+        elif map_source == "template":
+            template_id = str(entry.get("template_id") or "paris_duel")
+            if template_id in VERSUS_TEMPLATES:
+                mission_payload = _template_payload_for_mission(template_id)
+        payload = dict(entry)
+        payload["map_source"] = map_source
+        payload["mission_summary"] = _mission_summary_from_payload(
+            mission_payload,
+            map_source=map_source,
+            template_id=str(entry.get("template_id") or ""),
+        )
+        payload["map_label"] = payload["mission_summary"].get("template_label") or str(entry.get("template_id") or "template")
+        enriched.append(payload)
+    return {"entries": enriched}

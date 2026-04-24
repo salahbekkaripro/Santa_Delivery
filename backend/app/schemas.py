@@ -206,11 +206,30 @@ class DebriefResponse(BaseModel):
     analysis: dict
 
 
+class VersusMissionConfigRequest(BaseModel):
+    zone: str
+    num_clients: int = Field(ge=1, le=60)
+    budget: int = Field(ge=0)
+    sleigh_cost: int = Field(ge=0)
+    weather_key: str = "Clear"
+    random_incidents: bool = False
+    level: int | None = None
+    ai_profile: str | None = None
+    secondary_objectives: list[dict] | None = None
+    city: str | None = Field(default=None, max_length=120)
+    center_lat: float | None = None
+    center_lon: float | None = None
+    search_radius_km: float | None = Field(default=None, gt=0, le=30)
+    max_clients: int | None = Field(default=None, ge=1, le=200)
+
+
 class VersusMatchCreateRequest(BaseModel):
     player_id: str = Field(min_length=3, max_length=80)
     mode: Literal["private", "queue", "invite"] = "private"
-    template_id: str = Field(default="paris_duel", min_length=3, max_length=80)
+    map_source: Literal["template", "custom"] = "template"
+    template_id: str | None = Field(default=None, min_length=3, max_length=80)
     winner_rule: str = Field(default="score_time", min_length=3, max_length=40)
+    mission_config: VersusMissionConfigRequest | None = None
 
 
 class VersusMatchJoinRequest(BaseModel):
@@ -220,6 +239,7 @@ class VersusMatchJoinRequest(BaseModel):
 
 class VersusQueueRequest(BaseModel):
     player_id: str = Field(min_length=3, max_length=80)
+    map_source: Literal["template", "custom"] = "template"
     template_id: str = Field(default="paris_duel", min_length=3, max_length=80)
     winner_rule: str = Field(default="score_time", min_length=3, max_length=40)
 
@@ -227,8 +247,10 @@ class VersusQueueRequest(BaseModel):
 class VersusInviteCreateRequest(BaseModel):
     player_id: str = Field(min_length=3, max_length=80)
     invitee_player_id: str = Field(min_length=3, max_length=80)
-    template_id: str = Field(default="paris_duel", min_length=3, max_length=80)
+    map_source: Literal["template", "custom"] = "template"
+    template_id: str | None = Field(default=None, min_length=3, max_length=80)
     winner_rule: str = Field(default="score_time", min_length=3, max_length=40)
+    mission_config: VersusMissionConfigRequest | None = None
 
 
 class VersusInviteDecisionRequest(BaseModel):

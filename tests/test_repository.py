@@ -138,6 +138,8 @@ class RepositoryTests(unittest.TestCase):
             match_id="match-1",
             mode="private",
             template_id="paris_duel",
+            map_source="template",
+            mission_config=None,
             winner_rule="score_time",
             host_player_id="p1",
             join_code="ABC123",
@@ -177,12 +179,66 @@ class RepositoryTests(unittest.TestCase):
             inviter_player_id="p1",
             invitee_player_id="p2",
             template_id="paris_duel",
+            map_source="template",
+            mission_config=None,
             winner_rule="score_time",
             db_path=self.db_path,
         )
         invites = repository.list_pending_versus_invites("p2", db_path=self.db_path)
         self.assertEqual(len(invites), 1)
         self.assertEqual(invites[0]["invite_id"], "invite-1")
+
+    def test_custom_map_payload_is_persisted_for_match_and_invite(self):
+        repository.upsert_player(
+            player_id="p1",
+            display_name="Host",
+            db_path=self.db_path,
+        )
+        repository.upsert_player(
+            player_id="p2",
+            display_name="Guest",
+            db_path=self.db_path,
+        )
+        mission_config = {
+            "zone": "Lyon Centre",
+            "city": "Lyon",
+            "num_clients": 30,
+            "budget": 3500,
+            "sleigh_cost": 700,
+            "weather_key": "Rain",
+            "random_incidents": True,
+            "search_radius_km": 4.5,
+        }
+        repository.create_versus_match(
+            match_id="match-custom",
+            mode="private",
+            template_id="custom_map",
+            map_source="custom",
+            mission_config=mission_config,
+            winner_rule="score_time",
+            host_player_id="p1",
+            join_code="ZZ99YY",
+            status="waiting_opponent",
+            db_path=self.db_path,
+        )
+        repository.create_versus_invite(
+            invite_id="invite-custom",
+            inviter_player_id="p1",
+            invitee_player_id="p2",
+            template_id="custom_map",
+            map_source="custom",
+            mission_config=mission_config,
+            winner_rule="time",
+            db_path=self.db_path,
+        )
+
+        stored_match = repository.get_versus_match("match-custom", db_path=self.db_path)
+        stored_invite = repository.get_versus_invite("invite-custom", db_path=self.db_path)
+
+        self.assertEqual(stored_match["map_source"], "custom")
+        self.assertEqual(stored_match["mission_config"]["zone"], "Lyon Centre")
+        self.assertEqual(stored_invite["map_source"], "custom")
+        self.assertEqual(stored_invite["mission_config"]["num_clients"], 30)
 
 
 if __name__ == "__main__":

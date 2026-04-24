@@ -15,7 +15,9 @@ import type {
   SolveResponse,
   VersusInvite,
   VersusLeaderboardEntry,
+  VersusMapSource,
   VersusMatch,
+  VersusMissionConfig,
   VersusTemplate,
   VersusWinnerRule
 } from "@/lib/types";
@@ -333,7 +335,9 @@ export function getVersusTemplates() {
 export function createVersusMatch(payload: {
   player_id: string;
   mode?: "private";
-  template_id: string;
+  map_source?: VersusMapSource;
+  template_id?: string;
+  mission_config?: VersusMissionConfig;
   winner_rule: VersusWinnerRule;
 }) {
   return apiFetch<VersusMatch>("/api/versus/matches", {
@@ -351,6 +355,7 @@ export function joinVersusMatch(payload: { player_id: string; join_code: string 
 
 export function enterVersusQueue(payload: {
   player_id: string;
+  map_source?: VersusMapSource;
   template_id: string;
   winner_rule: VersusWinnerRule;
 }) {
@@ -374,7 +379,9 @@ export function leaveVersusQueue(payload: { player_id: string; template_id?: str
 export function createVersusInvite(payload: {
   player_id: string;
   invitee_player_id: string;
-  template_id: string;
+  map_source?: VersusMapSource;
+  template_id?: string;
+  mission_config?: VersusMissionConfig;
   winner_rule: VersusWinnerRule;
 }) {
   return apiFetch<{ invite: VersusInvite }>("/api/versus/invites", {

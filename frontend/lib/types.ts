@@ -342,11 +342,48 @@ export type AdjacentNode = {
 
 export type VersusWinnerRule = "score_time" | "time" | "objectives";
 export type VersusMode = "private" | "queue" | "invite";
+export type VersusMapSource = "template" | "custom";
 
 export type VersusTemplate = {
   template_id: string;
   label: string;
   description: string;
+};
+
+export type VersusMissionConfig = {
+  zone: string;
+  city?: string | null;
+  center_lat?: number | null;
+  center_lon?: number | null;
+  search_radius_km?: number | null;
+  max_clients?: number | null;
+  num_clients: number;
+  budget: number;
+  sleigh_cost: number;
+  weather_key: string;
+  random_incidents: boolean;
+  ai_profile?: string | null;
+  secondary_objectives?: Array<{ code: string; label: string; target?: number }> | null;
+  level?: null;
+};
+
+export type VersusMissionSummary = {
+  map_source: VersusMapSource;
+  template_id?: string | null;
+  template_label?: string | null;
+  template_description?: string | null;
+  zone?: string | null;
+  city?: string | null;
+  num_clients?: number;
+  weather_key?: string | null;
+  random_incidents?: boolean;
+  budget?: number;
+  sleigh_cost?: number;
+  search_radius_km?: number | null;
+  center_lat?: number | null;
+  center_lon?: number | null;
+  ai_profile?: string | null;
+  secondary_objectives_count?: number;
 };
 
 export type VersusParticipant = {
@@ -373,6 +410,9 @@ export type VersusMatch = {
   match_id: string;
   mode: VersusMode;
   template_id: string;
+  map_source: VersusMapSource;
+  mission_config?: VersusMissionConfig | null;
+  mission_summary?: VersusMissionSummary | null;
   template_label?: string | null;
   winner_rule: VersusWinnerRule;
   join_code?: string | null;
@@ -395,6 +435,9 @@ export type VersusInvite = {
   inviter_player_id: string;
   invitee_player_id: string;
   template_id: string;
+  map_source: VersusMapSource;
+  mission_config?: VersusMissionConfig | null;
+  mission_summary?: VersusMissionSummary | null;
   winner_rule: VersusWinnerRule;
   status: "pending" | "accepted" | "declined";
   match_id?: string | null;
@@ -418,5 +461,9 @@ export type VersusLeaderboardEntry = {
   winner_time_s?: number | null;
   winner_rule: VersusWinnerRule;
   template_id: string;
+  map_source?: VersusMapSource;
+  mission_config?: VersusMissionConfig | null;
+  mission_summary?: VersusMissionSummary | null;
+  map_label?: string | null;
   created_at: string;
 };
