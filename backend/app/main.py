@@ -15,6 +15,8 @@ from backend.app.schemas import (
     ComparisonResponse,
     DebriefResponse,
     ForgotPasswordRequest,
+    IncidentReplanRequest,
+    IncidentReplanResponse,
     HumanRouteOptionsRequest,
     HumanStateMutationRequest,
     HumanStateResponse,
@@ -450,6 +452,16 @@ def solve_mission_learned(mission_id: str, payload: SolveMissionRequest) -> dict
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/missions/{mission_id}/simulation/incident-replan", response_model=IncidentReplanResponse)
+def simulate_incident_replan(mission_id: str, payload: IncidentReplanRequest) -> dict:
+    try:
+        return services.simulate_incident_replan(mission_id, payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/ai-learning/train")
 def train_ai_learning(limit: int = 500) -> dict:
     try:
@@ -563,6 +575,30 @@ def get_bidirectional_dijkstra_steps(mission_id: str, from_node: int, to_node: i
 def get_floyd_warshall(mission_id: str) -> dict:
     try:
         return services.get_floyd_warshall(mission_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/missions/{mission_id}/eco/co2-analysis")
+def get_eco_analysis(mission_id: str) -> dict:
+    try:
+        return services.get_eco_analysis(mission_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/missions/{mission_id}/graph/delivery-sectors")
+def get_delivery_sectors(mission_id: str) -> dict:
+    try:
+        return services.get_delivery_sectors(mission_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/missions/{mission_id}/graph/topology-check")
+def validate_topology(mission_id: str) -> dict:
+    try:
+        return services.validate_topology(mission_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

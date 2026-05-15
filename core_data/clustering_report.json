@@ -1,0 +1,77 @@
+{
+  "metadata": {
+    "num_clients": 10,
+    "num_zones": 3
+  },
+  "zones": [
+    {
+      "zone_id": 0,
+      "count": 2,
+      "center": {
+        "lat": 48.855227150000005,
+        "lon": 2.3502285
+      },
+      "avg_weight": 0
+    },
+    {
+      "zone_id": 1,
+      "count": 5,
+      "center": {
+        "lat": 48.85168822,
+        "lon": 2.36686908
+      },
+      "avg_weight": 0
+    },
+    {
+      "zone_id": 2,
+      "count": 3,
+      "center": {
+        "lat": 48.85271683333334,
+        "lon": 2.3584485
+      },
+      "avg_weight": 0
+    }
+  ],
+  "assignments": [
+    {
+      "id": 1,
+      "zone_id": 1
+    },
+    {
+      "id": 2,
+      "zone_id": 1
+    },
+    {
+      "id": 3,
+      "zone_id": 2
+    },
+    {
+      "id": 4,
+      "zone_id": 2
+    },
+    {
+      "id": 5,
+      "zone_id": 1
+    },
+    {
+      "id": 6,
+      "zone_id": 2
+    },
+    {
+      "id": 7,
+      "zone_id": 1
+    },
+    {
+      "id": 8,
+      "zone_id": 0
+    },
+    {
+      "id": 9,
+      "zone_id": 1
+    },
+    {
+      "id": 10,
+      "zone_id": 0
+    }
+  ]
+}

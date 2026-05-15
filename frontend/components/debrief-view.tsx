@@ -100,18 +100,39 @@ export function DebriefView({ missionId }: { missionId: string }) {
   const secondaryObjectives = analysis.secondary_objectives ?? [];
   const humanBeatAI = debriefPayload.score.human_beat_ai;
 
-  const chartData = [
-    {
-      name: "Temps (min)",
-      Humain: Math.round(debriefPayload.human.summary.total_time_s / 60),
-      IA: Math.round(debriefPayload.results.total_time_s / 60)
-    },
-    {
-      name: "Distance (km)",
-      Humain: Math.round(debriefPayload.human.summary.total_dist_m / 1000),
-      IA: Math.round(debriefPayload.benchmark.optimized.total_dist_m / 1000)
-    }
-  ];
+  const hasGreedyBaseline = Boolean(analysis.nearest_neighbor);
+  const methodALabel = hasGreedyBaseline ? "Glouton (NN)" : "Humain";
+  const methodBLabel = aiStrategy?.label ? `OR-Tools (${aiStrategy.label})` : "OR-Tools";
+
+  const chartData = hasGreedyBaseline
+    ? [
+        {
+          metric: "Temps total",
+          methodA: Math.round((analysis.nearest_neighbor?.total_time_s ?? 0) / 60),
+          methodB: Math.round(debriefPayload.results.total_time_s / 60),
+          unit: "min",
+        },
+        {
+          metric: "Véhicules",
+          methodA: 1,
+          methodB: Math.max(analysis.ai_sleighs.length, 1),
+          unit: "",
+        },
+      ]
+    : [
+        {
+          metric: "Temps total",
+          methodA: Math.round(debriefPayload.human.summary.total_time_s / 60),
+          methodB: Math.round(debriefPayload.results.total_time_s / 60),
+          unit: "min",
+        },
+        {
+          metric: "Distance",
+          methodA: Number((debriefPayload.human.summary.total_dist_m / 1000).toFixed(2)),
+          methodB: Number((debriefPayload.benchmark.optimized.total_dist_m / 1000).toFixed(2)),
+          unit: "km",
+        },
+      ];
 
   return (
     <div className="page-shell">
@@ -185,7 +206,7 @@ export function DebriefView({ missionId }: { missionId: string }) {
         <section className="grid-2">
           <div className="chart-container">
             <strong>Comparaison de performance</strong>
-            <DebriefPerformanceChart data={chartData} />
+            <DebriefPerformanceChart data={chartData} methodALabel={methodALabel} methodBLabel={methodBLabel} />
           </div>
           <div className="grid-2" style={{ gap: "14px", alignContent: "start" }}>
             <div className="metric-card is-good">

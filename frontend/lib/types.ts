@@ -17,6 +17,7 @@ export type MissionConfig = {
   secondary_objectives?: SecondaryObjective[] | null;
   generation_message?: string;
   departure_hour?: number | null;
+  with_elevation?: boolean;
 };
 
 export type PlayerProfile = {
@@ -216,6 +217,19 @@ export type HumanState = {
   num_vehicles?: number;
 };
 
+export type ElevationMeta = {
+  min_m: number;
+  max_m: number;
+  mean_m: number;
+  range_m: number;
+  total_climb_m: number;
+  total_descent_m: number;
+  terrain_type: "plat" | "vallonné" | "montagneux";
+  time_overhead_pct: number;
+  source: string;
+  points: Array<{ lat: number; lon: number; elevation_m: number; name: string }>;
+};
+
 export type MissionResponse = {
   mission_id: string;
   mission: MissionConfig;
@@ -226,6 +240,7 @@ export type MissionResponse = {
   human_state?: HumanState;
   results_available: boolean;
   incidents?: { count: number; segments: RouteSegment[] };
+  elevation?: ElevationMeta | null;
 };
 
 export type MissionSnapshot = {
@@ -328,6 +343,25 @@ export type SolveResponse = {
     model_path: string;
     recommendation: AiLearningRecommendation;
   };
+};
+
+export type SolveResponseLite = {
+  results: {
+    total_time_s: number;
+    dropped_points: number[];
+    tours: Array<{ vehicle_id: number; route_ids: number[]; duration_s: number; weight_kg: number }>;
+  };
+  benchmark: {
+    optimized: { total_time_s: number; total_dist_m: number };
+    savings: { co2_saved_kg: number };
+  };
+};
+
+export type IncidentReplanResponse = {
+  incidents: { count: number; segments: RouteSegment[] };
+  before: SolveResponseLite;
+  after: SolveResponse;
+  delta_kpi: { time_s: number; dist_m: number; co2_kg: number; time_pct: number; dist_pct: number };
 };
 
 export type HumanSleighSummary = {
@@ -672,4 +706,72 @@ export type VersusPlayerStatsEntry = {
   favorite_rule: VersusWinnerRule;
   average_time_s?: number | null;
   last_match_at?: string | null;
+};
+
+// ── Eco / CO2 Analysis ────────────────────────────────────────────────────────
+
+export type Co2RouteProfile = {
+  distance_km: number;
+  truck_co2_kg: number;
+  sleigh_co2_kg: number;
+  saved_vs_truck_kg: number;
+  trees_month_offset: number;
+};
+
+export type EcoAnalysis = {
+  terrain: {
+    type: "plat" | "vallonné" | "montagneux";
+    estimated_climb_m: number;
+    zone: string;
+    note: string;
+  };
+  routes: {
+    ai: Co2RouteProfile;
+    naive: Co2RouteProfile;
+    human: Co2RouteProfile | null;
+  };
+  eco_impact: {
+    total_co2_avoided_kg: number;
+    route_optimisation_saving_kg: number;
+    ai_vs_naive_dist_pct: number;
+  };
+};
+
+// ── Community Detection / Delivery Sectors ────────────────────────────────────
+
+export type DeliverySector = {
+  sector_id: number;
+  label: string;
+  color: string;
+  nodes: (number | string)[];
+  node_count: number;
+  center_lat: number;
+  center_lon: number;
+  polygon: [number, number][];  // [[lat, lon], ...]
+};
+
+export type DeliverySectorsResult = {
+  sector_count: number;
+  sectors: DeliverySector[];
+  algorithm: string;
+  note: string;
+};
+
+// ── Topological Validation ────────────────────────────────────────────────────
+
+export type ClientReachability = {
+  client_id: number;
+  osm_node: number;
+  reachable: boolean;
+};
+
+export type TopologyCheck = {
+  is_valid: boolean;
+  depot_node: number;
+  num_components: number;
+  blocked_edges_count: number;
+  incident_count: number;
+  unreachable_clients: number[];
+  reachability: ClientReachability[];
+  status: string;
 };

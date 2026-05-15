@@ -6,9 +6,12 @@ import type {
   AstarCompareResult,
   ComparisonPayload,
   DebriefPayload,
+  DeliverySectorsResult,
   DijkstraResult,
+  EcoAnalysis,
   GraphMetrics,
   HumanState,
+  IncidentReplanResponse,
   LeaderboardEntry,
   MissionConfig,
   MissionSnapshot,
@@ -20,6 +23,7 @@ import type {
   SocialDirectMessage,
   SocialFriendship,
   SocialPlayer,
+  TopologyCheck,
   VersusInvite,
   VersusLeaderboardEntry,
   VersusMapSource,
@@ -386,6 +390,33 @@ export function solveMissionLearned(
   });
 }
 
+export function simulateIncidentReplan(
+  missionId: string,
+  payload: {
+    incident_count: number;
+    strategy?: "guided" | "random";
+    seed?: number;
+    num_vehicles?: number;
+    vehicle_capacity?: number;
+    speed_multiplier?: number;
+    optimization_target?: "time" | "distance";
+    manual_segments?: Array<{
+      from_id: number;
+      to_id: number;
+      route_nodes?: number[];
+      geometry?: [number, number][];
+      dist_m?: number;
+      time_s?: number;
+      title?: string;
+    }>;
+  }
+) {
+  return apiFetch<IncidentReplanResponse>(`/api/missions/${missionId}/simulation/incident-replan`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function trainAiLearning(limit: number = 500) {
   return apiFetch<AiLearningTrainResponse>(`/api/ai-learning/train?limit=${limit}`, {
     method: "POST"
@@ -620,4 +651,26 @@ export function getVersusPlayerStats(limit: number = 20, maxMatches: number = 50
 export function getVersusWebSocketUrl(matchId: string, playerId: string) {
   const params = new URLSearchParams({ player_id: playerId });
   return `${WS_BASE_URL}/ws/versus/${encodeURIComponent(matchId)}?${params.toString()}`;
+}
+
+// ── Eco / CO2 Analysis ────────────────────────────────────────────────────────
+
+export function getEcoAnalysis(missionId: string) {
+  return apiFetch<EcoAnalysis>(`/api/missions/${encodeURIComponent(missionId)}/eco/co2-analysis`);
+}
+
+// ── Community Detection / Delivery Sectors ────────────────────────────────────
+
+export function getDeliverySectors(missionId: string) {
+  return apiFetch<DeliverySectorsResult>(
+    `/api/missions/${encodeURIComponent(missionId)}/graph/delivery-sectors`
+  );
+}
+
+// ── Topological Validation ────────────────────────────────────────────────────
+
+export function validateTopology(missionId: string) {
+  return apiFetch<TopologyCheck>(
+    `/api/missions/${encodeURIComponent(missionId)}/graph/topology-check`
+  );
 }

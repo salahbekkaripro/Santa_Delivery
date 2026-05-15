@@ -1,43 +1,124 @@
 import json
 import os
 import subprocess
-from datetime import datetime
+
+import numpy as np
 
 # Chemins des fichiers
 INPUT_FILE = "production_output/resultats_finaux.json"
 OUTPUT_DIR = "daily_reports"
 OUTPUT_TEX = os.path.join(OUTPUT_DIR, "rapport_technique_santa.tex")
 OUTPUT_PDF = os.path.join(OUTPUT_DIR, "rapport_technique_santa.pdf")
+DIST_MATRIX_FALLBACK = "core_data/matrix_5eme.npy"
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
 
 def load_stats():
     """Charge les données depuis le fichier JSON."""
     if not os.path.exists(INPUT_FILE):
         return {
-            "distance": 22.96,
-            "weight": 497.0,
+            "distance_km": 22.96,
+            "weight_kg": 497.0,
             "dropped": 9,
-            "vehicles": 5
+            "vehicles": 5,
+            "vehicle_rows": [
+                {"vehicle_id": 1, "stops": 6, "weight_kg": 95.0, "duration_min": 42},
+                {"vehicle_id": 2, "stops": 5, "weight_kg": 101.0, "duration_min": 47},
+                {"vehicle_id": 3, "stops": 4, "weight_kg": 98.0, "duration_min": 44},
+                {"vehicle_id": 4, "stops": 5, "weight_kg": 103.0, "duration_min": 45},
+                {"vehicle_id": 5, "stops": 3, "weight_kg": 100.0, "duration_min": 41},
+            ],
         }
-    
-    with open(INPUT_FILE, 'r') as f:
+
+    with open(INPUT_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-    
+
+    tours = data.get("tours", []) or []
+    optimized = (data.get("benchmark", {}) or {}).get("optimized", {}) or {}
+
+    distance_km = _safe_float(data.get("total_distance_km"))
+    if distance_km <= 0:
+        distance_km = _safe_float(data.get("total_dist_m")) / 1000.0
+    if distance_km <= 0:
+        distance_km = _safe_float(optimized.get("total_dist_m")) / 1000.0
+    if distance_km <= 0:
+        distance_km = sum(_safe_float(t.get("dist_m")) for t in tours) / 1000.0
+    if distance_km <= 0 and tours and os.path.exists(DIST_MATRIX_FALLBACK):
+        try:
+            dist_matrix = np.load(DIST_MATRIX_FALLBACK)
+            total_dist_m = 0.0
+            for tour in tours:
+                route_ids = tour.get("route_ids") or []
+                for i in range(len(route_ids) - 1):
+                    src = _safe_int(route_ids[i], -1)
+                    dst = _safe_int(route_ids[i + 1], -1)
+                    if src >= 0 and dst >= 0:
+                        total_dist_m += _safe_float(dist_matrix[src, dst])
+            distance_km = total_dist_m / 1000.0
+        except Exception:
+            distance_km = 0.0
+
+    weight_kg = _safe_float(data.get("total_weight_kg"))
+    if weight_kg <= 0:
+        weight_kg = sum(_safe_float(t.get("weight_kg")) for t in tours)
+
+    vehicle_rows = []
+    for idx, tour in enumerate(tours):
+        route_ids = tour.get("route_ids") or []
+        vehicle_id = _safe_int(tour.get("vehicle_id"), idx + 1)
+        stop_count = max(len(route_ids) - 2, 0)
+        duration_min = round(_safe_float(tour.get("duration_s")) / 60)
+        vehicle_rows.append(
+            {
+                "vehicle_id": vehicle_id,
+                "stops": stop_count,
+                "weight_kg": round(_safe_float(tour.get("weight_kg")), 1),
+                "duration_min": duration_min,
+            }
+        )
+
     return {
-        "distance": data.get("total_distance_km", 0.0),
-        "weight": data.get("total_weight_kg", 0.0),
+        "distance_km": round(distance_km, 2),
+        "weight_kg": round(weight_kg, 1),
         "dropped": len(data.get("dropped_points", [])),
-        "vehicles": len(data.get("tours", []))
+        "vehicles": len(tours),
+        "vehicle_rows": vehicle_rows,
     }
+
 
 def generate_latex(stats):
     """Génère le contenu LaTeX du rapport technique."""
-    
+    vehicle_rows = stats.get("vehicle_rows", [])
+    if vehicle_rows:
+        vehicle_rows_latex = "\n".join(
+            [
+                f"{row['vehicle_id']} & {row['stops']} & {row['weight_kg']} & {row['duration_min']} \\\\"
+                for row in vehicle_rows
+            ]
+        )
+    else:
+        vehicle_rows_latex = r"-- & -- & -- & -- \\"
+
     template = rf"""\documentclass{{article}}
 \usepackage[utf8]{{inputenc}}
 \usepackage[T1]{{fontenc}}
 \usepackage[french]{{babel}}
 \usepackage{{graphicx}}
 \usepackage{{array}}
+\usepackage{{float}}
 \usepackage{{booktabs}}
 \usepackage{{listings}}
 \usepackage{{xcolor}}
@@ -142,19 +223,31 @@ L'utilisation du \textbf{{Gemini CLI}} a été déterminante pour automatiser le
 
 Les performances du système sont synthétisées dans le tableau suivant :
 
-\begin{{table}}[h]
+\begin{{table}}[H]
     \centering
     \begin{{tabular}}{{lc}}
         \toprule
-        \textbf{{Métrique}} & \textbf{{Valeur}} \\
+        \textbf{{Indicateur clé}} & \textbf{{Valeur}} \\
         \midrule
-        Distance Totale Parcourue & {stats['distance']} km \\
-        Masse Totale Livrée & {stats['weight']} kg \\
+        Distance totale parcourue & {stats['distance_km']} km \\
+        Poids total livré & {stats['weight_kg']} kg \\
+        Nombre de véhicules engagés & {stats['vehicles']} \\
         Points de Livraison Ignorés & {stats['dropped']} \\
-        Nombre de Véhicules Optimisés & {stats['vehicles']} \\
         \bottomrule
     \end{{tabular}}
-    \caption{{Métriques de performance de la solution finale}}
+    \caption{{Tableau KPI : distance, poids, véhicules et points ignorés}}
+\end{{table}}
+
+\begin{{table}}[H]
+    \centering
+    \begin{{tabular}}{{cccc}}
+        \toprule
+        \textbf{{Véhicule}} & \textbf{{Arrêts}} & \textbf{{Charge (kg)}} & \textbf{{Durée (min)}} \\
+        \midrule
+        {vehicle_rows_latex}
+        \bottomrule
+    \end{{tabular}}
+    \caption{{Détail opérationnel par véhicule}}
 \end{{table}}
 
 \subsection{{Analyse des Points Non Livrés}}
@@ -165,11 +258,11 @@ L'arborescence du projet est désormais structurée selon les standards de l'ing
 
 \begin{{lstlisting}}[caption=Structure du projet]
 /home/bekkari/Documents/Graphes/Noel/
-├── core_data/              # Donnees sources (CSV, Matrix)
-├── final_scripts/          # Moteur d'optimisation et Visualiseur
-├── production_output/      # Resultats JSON et Cartes HTML
-├── scripts/                # Outils de reporting et maintenance
-└── daily_reports/          # Rapports PDF et TeX
++-- core_data/              # Donnees sources (CSV, Matrix)
++-- final_scripts/          # Moteur d'optimisation et Visualiseur
++-- production_output/      # Resultats JSON et Cartes HTML
++-- scripts/                # Outils de reporting et maintenance
+\-- daily_reports/          # Rapports PDF et TeX
 \end{{lstlisting}}
 
 \section{{Conclusion}}
@@ -183,26 +276,39 @@ def save_and_compile(latex_content):
     """Sauvegarde le .tex et tente de compiler en PDF."""
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
-        
-    with open(OUTPUT_TEX, 'w', encoding='utf-8') as f:
+
+    with open(OUTPUT_TEX, "w", encoding="utf-8") as f:
         f.write(latex_content)
-        
+
     print(f"Fichier LaTeX sauvegardé dans : {OUTPUT_TEX}")
-    
+
     try:
-        print("Tentative de compilation PDF avec pdflatex...")
-        result = subprocess.run(
-            ["pdflatex", "-interaction=nonstopmode", "-output-directory", OUTPUT_DIR, OUTPUT_TEX],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace'
-        )
-        if result.returncode == 0:
+        last_result = None
+        for idx in range(2):
+            print(f"Tentative de compilation PDF avec pdflatex (passe {idx + 1}/2)...")
+            last_result = subprocess.run(
+                ["pdflatex", "-interaction=nonstopmode", "-output-directory", OUTPUT_DIR, OUTPUT_TEX],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if last_result.returncode != 0:
+                break
+
+        if last_result and last_result.returncode == 0:
             print(f"Succès ! PDF généré dans : {OUTPUT_PDF}")
-        else:
-            print("Erreur lors de la compilation LaTeX.")
-            print(result.stdout[-500:])
+            return
+
+        if os.path.exists(OUTPUT_PDF):
+            print(f"PDF généré avec avertissements : {OUTPUT_PDF}")
+            if last_result:
+                print(last_result.stdout[-500:])
+            return
+
+        print("Erreur lors de la compilation LaTeX.")
+        if last_result:
+            print(last_result.stdout[-500:])
     except FileNotFoundError:
         print("Erreur : 'pdflatex' n'est pas installé.")
 

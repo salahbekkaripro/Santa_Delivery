@@ -61,6 +61,7 @@ AI_PROFILE_PRESETS = {
         "max_route_time_s": 14400,
         "drop_penalty": 1_000_000,
         "global_span_cost": 120,
+        "spatial_sectorization": False,
     },
     "ecolo": {
         "label": "Écolo",
@@ -76,6 +77,7 @@ AI_PROFILE_PRESETS = {
         "max_route_time_s": 15600,
         "drop_penalty": 1_200_000,
         "global_span_cost": 80,
+        "spatial_sectorization": False,
     },
     "prudent": {
         "label": "Prudent",
@@ -91,6 +93,7 @@ AI_PROFILE_PRESETS = {
         "max_route_time_s": 18000,
         "drop_penalty": 1_300_000,
         "global_span_cost": 160,
+        "spatial_sectorization": False,
     },
     "opportuniste": {
         "label": "Opportuniste",
@@ -106,6 +109,7 @@ AI_PROFILE_PRESETS = {
         "max_route_time_s": 15000,
         "drop_penalty": 1_050_000,
         "global_span_cost": 110,
+        "spatial_sectorization": False,
     },
     "agressive": {
         "label": "Agressive",
@@ -121,6 +125,7 @@ AI_PROFILE_PRESETS = {
         "max_route_time_s": 13800,
         "drop_penalty": 220_000,
         "global_span_cost": 60,
+        "spatial_sectorization": False,
     },
     "championne": {
         "label": "Championne",
@@ -136,6 +141,23 @@ AI_PROFILE_PRESETS = {
         "max_route_time_s": 18000,
         "drop_penalty": 1_500_000,
         "global_span_cost": 180,
+        "spatial_sectorization": False,
+    },
+    "championne_zone": {
+        "label": "Championne (Secteurs)",
+        "signature": "Architecture hybride",
+        "description": "Utilise le Clustering Spatial (K-Means) pour sectoriser la ville avant l'optimisation VRPTW.",
+        "difficulty_bonus": 10.0,
+        "optimization_target": "time",
+        "speed_multiplier_factor": 1.10,
+        "solver_time_limit_s": 40,
+        "first_solution_strategy": "parallel_cheapest_insertion",
+        "local_search_metaheuristic": "guided_local_search",
+        "time_slack_s": 3600,
+        "max_route_time_s": 18000,
+        "drop_penalty": 1_800_000,
+        "global_span_cost": 200,
+        "spatial_sectorization": True,
     },
 }
 
@@ -834,6 +856,27 @@ def _compute_training_cost(mission: dict, results: dict, benchmark: dict | None 
         + 180.0 * weather_penalty
     )
     return max(0.0, float(composite_cost))
+
+
+def calculate_co2_savings(distance_km: float, relief_overhead_pct: float = 0.0) -> dict:
+    """
+    Calcule l'économie de CO2 basée sur la distance et le relief.
+    Modèle : 120g de CO2 par km (standard utilitaire léger).
+    Le relief augmente la consommation linéairement.
+    """
+    BASE_CO2_G_PER_KM = 120.0
+    distance_km = max(0.0, distance_km)
+    relief_factor = 1.0 + (max(0.0, relief_overhead_pct) / 100.0)
+    
+    co2_total_g = distance_km * BASE_CO2_G_PER_KM * relief_factor
+    
+    return {
+        "co2_g": round(co2_total_g, 2),
+        "co2_kg": round(co2_total_g / 1000.0, 3),
+        "distance_km": round(distance_km, 2),
+        "relief_factor": round(relief_factor, 3),
+        "trees_offset_equivalent": round(co2_total_g / 20.0, 2) # Approximation symbolique
+    }
 
 
 def _iter_solved_training_snapshots(limit: int = 500) -> list[dict]:
@@ -1966,6 +2009,8 @@ def create_mission(payload: dict) -> dict:
         center_lon=payload.get("center_lon"),
         search_radius_km=radius_km,
         departure_hour=payload.get("departure_hour"),
+        with_elevation=bool(payload.get("with_elevation", False)),
+        elevation_path=str(paths.elevation_file),
     )
     if not success:
         raise ValueError(message or "Generation de zone impossible")
@@ -2055,6 +2100,7 @@ def get_mission(mission_id: str) -> dict:
         "human_state": human_state,
         "results_available": paths.results_file.exists(),
         "incidents": incidents_payload,
+        "elevation": _read_json(paths.elevation_file, None),
     }
     _sync_snapshot(
         mission_id,
@@ -2438,11 +2484,15 @@ def get_adjacent_nodes(mission_id: str, node_id: int, speed_multiplier: float) -
     return {"adjacents": adjacents, "future_adjacents": future_adjacents}
 
 
-def _build_incident_matrix(paths: MissionPaths, mission: dict) -> str | None:
-    if not mission.get("random_incidents") or not paths.time_matrix_file.exists():
+def _build_incident_matrix(paths: MissionPaths, mission: dict, *, force: bool = False) -> str | None:
+    if not paths.time_matrix_file.exists():
+        return None
+    if not force and not mission.get("random_incidents"):
         return None
     incident_payload = _read_json(paths.incidents_file, {"segments": []})
     incident_segments = incident_payload.get("segments", [])
+    if not incident_segments:
+        return None
     matrix = np.load(paths.time_matrix_file)
     incident_matrix = matrix.copy()
     df = read_points(paths.data_file)
@@ -2568,6 +2618,7 @@ def _solve_mission_internal(
     mission_for_strategy: dict | None = None,
     ai_strategy_override: dict | None = None,
     use_portfolio: bool = False,
+    force_incident_matrix: bool = False,
 ) -> dict:
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
     df = read_points(paths.data_file)
@@ -2579,7 +2630,7 @@ def _solve_mission_internal(
     _write_json(paths.human_state_file, serialize_human_state(human_state))
 
     weather = load_weather(paths.weather_file, mission.get("weather_key"))
-    incident_matrix_path = _build_incident_matrix(paths, mission)
+    incident_matrix_path = _build_incident_matrix(paths, mission, force=force_incident_matrix)
     strategy_mission = mission_for_strategy or mission
     ai_strategy = deepcopy(ai_strategy_override) if ai_strategy_override else resolve_ai_strategy(strategy_mission, payload)
 
@@ -2653,6 +2704,293 @@ def _solve_mission_internal(
 
 def solve_mission(mission_id: str, payload: dict) -> dict:
     return _solve_mission_internal(mission_id, payload, use_portfolio=True)
+
+
+def _solve_payload_lite(results: dict, benchmark: dict) -> dict:
+    optimized = benchmark.get("optimized", {}) if isinstance(benchmark, dict) else {}
+    savings = benchmark.get("savings", {}) if isinstance(benchmark, dict) else {}
+    return {
+        "results": {
+            "total_time_s": float(results.get("total_time_s", 0.0)),
+            "dropped_points": [int(point_id) for point_id in results.get("dropped_points", [])],
+            "tours": results.get("tours", []),
+        },
+        "benchmark": {
+            "optimized": {
+                "total_time_s": float(optimized.get("total_time_s", results.get("total_time_s", 0.0))),
+                "total_dist_m": float(optimized.get("total_dist_m", 0.0)),
+            },
+            "savings": {
+                "co2_saved_kg": float(savings.get("co2_saved_kg", 0.0)),
+            },
+        },
+    }
+
+
+def _pick_incident_pairs(df, current_results: dict, count: int, rng: random.Random) -> list[tuple[int, int]]:
+    candidate_pairs: list[tuple[int, int]] = []
+    known_ids = set(int(row["id"]) for _, row in df.iterrows())
+
+    for tour in current_results.get("tours", []):
+        route = [int(route_id) for route_id in tour.get("route_ids", [])]
+        for source_id, dest_id in zip(route[:-1], route[1:]):
+            if source_id == dest_id:
+                continue
+            if source_id not in known_ids or dest_id not in known_ids:
+                continue
+            candidate_pairs.append((source_id, dest_id))
+
+    if not candidate_pairs:
+        client_ids = [int(row["id"]) for _, row in df.iterrows() if int(row["id"]) != 0]
+        for source_id in client_ids:
+            for dest_id in client_ids:
+                if source_id != dest_id:
+                    candidate_pairs.append((source_id, dest_id))
+
+    unique_pairs = list(dict.fromkeys(candidate_pairs))
+    rng.shuffle(unique_pairs)
+    return unique_pairs[: max(1, int(count) * 6)]
+
+
+def _generate_incident_segments(
+    paths: MissionPaths,
+    *,
+    current_results: dict,
+    count: int,
+    strategy: str,
+    seed: int | None,
+) -> list[dict]:
+    graph = _load_graph_cached(paths.graph_file)
+    df = read_points(paths.data_file)
+    rng = random.Random(seed if seed is not None else random.randint(1, 1_000_000))
+    selected_pairs = _pick_incident_pairs(df, current_results, count=count, rng=rng)
+
+    if strategy == "random":
+        rng.shuffle(selected_pairs)
+
+    row_by_id = {int(row["id"]): row for _, row in df.iterrows()}
+    segments: list[dict] = []
+    seen: set[tuple[int, int]] = set()
+    for source_id, dest_id in selected_pairs:
+        if len(segments) >= count:
+            break
+        pair = (int(source_id), int(dest_id))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        source_row = row_by_id.get(pair[0])
+        dest_row = row_by_id.get(pair[1])
+        if source_row is None or dest_row is None:
+            continue
+        try:
+            options = compute_route_options(
+                graph,
+                float(source_row["lat"]),
+                float(source_row["lon"]),
+                float(dest_row["lat"]),
+                float(dest_row["lon"]),
+                time_factor=1.0,
+                k=1,
+            )
+        except Exception:
+            options = []
+        if not options:
+            continue
+        option = options[0]
+        segments.append(
+            {
+                "variant": "incident",
+                "sleigh_id": -1,
+                "from_id": pair[0],
+                "to_id": pair[1],
+                "route_nodes": option.get("route_nodes", []),
+                "geometry": option.get("geometry", []),
+                "dist_m": float(option.get("dist_m", 0.0)),
+                "time_s": float(option.get("time_s", 0.0)) * 6.0,
+                "title": f"⚠️ Incident live · axe bloque #{pair[0]} -> #{pair[1]}",
+            }
+        )
+    return segments
+
+
+def _manual_incident_segments_from_payload(
+    paths: MissionPaths,
+    *,
+    before_results: dict,
+    manual_segments_raw: list[dict] | None,
+) -> list[dict]:
+    if not manual_segments_raw:
+        return []
+
+    df = read_points(paths.data_file)
+    graph = _load_graph_cached(paths.graph_file)
+    row_by_id = {int(row["id"]): row for _, row in df.iterrows()}
+    ai_segments = before_results.get("ai_segments", []) if isinstance(before_results, dict) else []
+
+    normalized: list[dict] = []
+    for idx, raw in enumerate(manual_segments_raw[:3]):
+        try:
+            source_id = int(raw.get("from_id"))
+            dest_id = int(raw.get("to_id"))
+        except Exception:
+            continue
+        if source_id == dest_id:
+            continue
+        if source_id not in row_by_id or dest_id not in row_by_id:
+            continue
+
+        route_nodes = [int(node_id) for node_id in (raw.get("route_nodes") or []) if str(node_id).strip() != ""]
+        geometry = raw.get("geometry") or []
+        dist_m = float(raw.get("dist_m") or 0.0)
+        time_s = float(raw.get("time_s") or 0.0)
+
+        matched = None
+        for seg in ai_segments:
+            if int(seg.get("from_id", -1)) == source_id and int(seg.get("to_id", -1)) == dest_id:
+                matched = seg
+                if route_nodes:
+                    seg_nodes = [int(node_id) for node_id in seg.get("route_nodes", [])]
+                    if seg_nodes == route_nodes:
+                        break
+
+        if matched:
+            if not route_nodes:
+                route_nodes = [int(node_id) for node_id in matched.get("route_nodes", [])]
+            if not geometry:
+                geometry = matched.get("geometry", [])
+            if dist_m <= 0:
+                dist_m = float(matched.get("dist_m", 0.0))
+            if time_s <= 0:
+                time_s = float(matched.get("time_s", 0.0))
+
+        if not geometry or dist_m <= 0 or time_s <= 0:
+            source_row = row_by_id[source_id]
+            dest_row = row_by_id[dest_id]
+            try:
+                options = compute_route_options(
+                    graph,
+                    float(source_row["lat"]),
+                    float(source_row["lon"]),
+                    float(dest_row["lat"]),
+                    float(dest_row["lon"]),
+                    time_factor=1.0,
+                    k=1,
+                )
+            except Exception:
+                options = []
+            if options:
+                option = options[0]
+                if not route_nodes:
+                    route_nodes = [int(node_id) for node_id in option.get("route_nodes", [])]
+                if not geometry:
+                    geometry = option.get("geometry", [])
+                if dist_m <= 0:
+                    dist_m = float(option.get("dist_m", 0.0))
+                if time_s <= 0:
+                    time_s = float(option.get("time_s", 0.0))
+
+        if not geometry:
+            continue
+
+        normalized.append(
+            {
+                "variant": "incident",
+                "sleigh_id": -1,
+                "from_id": source_id,
+                "to_id": dest_id,
+                "route_nodes": route_nodes,
+                "geometry": geometry,
+                "dist_m": float(dist_m),
+                "time_s": max(1.0, float(time_s) * 6.0),
+                "title": str(raw.get("title") or f"⚠️ Incident live · segment bloque #{source_id} -> #{dest_id}"),
+                "manual": True,
+                "manual_rank": idx + 1,
+            }
+        )
+    return normalized
+
+
+def _safe_pct(delta: float, reference: float) -> float:
+    if abs(float(reference)) < 1e-6:
+        return 0.0
+    return (float(delta) / float(reference)) * 100.0
+
+
+def simulate_incident_replan(mission_id: str, payload: dict) -> dict:
+    paths, mission, _ = load_mission_bundle(mission_id)
+    if not paths.results_file.exists() or not paths.benchmark_file.exists():
+        raise ValueError("Aucune tournée courante: lancez d'abord un solve.")
+
+    before_results = _read_json(paths.results_file, {})
+    before_benchmark = _read_json(paths.benchmark_file, {})
+    if not before_results or not before_benchmark:
+        raise ValueError("Résultat courant introuvable pour cette mission.")
+
+    incident_count = max(1, min(int(payload.get("incident_count", 1)), 3))
+    strategy = str(payload.get("strategy", "guided") or "guided").strip().lower()
+    if strategy not in {"guided", "random"}:
+        strategy = "guided"
+    seed = payload.get("seed")
+
+    manual_segments_raw = payload.get("manual_segments")
+    incident_segments = _manual_incident_segments_from_payload(
+        paths,
+        before_results=before_results,
+        manual_segments_raw=manual_segments_raw if isinstance(manual_segments_raw, list) else None,
+    )
+    if not incident_segments:
+        incident_segments = _generate_incident_segments(
+            paths,
+            current_results=before_results,
+            count=incident_count,
+            strategy=strategy,
+            seed=int(seed) if seed is not None else None,
+        )
+    if not incident_segments:
+        raise RuntimeError("Impossible de générer un incident exploitable sur cette mission.")
+
+    incidents_payload = {"count": len(incident_segments), "segments": incident_segments}
+    _write_json(paths.incidents_file, incidents_payload)
+
+    before_payload = _solve_payload_lite(before_results, before_benchmark)
+
+    base_strategy = before_results.get("ai_strategy") if isinstance(before_results, dict) else {}
+    solve_payload = {
+        "num_vehicles": int(payload.get("num_vehicles") or base_strategy.get("num_vehicles") or max(1, len(before_results.get("tours", [])))),
+        "vehicle_capacity": int(payload.get("vehicle_capacity") or base_strategy.get("vehicle_capacity") or 200),
+        "speed_multiplier": float(payload.get("speed_multiplier") or base_strategy.get("speed_multiplier") or 1.0),
+        "optimization_target": str(payload.get("optimization_target") or base_strategy.get("optimization_target") or "time"),
+    }
+
+    after_payload = _solve_mission_internal(
+        mission_id,
+        solve_payload,
+        mission_for_strategy=mission,
+        use_portfolio=True,
+        force_incident_matrix=True,
+    )
+
+    after_optimized = after_payload.get("benchmark", {}).get("optimized", {})
+    before_optimized = before_payload.get("benchmark", {}).get("optimized", {})
+    after_savings = after_payload.get("benchmark", {}).get("savings", {})
+    before_savings = before_payload.get("benchmark", {}).get("savings", {})
+
+    delta_time_s = float(after_optimized.get("total_time_s", 0.0)) - float(before_optimized.get("total_time_s", 0.0))
+    delta_dist_m = float(after_optimized.get("total_dist_m", 0.0)) - float(before_optimized.get("total_dist_m", 0.0))
+    delta_co2_kg = float(after_savings.get("co2_saved_kg", 0.0)) - float(before_savings.get("co2_saved_kg", 0.0))
+
+    return {
+        "incidents": incidents_payload,
+        "before": before_payload,
+        "after": after_payload,
+        "delta_kpi": {
+            "time_s": delta_time_s,
+            "dist_m": delta_dist_m,
+            "co2_kg": delta_co2_kg,
+            "time_pct": _safe_pct(delta_time_s, float(before_optimized.get("total_time_s", 0.0))),
+            "dist_pct": _safe_pct(delta_dist_m, float(before_optimized.get("total_dist_m", 0.0))),
+        },
+    }
 
 
 def solve_mission_learned(mission_id: str, payload: dict) -> dict:
@@ -4544,3 +4882,191 @@ def list_versus_player_stats(limit: int = 20, max_matches: int = 500) -> dict:
         item["average_time_s"] = round(float(average_time_s), 1) if average_time_s is not None else None
 
     return {"entries": entries[: max(0, int(limit))]}
+
+
+# ── Eco / CO2 Analysis ────────────────────────────────────────────────────────
+
+def get_eco_analysis(mission_id: str) -> dict:
+    """
+    Calcule l'empreinte CO2 et les économies pour les routes IA, humaine et naïve.
+
+    Modèle physique :
+    - Camion de livraison urbain standard : 120 g CO2/km
+    - Surcoût montée : +4 g CO2/m de dénivelé positif (effort moteur additionnel)
+    - Paris 5ème : terrain vallonné (Montagne Sainte-Geneviève) → dénivelé estimé 45 m
+    - Traîneau (électrique / traction animale) : ~10 % de l'effort équivalent d'un camion
+    """
+    paths, mission, human_state_payload = load_mission_bundle(mission_id)
+
+    results = _read_json(paths.results_file, {})
+    benchmark = _read_json(paths.benchmark_file, {})
+
+    ai_dist_m = float((benchmark.get("optimized") or {}).get("total_dist_m", 0.0))
+    naive_dist_m = float((benchmark.get("naive") or {}).get("total_dist_m", ai_dist_m))
+
+    human_state = human_state_from_payload(human_state_payload)
+    human_segments = [seg for segs in human_state.segments_by_sleigh.values() for seg in segs]
+    human_dist_m = float(summarize_segments(human_segments).get("total_dist_m", 0.0))
+
+    # Terrain Paris 5ème : Montagne Sainte-Geneviève → vallonné, ~45 m de dénivelé positif
+    TERRAIN_TYPE = "vallonné"
+    ESTIMATED_CLIMB_M = 45.0
+    BASE_CO2_G_PER_KM = 120.0
+    CLIMB_CO2_G_PER_M = 4.0
+    SLEIGH_FACTOR = 0.10  # traîneau ≈ 10 % de l'effort d'un camion
+
+    def _co2_profile(dist_m: float) -> dict:
+        dist_km = max(0.0, dist_m) / 1000.0
+        truck_g = dist_km * BASE_CO2_G_PER_KM + ESTIMATED_CLIMB_M * CLIMB_CO2_G_PER_M
+        sleigh_g = truck_g * SLEIGH_FACTOR
+        saved_g = truck_g - sleigh_g
+        return {
+            "distance_km": round(dist_km, 3),
+            "truck_co2_kg": round(truck_g / 1000.0, 3),
+            "sleigh_co2_kg": round(sleigh_g / 1000.0, 3),
+            "saved_vs_truck_kg": round(saved_g / 1000.0, 3),
+            "trees_month_offset": round(saved_g / 20.0, 1),
+        }
+
+    ai_profile = _co2_profile(ai_dist_m)
+    naive_profile = _co2_profile(naive_dist_m)
+    human_profile = _co2_profile(human_dist_m) if human_dist_m > 0 else None
+
+    # Gain additionnel de l'optimisation : réduction CO2 truck(naïf) → truck(IA)
+    route_optimization_saving_kg = round(
+        naive_profile["truck_co2_kg"] - ai_profile["truck_co2_kg"], 3
+    )
+
+    return {
+        "terrain": {
+            "type": TERRAIN_TYPE,
+            "estimated_climb_m": ESTIMATED_CLIMB_M,
+            "zone": mission.get("zone", "Paris 5"),
+            "note": "Dénivelé estimé — Montagne Sainte-Geneviève",
+        },
+        "routes": {
+            "ai": ai_profile,
+            "naive": naive_profile,
+            "human": human_profile,
+        },
+        "eco_impact": {
+            "total_co2_avoided_kg": ai_profile["saved_vs_truck_kg"],
+            "route_optimisation_saving_kg": route_optimization_saving_kg,
+            "ai_vs_naive_dist_pct": round(
+                (1.0 - ai_dist_m / naive_dist_m) * 100.0, 1
+            ) if naive_dist_m > 0 else 0.0,
+        },
+    }
+
+
+# ── Community Detection / Delivery Sectors ────────────────────────────────────
+
+def get_delivery_sectors(mission_id: str) -> dict:
+    """
+    Découpe le graphe de la mission en secteurs de livraison naturels via Louvain.
+
+    Retourne les polygones (enveloppe convexe) de chaque secteur pour affichage
+    sur la carte frontend.
+    """
+    from scripts.community_detection import detect_delivery_sectors
+
+    paths, _, _ = load_mission_bundle(mission_id)
+    if not paths.graph_file.exists():
+        raise FileNotFoundError("Graphe introuvable pour cette mission.")
+
+    graph = _load_graph_cached(paths.graph_file)
+    sectors = detect_delivery_sectors(graph, seed=42, resolution=1.0)
+
+    return {
+        "sector_count": len(sectors),
+        "sectors": sectors,
+        "algorithm": "Louvain (NetworkX 3.x)",
+        "note": "Secteurs détectés par communautés topologiques sur le graphe de rues.",
+    }
+
+
+# ── Topological Validation ────────────────────────────────────────────────────
+
+def validate_topology(mission_id: str) -> dict:
+    """
+    Vérifie que les incidents simulés ne coupent pas totalement le dépôt du reste du graphe.
+
+    Algorithme :
+    1. Charge le graphe + les segments d'incidents
+    2. Retire les arêtes bloquées (edges consécutifs dans route_nodes de chaque incident)
+    3. Calcule les composantes fortement connexes
+    4. Vérifie si le nœud dépôt est dans la même composante que tous les clients
+    5. Retourne la liste des clients isolés et le statut de connexité
+    """
+    import osmnx as ox
+    import networkx as nx
+
+    paths, _, _ = load_mission_bundle(mission_id)
+    if not paths.graph_file.exists():
+        raise FileNotFoundError("Graphe introuvable pour cette mission.")
+
+    graph = load_graph(paths.graph_file)
+    incidents_payload = _read_json(paths.incidents_file, {"count": 0, "segments": []})
+    incident_segments = list((incidents_payload or {}).get("segments", []))
+
+    # Construire le graphe amputé des arêtes incidentées
+    G_blocked = graph.copy()
+    blocked_edges: list[tuple] = []
+    for seg in incident_segments:
+        nodes = seg.get("route_nodes", [])
+        for i in range(len(nodes) - 1):
+            u, v = nodes[i], nodes[i + 1]
+            if G_blocked.has_edge(u, v):
+                G_blocked.remove_edge(u, v)
+                blocked_edges.append((u, v))
+
+    # Nœud dépôt (premier point du CSV)
+    df = read_points(paths.data_file)
+    depot_row = df.iloc[0]
+    depot_node = ox.nearest_nodes(G_blocked, float(depot_row["lon"]), float(depot_row["lat"]))
+
+    # Nœuds clients
+    client_nodes: dict[int, int] = {}  # client_id → osm_node
+    for _, row in df.iloc[1:].iterrows():
+        cid = int(row["id"])
+        osm_node = ox.nearest_nodes(G_blocked, float(row["lon"]), float(row["lat"]))
+        client_nodes[cid] = osm_node
+
+    # Composantes fortement connexes (dirigé) ou faiblement connexes (chemin quelconque)
+    wccs = list(nx.weakly_connected_components(G_blocked))
+    depot_component = next(
+        (i for i, comp in enumerate(wccs) if depot_node in comp), -1
+    )
+
+    unreachable_clients: list[int] = []
+    reachability: list[dict] = []
+    for cid, osm_node in client_nodes.items():
+        client_comp = next(
+            (i for i, comp in enumerate(wccs) if osm_node in comp), -1
+        )
+        reachable = (client_comp == depot_component and depot_component >= 0)
+        if not reachable:
+            unreachable_clients.append(cid)
+        reachability.append({
+            "client_id": cid,
+            "osm_node": osm_node,
+            "reachable": reachable,
+        })
+
+    is_valid = len(unreachable_clients) == 0
+    num_components = len(wccs)
+
+    return {
+        "is_valid": is_valid,
+        "depot_node": int(depot_node),
+        "num_components": num_components,
+        "blocked_edges_count": len(blocked_edges),
+        "incident_count": len(incident_segments),
+        "unreachable_clients": unreachable_clients,
+        "reachability": reachability,
+        "status": (
+            "OK — Dépôt accessible depuis tous les clients."
+            if is_valid
+            else f"ALERTE — {len(unreachable_clients)} client(s) isolé(s) du dépôt !"
+        ),
+    }

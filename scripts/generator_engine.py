@@ -172,6 +172,49 @@ def _compute_matrices_local(G, node_ids: list[int]) -> tuple[np.ndarray, np.ndar
     return durations, distances
 
 
+def _apply_elevation_if_needed(
+    time_matrix: np.ndarray,
+    dist_matrix: np.ndarray,
+    locations: list,
+    with_elevation: bool,
+    elevation_path: str | None,
+) -> dict | None:
+    """
+    Si with_elevation=True, récupère les altitudes SRTM et ajuste les matrices
+    en place (modifie les tableaux numpy passés en argument).
+    Sauvegarde les métadonnées dans elevation_path si fourni.
+    Retourne le résumé ou None.
+    """
+    if not with_elevation:
+        return None
+    try:
+        from scripts.elevation_engine import fetch_elevations, apply_slope_to_matrices, elevation_summary
+        print(f"🏔️  Récupération altitudes SRTM pour {len(locations)} points...")
+        elevations = fetch_elevations(locations)
+        time_slope, dist_energy, elev_diff = apply_slope_to_matrices(
+            time_matrix, dist_matrix, locations, elevations
+        )
+        # Modifie en place
+        time_matrix[:] = time_slope
+        dist_matrix[:] = dist_energy
+
+        meta = elevation_summary(elevations, elev_diff, locations)
+        print(
+            f"🏔️  Relief intégré : terrain={meta['terrain_type']}, "
+            f"alt {meta['min_m']}–{meta['max_m']} m, "
+            f"D+ {meta['total_climb_m']} m, surcoût temps ≈+{meta['time_overhead_pct']}%"
+        )
+        if elevation_path:
+            import json as _json
+            os.makedirs(os.path.dirname(elevation_path), exist_ok=True)
+            with open(elevation_path, "w", encoding="utf-8") as f:
+                _json.dump(meta, f, ensure_ascii=False)
+        return meta
+    except Exception as exc:
+        print(f"⚠️  Elevation ignorée : {exc}")
+        return None
+
+
 def generate_new_zone(
     location_name,
     num_clients=30,
@@ -183,6 +226,8 @@ def generate_new_zone(
     center_lon=None,
     search_radius_km=None,
     departure_hour=None,
+    with_elevation=False,
+    elevation_path=None,
 ):
     """
     Télécharge une nouvelle zone et génère des points de livraison.
@@ -344,19 +389,23 @@ def generate_new_zone(
 
     # 3. Calcul de la Matrice (Temps/Distance)
     # OSRM public peut timeouter sur de grosses matrices -> fallback local.
+    _locations_for_elev = [(float(row["lat"]), float(row["lon"])) for _, row in df.iterrows()]
     max_osrm_points = int(os.getenv("OSRM_MAX_POINTS", "40"))
     if len(df) > max_osrm_points:
         durations, distances = _compute_matrices_local(G, node_ids)
         if departure_hour is not None:
             durations = apply_traffic_factor(durations, int(departure_hour))
             print(f"🚦 Facteur trafic appliqué pour {departure_hour}h : ×{TRAFFIC_PROFILE.get(int(departure_hour), 1.0)}")
+        elev_meta = _apply_elevation_if_needed(
+            durations, distances, _locations_for_elev, with_elevation, elevation_path
+        )
         np.save(time_matrix_path, durations)
         np.save(dist_matrix_path, distances)
         print(f"✅ Matrices locales de temps/distance ({len(df)}x{len(df)}) générées.")
-        return True, (
-            f"OSRM sauté (>{max_osrm_points} points). "
-            "Matrice calculée localement (peut être un peu plus lente)."
-        )
+        note = f"OSRM sauté (>{max_osrm_points} points). Matrice calculée localement (peut être un peu plus lente)."
+        if elev_meta:
+            note += f" Relief SRTM intégré ({elev_meta['terrain_type']}, Δalt {elev_meta['range_m']} m)."
+        return True, note
 
     # OSRM (fallback local si OSRM down)
     coords = [f"{row['lon']},{row['lat']}" for _, row in df.iterrows()]
@@ -377,13 +426,20 @@ def generate_new_zone(
                     raise RuntimeError("OSRM: champ 'durations' manquant")
 
                 osrm_durations = np.array(res["durations"])
+                osrm_distances = np.array(res.get("distances", []))
                 if departure_hour is not None:
                     osrm_durations = apply_traffic_factor(osrm_durations, int(departure_hour))
                     print(f"🚦 Facteur trafic appliqué pour {departure_hour}h : ×{TRAFFIC_PROFILE.get(int(departure_hour), 1.0)}")
+                elev_meta = _apply_elevation_if_needed(
+                    osrm_durations, osrm_distances, _locations_for_elev, with_elevation, elevation_path
+                )
                 np.save(time_matrix_path, osrm_durations)
-                np.save(dist_matrix_path, np.array(res.get("distances", [])))
+                np.save(dist_matrix_path, osrm_distances)
                 print(f"✅ Matrices OSRM de temps/distance ({len(df)}x{len(df)}) générées.")
-                return True, ""
+                note = ""
+                if elev_meta:
+                    note = f"Relief SRTM intégré ({elev_meta['terrain_type']}, Δalt {elev_meta['range_m']} m)."
+                return True, note
             except Exception as e:
                 last_exc = e
                 print(f"⚠️ OSRM tentative {attempt}/2 échouée : {e}")
@@ -400,6 +456,9 @@ def generate_new_zone(
             if departure_hour is not None:
                 durations = apply_traffic_factor(durations, int(departure_hour))
                 print(f"🚦 Facteur trafic appliqué pour {departure_hour}h : ×{TRAFFIC_PROFILE.get(int(departure_hour), 1.0)}")
+            _apply_elevation_if_needed(
+                durations, distances, _locations_for_elev, with_elevation, elevation_path
+            )
             np.save(time_matrix_path, durations)
             np.save(dist_matrix_path, distances)
             print(f"✅ Matrices locales de temps/distance ({len(df)}x{len(df)}) générées.")

@@ -169,6 +169,32 @@ class SolveMissionRequest(BaseModel):
     optimization_target: Literal["time", "distance"] = "time"
 
 
+class IncidentReplanRequest(BaseModel):
+    incident_count: int = Field(default=1, ge=1, le=3)
+    strategy: Literal["guided", "random"] = "guided"
+    seed: int | None = None
+    num_vehicles: int | None = Field(default=None, ge=1, le=20)
+    vehicle_capacity: int | None = Field(default=None, ge=1)
+    speed_multiplier: float | None = Field(default=None, gt=0)
+    optimization_target: Literal["time", "distance"] | None = None
+    manual_segments: list[dict] | None = None
+
+
+class IncidentReplanDeltaKpi(BaseModel):
+    time_s: float
+    dist_m: float
+    co2_kg: float
+    time_pct: float
+    dist_pct: float
+
+
+class IncidentReplanResponse(BaseModel):
+    incidents: dict
+    before: dict
+    after: dict
+    delta_kpi: IncidentReplanDeltaKpi
+
+
 class HumanStateResponse(BaseModel):
     routes_by_sleigh: dict[str, list[int]]
     segments_by_sleigh: dict[str, list[RouteSegment]]

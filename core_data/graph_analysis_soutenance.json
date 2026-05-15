@@ -1,0 +1,76 @@
+{
+  "metadata": {
+    "nodes": 124,
+    "edges": 210,
+    "avg_shortest_path": 13.485,
+    "diameter": 35,
+    "density": 0.01377,
+    "avg_clustering": 0.0685
+  },
+  "top5_critical_nodes": [
+    {
+      "rank": 1,
+      "id": 368142,
+      "lat": 48.853333,
+      "lon": 2.357816,
+      "road": "Pont Marie",
+      "bc_score": 0.48396
+    },
+    {
+      "rank": 2,
+      "id": 368143,
+      "lat": 48.854376,
+      "lon": 2.354944,
+      "road": "Rue du Pont Louis-Philippe",
+      "bc_score": 0.41696
+    },
+    {
+      "rank": 3,
+      "id": 368140,
+      "lat": 48.852374,
+      "lon": 2.360466,
+      "road": "Rue Saint-Paul",
+      "bc_score": 0.40532
+    },
+    {
+      "rank": 4,
+      "id": 25671162,
+      "lat": 48.854936,
+      "lon": 2.353529,
+      "road": "Quai de l'Hôtel de Ville",
+      "bc_score": 0.40366
+    },
+    {
+      "rank": 5,
+      "id": 283555978,
+      "lat": 48.855124,
+      "lon": 2.353045,
+      "road": "Quai de l'Hôtel de Ville",
+      "bc_score": 0.39818
+    }
+  ],
+  "robustness": {
+    "initial_scc": 124,
+    "after_remove_1_node_targeted": {
+      "largest_scc": 49,
+      "loss_pct": 60.5
+    },
+    "after_remove_2_nodes_targeted": {
+      "largest_scc": 47,
+      "loss_pct": 62.1
+    },
+    "after_remove_3_nodes_targeted": {
+      "largest_scc": 45,
+      "loss_pct": 63.7
+    },
+    "after_remove_5_nodes_targeted": {
+      "largest_scc": 41,
+      "loss_pct": 66.9
+    },
+    "after_remove_5_random": {
+      "largest_scc": 107,
+      "loss_pct": 13.7
+    },
+    "devastation_ratio": 4.9
+  }
+}

@@ -1,19 +1,18 @@
 import pandas as pd
 import numpy as np
 import json
-import osmnx as ox
-import networkx as nx
 import os
+import random
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 
-# Définition des chemins relatifs au script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
 DATA_PATH = os.path.join(BASE_DIR, 'core_data', 'livraisons_5eme.csv')
 TIME_MATRIX_PATH = os.path.join(BASE_DIR, 'core_data', 'live_time_matrix.npy')
 WEATHER_FILE = os.path.join(BASE_DIR, 'core_data', 'weather_status.json')
 OUTPUT_PATH = os.path.join(BASE_DIR, 'production_output', 'resultats_finaux.json')
+
 
 class NpEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -24,18 +23,19 @@ class NpEncoder(json.JSONEncoder):
 
 
 FIRST_SOLUTION_STRATEGIES = {
-    "path_cheapest_arc": routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
+    "path_cheapest_arc":           routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
     "parallel_cheapest_insertion": routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
-    "savings": routing_enums_pb2.FirstSolutionStrategy.SAVINGS,
-    "christofides": routing_enums_pb2.FirstSolutionStrategy.CHRISTOFIDES,
-    "global_cheapest_arc": routing_enums_pb2.FirstSolutionStrategy.GLOBAL_CHEAPEST_ARC,
+    "savings":                     routing_enums_pb2.FirstSolutionStrategy.SAVINGS,
+    "christofides":                routing_enums_pb2.FirstSolutionStrategy.CHRISTOFIDES,
+    "global_cheapest_arc":         routing_enums_pb2.FirstSolutionStrategy.GLOBAL_CHEAPEST_ARC,
 }
 
 LOCAL_SEARCH_METAHEURISTICS = {
-    "guided_local_search": routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH,
-    "simulated_annealing": routing_enums_pb2.LocalSearchMetaheuristic.SIMULATED_ANNEALING,
-    "tabu_search": routing_enums_pb2.LocalSearchMetaheuristic.TABU_SEARCH,
+    "guided_local_search":  routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH,
+    "simulated_annealing":  routing_enums_pb2.LocalSearchMetaheuristic.SIMULATED_ANNEALING,
+    "tabu_search":          routing_enums_pb2.LocalSearchMetaheuristic.TABU_SEARCH,
 }
+
 
 def solve_vrp(
     num_vehicles=3,
@@ -65,12 +65,12 @@ def solve_vrp(
         return None
     df = pd.read_csv(data_path)
     num_locations = len(df)
-    
+
     # 2. Chargement Météo
     weather_factor = 1.0
     weather_desc = "Inconnue"
     weather_cond = "Clear"
-    
+
     if forced_weather:
         weather_factor = forced_weather.get('factor', 1.0)
         weather_desc = forced_weather.get('desc', 'Forcée')
@@ -81,15 +81,13 @@ def solve_vrp(
             weather_factor = w_data.get('factor', 1.0)
             weather_desc = w_data.get('desc', 'Inconnue')
             weather_cond = w_data.get('condition', 'Clear')
-    
+
     # 3. Chargement et Ajustement Matrices
-    # Matrice de TEMPS (nécessaire pour les Time Windows)
     t_matrix_path = incident_matrix_path if (incident_matrix_path and os.path.exists(incident_matrix_path)) else time_matrix_path
     if os.path.exists(t_matrix_path):
         total_factor = weather_factor / speed_multiplier
         matrix_time = np.load(t_matrix_path) * total_factor
         if weather_cond not in ["Clear", "Clouds", "Forcée"] and num_locations > 5:
-            import random
             stormy_indices = random.sample(range(1, num_locations), max(1, num_locations // 5))
             for idx in stormy_indices:
                 matrix_time[idx, :] *= 1.5
@@ -98,7 +96,6 @@ def solve_vrp(
         print("Erreur : Matrice OSRM (temps) manquante.")
         return None
 
-    # Matrice de DISTANCE
     matrix_dist = None
     if optimization_target == "distance":
         if dist_matrix_path and os.path.exists(dist_matrix_path):
@@ -124,48 +121,39 @@ def solve_vrp(
         return int(matrix_dist[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
 
     transit_time_callback_index = routing.RegisterTransitCallback(time_callback)
-    
+
     if optimization_target == "distance":
         transit_dist_callback_index = routing.RegisterTransitCallback(dist_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_dist_callback_index)
     else:
         routing.SetArcCostEvaluatorOfAllVehicles(transit_time_callback_index)
 
-    # Dimension TEMPS (Max 4h par traîneau par défaut)
     routing.AddDimension(transit_time_callback_index, int(time_slack_s), int(max_route_time_s), False, 'Time')
     time_dimension = routing.GetDimensionOrDie('Time')
     if global_span_cost and int(global_span_cost) > 0:
         time_dimension.SetGlobalSpanCostCoefficient(int(global_span_cost))
 
-    # Ajout des fenêtres de temps (Time Windows)
     if 'tw_start' in df.columns and 'tw_end' in df.columns:
         print("Application des Time Windows (VRPTW)...")
         for i in range(num_locations):
             index = manager.NodeToIndex(i)
-            tw_start = int(df.iloc[i]['tw_start'])
-            tw_end = int(df.iloc[i]['tw_end'])
-            time_dimension.CumulVar(index).SetRange(tw_start, tw_end)
-            
-        # Contrainte de retour au dépôt (tous les traîneaux doivent rentrer avant tw_end du dépôt)
+            time_dimension.CumulVar(index).SetRange(int(df.iloc[i]['tw_start']), int(df.iloc[i]['tw_end']))
         for vehicle_id in range(num_vehicles):
             index = routing.End(vehicle_id)
-            depot_end = int(df.iloc[0]['tw_end'])
-            time_dimension.CumulVar(index).SetRange(0, depot_end)
+            time_dimension.CumulVar(index).SetRange(0, int(df.iloc[0]['tw_end']))
 
-    # Dimension CAPACITÉ
     demands = df['poids_colis'].astype(int).tolist()
+
     def demand_callback(from_index):
         return int(demands[manager.IndexToNode(from_index)])
-    
-    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-    routing.AddDimensionWithVehicleCapacity(demand_callback_index, 0, [vehicle_capacity]*num_vehicles, True, 'Capacity')
 
-    # Coût fixe par véhicule utilisé — OR-Tools minimise naturellement la flotte
+    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+    routing.AddDimensionWithVehicleCapacity(demand_callback_index, 0, [vehicle_capacity] * num_vehicles, True, 'Capacity')
+
     if vehicle_fixed_cost and int(vehicle_fixed_cost) > 0:
         for v in range(num_vehicles):
             routing.SetFixedCostOfVehicle(int(vehicle_fixed_cost), v)
 
-    # Pénalités pour livraison totale
     penalty = int(drop_penalty)
     for i in range(1, num_locations):
         routing.AddDisjunction([manager.NodeToIndex(i)], penalty)
@@ -184,9 +172,7 @@ def solve_vrp(
 
     print("Recherche de la solution optimale...")
 
-    # Warm-start : si des routes humaines sont fournies, on les passe comme
-    # solution initiale. OR-Tools part d'un point déjà "bon" et explore mieux
-    # dans le temps imparti plutôt que de reconstruire depuis zéro.
+    # Warm-start depuis la solution humaine si fournie
     solution = None
     if initial_routes:
         id_to_idx = {int(df.iloc[i]['id']): i for i in range(num_locations)}
@@ -197,16 +183,15 @@ def solve_vrp(
             routes_list.append(route_indices)
         init_assignment = routing.ReadAssignmentFromRoutes(routes_list, True)
         if init_assignment:
-            print(f"Warm-start : {sum(len(r) for r in routes_list)} clients pré-affectés depuis la solution humaine.")
+            print(f"Warm-start : {sum(len(r) for r in routes_list)} clients pré-affectés.")
             solution = routing.SolveFromAssignmentWithParameters(init_assignment, search_parameters)
         else:
-            print("Warm-start ignoré (assignation invalide), repli sur démarrage à froid.")
+            print("Warm-start ignoré, repli sur démarrage à froid.")
 
     if solution is None:
         solution = routing.SolveWithParameters(search_parameters)
 
     if solution:
-        # Extraction des tournées brutes : {vehicle_id: [client_node_indices]}
         tours_raw: dict[int, list[int]] = {}
         for vehicle_id in range(num_vehicles):
             index = routing.Start(vehicle_id)
@@ -218,7 +203,6 @@ def solve_vrp(
                 index = solution.Value(routing.NextVar(index))
             tours_raw[vehicle_id] = clients
 
-        # Post-traitement local : 2-opt intra-route + or-opt inter-routes (capacité vérifiée)
         node_demands = {i: float(df.iloc[i]["poids_colis"]) for i in range(num_locations)}
         improved_tours = _postprocess_vrp_tours(
             tours_raw, matrix_time,
@@ -245,13 +229,11 @@ def _postprocess_vrp_tours(
     vehicle_capacity: float | None = None,
 ) -> dict:
     """
-    Applique 2-opt intra-route puis or-opt inter-routes (avec garde capacité) aux tournées OR-Tools.
+    Pipeline post-traitement : ALNS (grands voisinages) → ILS (raffinement fin).
 
-    tours_raw        : {vehicle_id_int: [client_node_index, ...]}  — sans dépôt
-    demands          : {node_index: poids_kg} pour la vérification de capacité or-opt
-    vehicle_capacity : capacité max par véhicule (kg)
-    Retourne         : même structure avec routes améliorées.
-    Repli silencieux sur tours_raw en cas d'erreur.
+    ALNS (Ropke & Pisinger 2006) : destroy random/worst/related × repair greedy/regret-2,
+    sélection adaptive par roulette, acceptation recuit simulé.
+    ILS : double-bridge + 3-opt → or-opt → 2-opt* × 20 itérations.
     """
     try:
         import sys as _sys
@@ -263,7 +245,7 @@ def _postprocess_vrp_tours(
         if not routes:
             return tours_raw
 
-        # ── Phase 1 : ALNS (grands voisinages, exploration large) ────────────
+        # Phase 1 : ALNS
         alns = ro_improvements.adaptive_large_neighborhood_search(
             routes, matrix_time, depot_id=0,
             capacity=vehicle_capacity,
@@ -272,12 +254,12 @@ def _postprocess_vrp_tours(
         alns_best = {sid: d["optimized_route"] for sid, d in alns["sleighs"].items()}
         print(
             f"ALNS : {alns['total_improvement_pct']}% gain "
-            f"({alns['improvements_accepted']} nouveaux best sur {alns['iterations_run']} iter) "
-            f"| opérateurs dominant : destroy={max(alns['operator_scores']['destroy'], key=alns['operator_scores']['destroy'].get)} "
+            f"({alns['improvements_accepted']} nouveaux best / {alns['iterations_run']} iter) "
+            f"| destroy={max(alns['operator_scores']['destroy'], key=alns['operator_scores']['destroy'].get)} "
             f"repair={max(alns['operator_scores']['repair'], key=alns['operator_scores']['repair'].get)}"
         )
 
-        # ── Phase 2 : ILS sur la meilleure solution ALNS (raffinement fin) ──
+        # Phase 2 : ILS (raffinement)
         ils = ro_improvements.iterated_local_search(
             alns_best, matrix_time, depot_id=0,
             n_iterations=20,
@@ -291,7 +273,7 @@ def _postprocess_vrp_tours(
         )
         return {int(k): v for k, v in improved.items()}
     except Exception as exc:
-        print(f"⚠️ Post-traitement local ignoré : {exc}")
+        print(f"⚠️ Post-traitement ignoré : {exc}")
         return tours_raw
 
 
@@ -306,7 +288,6 @@ def save_solution(
     total_weight = 0
     all_tours = []
 
-    # id → poids lookup pour recalcul des charges sur routes améliorées
     id_to_weight = {int(df.iloc[i]['id']): float(df.iloc[i]['poids_colis']) for i in range(len(df))}
 
     for vehicle_id in range(num_vehicles):
@@ -325,16 +306,13 @@ def save_solution(
         if len(tour_ids) <= 2:
             continue
 
-        # Remplace par la tournée post-traitée si disponible
         if improved_tours and vehicle_id in improved_tours and improved_tours[vehicle_id] and matrix_time is not None:
             clients = improved_tours[vehicle_id]
-            # Recompute travel time (pure transit, no waiting)
             route_time = float(matrix_time[0][clients[0]])
             for i in range(len(clients) - 1):
                 route_time += float(matrix_time[clients[i]][clients[i + 1]])
             route_time += float(matrix_time[clients[-1]][0])
             route_time = int(route_time)
-            # Rebuild route_ids [depot, c1, ..., cn, depot]
             tour_ids = [0] + clients + [0]
             route_load = sum(id_to_weight.get(c, 0.0) for c in clients)
 
@@ -363,6 +341,7 @@ def save_solution(
         json.dump(result, f, indent=4, cls=NpEncoder)
     print(f"Optimisation terminée. Résultats dans {output_path}")
     return result
+
 
 if __name__ == "__main__":
     solve_vrp()

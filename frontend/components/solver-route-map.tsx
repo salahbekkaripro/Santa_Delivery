@@ -18,7 +18,7 @@ const SPEEDS = [
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type Waypoint = { lat: number; lon: number; tAbs: number };
-type StopPoint = { clientId: number; arrivalTime: number; lat: number; lon: number };
+type StopPoint = { clientId: number; clientName: string; arrivalTime: number; lat: number; lon: number };
 
 type SleighRoute = {
   vehicleId: number;
@@ -32,7 +32,12 @@ type Props = {
   depot: ClientPoint;
   clients: ClientPoint[];
   segments: RouteSegment[];
+  incidentSegments?: RouteSegment[];
+  autoPlayToken?: number;
   tours: Array<{ vehicle_id: number; route_ids: number[]; duration_s: number; weight_kg: number }>;
+  centralityNodes?: Array<{ node: number; score: number; lat: number; lon: number }>;
+  onBlockSegment?: (segment: RouteSegment) => void;
+  blockBusy?: boolean;
 };
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
@@ -131,12 +136,16 @@ function AnimatedLayer({ routes, playing, speed, externalTime, maxTime, onProgre
 
   // Create / recreate Leaflet objects when routes change
   useEffect(() => {
-    markersRef.current.forEach(m => m.remove());
-    trailsRef.current.forEach(p => p.remove());
-    glowsRef.current.forEach(p => p.remove());
-    markersRef.current.clear();
-    trailsRef.current.clear();
-    glowsRef.current.clear();
+    const markers = markersRef.current;
+    const trails = trailsRef.current;
+    const glows = glowsRef.current;
+
+    markers.forEach(m => m.remove());
+    trails.forEach(p => p.remove());
+    glows.forEach(p => p.remove());
+    markers.clear();
+    trails.clear();
+    glows.clear();
 
     for (const r of routes) {
       if (!r.waypoints.length) continue;
@@ -154,15 +163,15 @@ function AnimatedLayer({ routes, playing, speed, externalTime, maxTime, onProgre
         zIndexOffset: 1000,
       }).addTo(map);
 
-      markersRef.current.set(r.vehicleId, marker);
-      trailsRef.current.set(r.vehicleId, trail);
-      glowsRef.current.set(r.vehicleId, glow);
+      markers.set(r.vehicleId, marker);
+      trails.set(r.vehicleId, trail);
+      glows.set(r.vehicleId, glow);
     }
 
     return () => {
-      markersRef.current.forEach(m => m.remove());
-      trailsRef.current.forEach(p => p.remove());
-      glowsRef.current.forEach(p => p.remove());
+      markers.forEach(m => m.remove());
+      trails.forEach(p => p.remove());
+      glows.forEach(p => p.remove());
     };
   }, [map, routes]);
 
@@ -236,14 +245,34 @@ function fmtTime(s: number) {
   return `${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
+function centralityToColor(value: number) {
+  const t = Math.max(0, Math.min(1, value));
+  const r = Math.round(35 + t * 220);
+  const g = Math.round(95 + (1 - t) * 80);
+  const b = Math.round(220 - t * 170);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function SolverRouteMap({ depot, clients, segments, tours }: Props) {
+export default function SolverRouteMap({
+  depot,
+  clients,
+  segments,
+  incidentSegments = [],
+  autoPlayToken = 0,
+  tours,
+  centralityNodes = [],
+  onBlockSegment,
+  blockBusy = false,
+}: Props) {
   const center: [number, number] = [depot.lat, depot.lon];
 
   const [playing, setPlaying]   = useState(false);
   const [speed, setSpeed]       = useState(120);
   const [simulTime, setSimulTime] = useState(0);
+  const [incidentPulse, setIncidentPulse] = useState(false);
+  const [overlayCentrality, setOverlayCentrality] = useState(true);
 
   const clientById = useMemo(() => {
     const m = new Map<number, ClientPoint>();
@@ -252,11 +281,40 @@ export default function SolverRouteMap({ depot, clients, segments, tours }: Prop
     return m;
   }, [depot, clients]);
 
+  const aiSegments = useMemo(() => segments.filter((segment) => segment.variant === "ai"), [segments]);
+
+  const centralityByNode = useMemo(() => {
+    const mapping = new Map<number, number>();
+    for (const item of centralityNodes) {
+      mapping.set(Number(item.node), Number(item.score) || 0);
+    }
+    return mapping;
+  }, [centralityNodes]);
+
+  const maxCentrality = useMemo(() => {
+    let maxValue = 0;
+    for (const value of centralityByNode.values()) {
+      if (value > maxValue) maxValue = value;
+    }
+    return maxValue > 0 ? maxValue : 1;
+  }, [centralityByNode]);
+
+  const segmentCentrality = useMemo(() => {
+    return aiSegments.map((segment) => {
+      const routeNodes = segment.route_nodes ?? [];
+      let score = 0;
+      for (const nodeId of routeNodes) {
+        const nodeScore = centralityByNode.get(Number(nodeId)) ?? 0;
+        if (nodeScore > score) score = nodeScore;
+      }
+      return maxCentrality > 0 ? score / maxCentrality : 0;
+    });
+  }, [aiSegments, centralityByNode, maxCentrality]);
+
   // Build per-sleigh route data from segments
   const sleighRoutes = useMemo((): SleighRoute[] => {
-    const aiSegs = segments.filter(s => s.variant === "ai");
     const byVehicle = new Map<number, RouteSegment[]>();
-    for (const seg of aiSegs) {
+    for (const seg of aiSegments) {
       const arr = byVehicle.get(seg.sleigh_id) ?? [];
       arr.push(seg);
       byVehicle.set(seg.sleigh_id, arr);
@@ -282,14 +340,22 @@ export default function SolverRouteMap({ depot, clients, segments, tours }: Prop
 
         if (seg.to_id !== depot.id && seg.arrival_eta_s != null) {
           const c = clientById.get(seg.to_id);
-          if (c) stops.push({ clientId: seg.to_id, arrivalTime: seg.arrival_eta_s, lat: c.lat, lon: c.lon });
+          if (c) {
+            stops.push({
+              clientId: seg.to_id,
+              clientName: c.nom_client || `Client ${seg.to_id}`,
+              arrivalTime: seg.arrival_eta_s,
+              lat: c.lat,
+              lon: c.lon,
+            });
+          }
         }
       }
 
       const totalTime = waypoints.length ? waypoints[waypoints.length - 1].tAbs : 0;
       return { vehicleId: vid, color, waypoints, totalTime, stops };
     });
-  }, [segments, depot.id, clientById]);
+  }, [aiSegments, depot.id, clientById]);
 
   const maxSimulTime = useMemo(
     () => Math.max(1, ...sleighRoutes.map(r => r.totalTime)),
@@ -302,6 +368,23 @@ export default function SolverRouteMap({ depot, clients, segments, tours }: Prop
   }, [maxSimulTime]);
 
   const progressPct = maxSimulTime > 0 ? (simulTime / maxSimulTime) * 100 : 0;
+  const incidentSignature = useMemo(
+    () => incidentSegments.map((seg) => `${seg.from_id}-${seg.to_id}-${(seg.route_nodes ?? []).join(",")}`).join("|"),
+    [incidentSegments]
+  );
+
+  useEffect(() => {
+    if (!incidentSignature) return;
+    setIncidentPulse(true);
+    const id = window.setTimeout(() => setIncidentPulse(false), 4200);
+    return () => window.clearTimeout(id);
+  }, [incidentSignature]);
+
+  useEffect(() => {
+    if (autoPlayToken <= 0) return;
+    setSimulTime(0);
+    setPlaying(true);
+  }, [autoPlayToken]);
 
   function handlePlayPause() {
     if (simulTime >= maxSimulTime) setSimulTime(0);
@@ -320,6 +403,50 @@ export default function SolverRouteMap({ depot, clients, segments, tours }: Prop
             maxZoom={19}
           />
 
+          {/* Centrality overlay (blue -> red) */}
+          {overlayCentrality ? aiSegments.map((segment, index) => {
+            const intensity = segmentCentrality[index] ?? 0;
+            const color = centralityToColor(intensity);
+            return (
+              <Polyline
+                key={`centrality-${index}-${segment.from_id}-${segment.to_id}`}
+                positions={segment.geometry}
+                pathOptions={{
+                  color,
+                  weight: 6,
+                  opacity: 0.78,
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+              >
+                <Tooltip>
+                  Centralité {Math.round(intensity * 100)}% · #{segment.from_id} → #{segment.to_id}
+                </Tooltip>
+              </Polyline>
+            );
+          }) : null}
+
+          {/* Click layer for manual block / incident */}
+          {aiSegments.map((segment, index) => (
+            <Polyline
+              key={`block-hit-${index}-${segment.from_id}-${segment.to_id}`}
+              positions={segment.geometry}
+              pathOptions={{
+                color: "#ffffff",
+                weight: 16,
+                opacity: 0.01,
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+              eventHandlers={{
+                click: () => {
+                  if (!onBlockSegment || blockBusy) return;
+                  onBlockSegment(segment);
+                },
+              }}
+            />
+          ))}
+
           {/* Ghost routes (full path, faded dashed) */}
           {sleighRoutes.map(r =>
             r.waypoints.length > 1 ? (
@@ -330,6 +457,39 @@ export default function SolverRouteMap({ depot, clients, segments, tours }: Prop
               />
             ) : null
           )}
+
+          {/* Incident overlays */}
+          {incidentSegments.map((segment, index) => (
+            <Polyline
+              key={`incident-glow-${index}-${segment.from_id}-${segment.to_id}`}
+              positions={segment.geometry}
+              pathOptions={{
+                color: "#ff4d4f",
+                weight: incidentPulse ? 12 : 8,
+                opacity: incidentPulse ? 0.42 : 0.28,
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            />
+          ))}
+          {incidentSegments.map((segment, index) => (
+            <Polyline
+              key={`incident-core-${index}-${segment.from_id}-${segment.to_id}`}
+              positions={segment.geometry}
+              pathOptions={{
+                color: "#ff4d4f",
+                weight: incidentPulse ? 5 : 4,
+                opacity: 0.96,
+                dashArray: incidentPulse ? "8 6" : "6 6",
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            >
+              <Tooltip>
+                {segment.title || `Incident #${segment.from_id} → #${segment.to_id}`}
+              </Tooltip>
+            </Polyline>
+          ))}
 
           {/* Stop markers — light up when visited */}
           {sleighRoutes.flatMap(r =>
@@ -348,7 +508,9 @@ export default function SolverRouteMap({ depot, clients, segments, tours }: Prop
                   }}
                 >
                   <Tooltip>
-                    Stop #{i + 1} · Traîneau {r.vehicleId + 1}
+                    Stop #{i + 1} · Traîneau {r.vehicleId + 1} · Client #{stop.clientId}
+                    <br />
+                    {stop.clientName}
                     {visited ? ` · ✓ ${fmtTime(stop.arrivalTime)}` : ""}
                   </Tooltip>
                 </CircleMarker>
@@ -420,6 +582,32 @@ export default function SolverRouteMap({ depot, clients, segments, tours }: Prop
           <div style={{ fontFamily: "monospace", fontSize: "1.2rem", fontWeight: 800, color: "#fff", letterSpacing: "0.06em" }}>
             {fmtTime(simulTime)}
           </div>
+        </div>
+
+        <div style={{
+          position: "absolute", top: 86, left: 12, zIndex: 1000,
+          background: "rgba(10,22,34,0.82)", backdropFilter: "blur(10px)",
+          borderRadius: 10, padding: "8px 10px", border: "1px solid rgba(255,255,255,0.08)",
+          display: "flex", flexDirection: "column", gap: 6,
+        }}>
+          <button
+            onClick={() => setOverlayCentrality((prev) => !prev)}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.18)",
+              background: overlayCentrality ? "rgba(26,111,181,0.35)" : "transparent",
+              color: "#fff",
+              fontSize: "0.74rem",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {overlayCentrality ? "Overlay Graphe: ON" : "Overlay Graphe: OFF"}
+          </button>
+          <span style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.56)" }}>
+            Clique une rue pour bloquer et relancer.
+          </span>
         </div>
       </div>
 

@@ -24,6 +24,7 @@ class MissionPaths:
     incidents_file: Path
     mission_file: Path
     human_state_file: Path
+    elevation_file: Path
 
     def as_str_dict(self) -> dict[str, str]:
         return {key: str(value) for key, value in asdict(self).items()}
@@ -54,6 +55,7 @@ def build_paths(base_dir: str | Path) -> MissionPaths:
         incidents_file=core_data_dir / "incidents.json",
         mission_file=root_dir / "mission.json",
         human_state_file=root_dir / "human_state.json",
+        elevation_file=core_data_dir / "elevation.json",
     )
 
 
