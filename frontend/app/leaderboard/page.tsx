@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getLeaderboard, getVersusLeaderboard, getVersusPlayerStats } from "@/lib/api";
+import { usePlayer } from "@/components/player-provider";
 import { LeaderboardEntry, VersusLeaderboardEntry, VersusPlayerStatsEntry } from "@/lib/types";
 import { ruleLabel } from "@/lib/versus";
 
@@ -21,6 +22,7 @@ function formatAverageTime(seconds?: number | null) {
 }
 
 export default function LeaderboardPage() {
+  const { player } = usePlayer();
   const [mode, setMode] = useState<"solo" | "versus">("solo");
 
   useEffect(() => {
@@ -94,14 +96,11 @@ export default function LeaderboardPage() {
                   <span className="hero-badge">{versusEntries.length} duel{versusEntries.length !== 1 ? "s" : ""} enregistré{versusEntries.length !== 1 ? "s" : ""}</span>
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <Link className="secondary-button lb-back-link" href="/leaderboard">
-                  Solo
-                </Link>
-                <Link className="secondary-button lb-back-link" href="/">
-                  ← Accueil
-                </Link>
-              </div>
+              <Link className="secondary-button lb-back-link" href="/">← Accueil</Link>
+            </div>
+            <div className="lb-tabs">
+              <button className="lb-tab" onClick={() => setMode("solo")}>🏆 Solo</button>
+              <button className="lb-tab lb-tab--active">⚔️ Versus</button>
             </div>
           </section>
 
@@ -128,22 +127,25 @@ export default function LeaderboardPage() {
               <span className="muted">Aucune statistique joueur disponible pour le moment.</span>
             ) : (
               <div className="lb-list">
-                {versusPlayerStats.map((entry: VersusPlayerStatsEntry, index: number) => (
-                  <div key={`${entry.player_id}-${index}`} className="lb-row">
-                    <span className="lb-rank">#{index + 1}</span>
-                    <span className="lb-row-avatar">{entry.avatar ?? "🎅"}</span>
-                    <div className="lb-row-meta">
-                      <div className="lb-row-name">{entry.display_name ?? entry.player_id}</div>
-                      <div className="lb-zone">
-                        Winrate {entry.winrate_pct.toFixed(1)}% · {entry.wins}V-{entry.losses}D · {entry.matches_played} match{entry.matches_played !== 1 ? "s" : ""}
+                {versusPlayerStats.map((entry: VersusPlayerStatsEntry, index: number) => {
+                  const isMe = player && (entry.player_id === player.id || entry.display_name === player.display_name);
+                  return (
+                    <div key={`${entry.player_id}-${index}`} className={`lb-row ${isMe ? "lb-row--me" : ""} reveal-lift reveal-delay-${Math.min(index + 1, 6)}`}>
+                      <span className="lb-rank">{index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `#${index + 1}`}</span>
+                      <span className="lb-row-avatar">{entry.avatar ?? "🎅"}</span>
+                      <div className="lb-row-meta">
+                        <div className="lb-row-name">{entry.display_name ?? entry.player_id}{isMe && <span className="lb-me-badge">Moi</span>}</div>
+                        <div className="lb-zone">
+                          Winrate {entry.winrate_pct.toFixed(1)}% · {entry.wins}V-{entry.losses}D · {entry.matches_played} match{entry.matches_played !== 1 ? "s" : ""}
+                        </div>
+                        <div className="lb-callsign">
+                          Règle favorite: {ruleLabel(entry.favorite_rule)} · Temps moyen: {formatAverageTime(entry.average_time_s)}
+                        </div>
                       </div>
-                      <div className="lb-callsign">
-                        Règle favorite: {ruleLabel(entry.favorite_rule)} · Temps moyen: {formatAverageTime(entry.average_time_s)}
-                      </div>
+                      <span className="lb-score">{entry.winrate_pct.toFixed(1)}%</span>
                     </div>
-                    <span className="lb-score">{entry.winrate_pct.toFixed(1)}%</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
@@ -192,18 +194,17 @@ export default function LeaderboardPage() {
         <section className="hero">
           <div className="lb-hero-head">
             <div>
-                <h1>🏆 Le Panthéon Solo</h1>
+              <h1>🏆 Le Panthéon Solo</h1>
               <div className="hero-badges lb-hero-badges">
                 <span className="hero-badge">❄️ Meilleurs agents de livraison</span>
                 <span className="hero-badge">{soloEntries.length} score{soloEntries.length !== 1 ? "s" : ""} enregistré{soloEntries.length !== 1 ? "s" : ""}</span>
               </div>
             </div>
-            <Link className="secondary-button lb-back-link" href="/">
-              ← Retour à l&apos;accueil
-            </Link>
-            <Link className="secondary-button lb-back-link" href="/leaderboard?mode=versus">
-              Voir le versus
-            </Link>
+            <Link className="secondary-button lb-back-link" href="/">← Accueil</Link>
+          </div>
+          <div className="lb-tabs">
+            <button className="lb-tab lb-tab--active">🏆 Solo</button>
+            <button className="lb-tab" onClick={() => setMode("versus")}>⚔️ Versus</button>
           </div>
         </section>
 
@@ -230,7 +231,7 @@ export default function LeaderboardPage() {
             <div className="lb-podium">
               {/* 2e place à gauche */}
               {podium[1] ? (
-                <div className={`lb-podium-card ${podiumClass[1]}`}>
+                <div className={`lb-podium-card ${podiumClass[1]} reveal-lift reveal-delay-2`}>
                   <span className="lb-medal">{medals[1]}</span>
                   <span className="lb-podium-avatar">{podium[1].avatar ?? "🎅"}</span>
                   <span className="lb-podium-name">{podium[1].player_name}</span>
@@ -241,7 +242,7 @@ export default function LeaderboardPage() {
               ) : <div />}
 
               {/* 1ère place au centre */}
-              <div className={`lb-podium-card ${podiumClass[0]}`}>
+              <div className={`lb-podium-card ${podiumClass[0]} reveal-lift reveal-delay-1`}>
                 <span className="lb-medal">{medals[0]}</span>
                 <span className="lb-podium-avatar">{podium[0].avatar ?? "🎅"}</span>
                 <span className="lb-podium-name">{podium[0].player_name}</span>
@@ -252,7 +253,7 @@ export default function LeaderboardPage() {
 
               {/* 3e place à droite */}
               {podium[2] ? (
-                <div className={`lb-podium-card ${podiumClass[2]}`}>
+                <div className={`lb-podium-card ${podiumClass[2]} reveal-lift reveal-delay-3`}>
                   <span className="lb-medal">{medals[2]}</span>
                   <span className="lb-podium-avatar">{podium[2].avatar ?? "🎅"}</span>
                   <span className="lb-podium-name">{podium[2].player_name}</span>
@@ -270,18 +271,21 @@ export default function LeaderboardPage() {
           <section className="panel stack">
             <strong>Classement général</strong>
             <div className="lb-list">
-              {rest.map((entry: LeaderboardEntry, i: number) => (
-                <div key={`${entry.mission_id}-${i}`} className="lb-row">
-                  <span className="lb-rank">#{i + 4}</span>
-                  <span className="lb-row-avatar">{entry.avatar ?? "🎅"}</span>
-                  <div className="lb-row-meta">
-                    <div className="lb-row-name">{entry.player_name}</div>
-                    {entry.callsign && <div className="lb-callsign">{entry.callsign}</div>}
-                    <div className="lb-zone">{entry.zone} · {new Date(entry.created_at).toLocaleDateString("fr-FR")}</div>
+              {rest.map((entry: LeaderboardEntry, i: number) => {
+                const isMe = player && entry.player_name === player.display_name;
+                return (
+                  <div key={`${entry.mission_id}-${i}`} className={`lb-row ${isMe ? "lb-row--me" : ""} reveal-lift reveal-delay-${Math.min(i + 1, 6)}`}>
+                    <span className="lb-rank">#{i + 4}</span>
+                    <span className="lb-row-avatar">{entry.avatar ?? "🎅"}</span>
+                    <div className="lb-row-meta">
+                      <div className="lb-row-name">{entry.player_name}{isMe && <span className="lb-me-badge">Moi</span>}</div>
+                      {entry.callsign && <div className="lb-callsign">{entry.callsign}</div>}
+                      <div className="lb-zone">{entry.zone} · {new Date(entry.created_at).toLocaleDateString("fr-FR")}</div>
+                    </div>
+                    <span className="lb-score">{entry.score}/100</span>
                   </div>
-                  <span className="lb-score">{entry.score}/100</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         )}

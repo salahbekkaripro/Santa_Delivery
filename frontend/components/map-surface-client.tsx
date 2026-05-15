@@ -21,8 +21,17 @@ type Props = {
   aiSegments?: RouteSegment[];
   returnSegments?: RouteSegment[];
   incidentSegments?: RouteSegment[];
-  previewOptions?: Array<{ geometry: [number, number][]; label?: string; dist_m?: number; time_s?: number }>;
+  previewOptions?: Array<{
+    geometry: [number, number][];
+    label?: string;
+    dist_m?: number;
+    time_s?: number;
+    is_feasible?: boolean;
+    feasibility_badges?: string[];
+    route_key?: string;
+  }>;
   selectedPreviewIndex?: number;
+  onPreviewRouteConfirm?: (optionIndex: number) => void;
   assignedClientIds?: number[];
   humanStopMetaByClient?: Record<number, { sleigh_id: number; stop_order: number; arrival_eta_s: number; arrival_clock: string }>;
   onClientSelect?: (clientId: number) => void;
@@ -49,14 +58,14 @@ function formatDistance(meters?: number) {
 }
 
 const santaIcon = L.divIcon({
-  html: '<div style="font-size: 24px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3))">🎅</div>',
+  html: '<div class="map-sleigh-avatar map-sleigh-avatar-human">🛷</div>',
   className: "custom-div-icon",
   iconSize: [30, 30],
   iconAnchor: [15, 15]
 });
 
 const robotIcon = L.divIcon({
-  html: '<div style="font-size: 24px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3))">🤖</div>',
+  html: '<div class="map-sleigh-avatar map-sleigh-avatar-ai">🤖</div>',
   className: "custom-div-icon",
   iconSize: [30, 30],
   iconAnchor: [15, 15]
@@ -107,6 +116,7 @@ export default function MapSurfaceClient({
   incidentSegments = [],
   previewOptions = [],
   selectedPreviewIndex = 0,
+  onPreviewRouteConfirm,
   assignedClientIds = [],
   humanStopMetaByClient = {},
   onClientSelect,
@@ -197,14 +207,31 @@ export default function MapSurfaceClient({
         <Pane name="ai" style={{ zIndex: 420 }} />
         <Pane name="human" style={{ zIndex: 430 }} />
         <Pane name="points" style={{ zIndex: 460 }} />
+        <Pane name="preview" style={{ zIndex: 480 }} />
 
         {showAi &&
           aiSegments.map((segment, index) => (
             <Polyline
               key={segmentKey(segment, index)}
               positions={segment.geometry}
-              pathOptions={{ color: "#143c5a", weight: 5, opacity: 0.3 }}
+              pathOptions={{ color: "#143c5a", weight: 5, opacity: 0.72 }}
               pane="ai"
+              eventHandlers={{
+                add: (e) => {
+                  const path = (e.target as any)._path as SVGPathElement | undefined;
+                  if (!path) return;
+                  try {
+                    const len = path.getTotalLength();
+                    path.style.strokeDasharray = `${len}`;
+                    path.style.strokeDashoffset = `${len}`;
+                    const delay = Math.min(index * 40, 600);
+                    path.style.transition = `stroke-dashoffset 0.55s ${delay}ms cubic-bezier(0.4,0,0.2,1)`;
+                    requestAnimationFrame(() => { path.style.strokeDashoffset = "0"; });
+                  } catch {
+                    // skip
+                  }
+                },
+              }}
             />
           ))}
 
@@ -213,8 +240,23 @@ export default function MapSurfaceClient({
             <Polyline
               key={segmentKey(segment, index)}
               positions={segment.geometry}
-              pathOptions={{ color: "#9e2f3f", weight: 6, opacity: 0.3, dashArray: "8 10" }}
+              pathOptions={{ color: "#9e2f3f", weight: 6, opacity: 0.85, dashArray: "8 10" }}
               pane="human"
+              eventHandlers={{
+                add: (e) => {
+                  const path = (e.target as any)._path as SVGPathElement | undefined;
+                  if (!path) return;
+                  try {
+                    const len = path.getTotalLength();
+                    path.style.strokeDasharray = `${len}`;
+                    path.style.strokeDashoffset = `${len}`;
+                    path.style.transition = "stroke-dashoffset 0.65s cubic-bezier(0.4,0,0.2,1)";
+                    requestAnimationFrame(() => { path.style.strokeDashoffset = "0"; });
+                  } catch {
+                    // getTotalLength not available in some contexts — skip silently
+                  }
+                },
+              }}
             />
           ))}
 
@@ -228,17 +270,25 @@ export default function MapSurfaceClient({
 
         {previewOptions.map((option, index) => {
           const isSelected = index === selectedPreviewIndex;
+          const isFeasible = option.is_feasible !== false;
           return (
             <Polyline
               key={`preview-${index}`}
               positions={option.geometry}
               pathOptions={{
-                color: isSelected ? "#b8892f" : "#6b7280",
+                color: isFeasible ? (isSelected ? "#b8892f" : "#6b7280") : "#9e2f3f",
                 weight: isSelected ? 7 : 4,
-                opacity: isSelected ? 0.9 : 0.35,
-                dashArray: isSelected ? undefined : "6 10"
+                opacity: isSelected ? 0.9 : (isFeasible ? 0.35 : 0.55),
+                dashArray: isSelected ? undefined : (isFeasible ? "6 10" : "4 8")
               }}
-              pane="human"
+              className={`preview-option-line ${isFeasible ? "preview-option-feasible" : "preview-option-infeasible"}`}
+              pane="preview"
+              eventHandlers={{
+                click: (event) => {
+                  L.DomEvent.stopPropagation(event);
+                  onPreviewRouteConfirm?.(index);
+                }
+              }}
             >
               <Tooltip sticky>{option.label ?? `Option ${index + 1}`}</Tooltip>
               <Popup>
@@ -246,6 +296,11 @@ export default function MapSurfaceClient({
                   <strong>{option.label ?? `Option ${index + 1}`}</strong>
                   {option.time_s !== undefined ? <span>Temps: {formatMinutes(option.time_s)}</span> : null}
                   {option.dist_m !== undefined ? <span>Distance: {formatDistance(option.dist_m)}</span> : null}
+                  {option.is_feasible === false ? (
+                    <span style={{ color: "#69222d" }}>
+                      Non faisable{option.feasibility_badges?.length ? `: ${option.feasibility_badges.join(", ")}` : ""}
+                    </span>
+                  ) : null}
                 </div>
               </Popup>
             </Polyline>

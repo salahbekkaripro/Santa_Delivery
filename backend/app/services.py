@@ -42,6 +42,7 @@ from scripts.routing_payloads import (
     serialize_human_state,
     summarize_segments,
 )
+from scripts import ro_improvements
 from scripts.weather_engine import get_real_weather, get_simulated_weather
 
 
@@ -69,7 +70,7 @@ AI_PROFILE_PRESETS = {
         "optimization_target": "distance",
         "speed_multiplier_factor": 0.96,
         "solver_time_limit_s": 18,
-        "first_solution_strategy": "path_cheapest_arc",
+        "first_solution_strategy": "savings",
         "local_search_metaheuristic": "simulated_annealing",
         "time_slack_s": 3600,
         "max_route_time_s": 15600,
@@ -114,7 +115,7 @@ AI_PROFILE_PRESETS = {
         "optimization_target": "time",
         "speed_multiplier_factor": 1.18,
         "solver_time_limit_s": 10,
-        "first_solution_strategy": "path_cheapest_arc",
+        "first_solution_strategy": "parallel_cheapest_insertion",
         "local_search_metaheuristic": "guided_local_search",
         "time_slack_s": 1200,
         "max_route_time_s": 13800,
@@ -128,8 +129,8 @@ AI_PROFILE_PRESETS = {
         "difficulty_bonus": 8.0,
         "optimization_target": "time",
         "speed_multiplier_factor": 1.08,
-        "solver_time_limit_s": 30,
-        "first_solution_strategy": "parallel_cheapest_insertion",
+        "solver_time_limit_s": 35,
+        "first_solution_strategy": "savings",
         "local_search_metaheuristic": "guided_local_search",
         "time_slack_s": 3600,
         "max_route_time_s": 18000,
@@ -157,6 +158,40 @@ ORTOOLS_TUNER_FIELDS = (
     "drop_penalty",
     "global_span_cost",
 )
+RO_PORTFOLIO_PRESETS = {
+    "pca_gls_fast": {
+        "optimization_target": "time",
+        "first_solution_strategy": "path_cheapest_arc",
+        "local_search_metaheuristic": "guided_local_search",
+        "solver_time_limit_s": 12,
+        "time_slack_s": 3000,
+        "max_route_time_s": 15000,
+        "drop_penalty": 900_000,
+        "global_span_cost": 80,
+    },
+    "savings_tabu": {
+        "optimization_target": "time",
+        "first_solution_strategy": "savings",
+        "local_search_metaheuristic": "tabu_search",
+        "solver_time_limit_s": 22,
+        "time_slack_s": 3600,
+        "max_route_time_s": 15600,
+        "drop_penalty": 1_050_000,
+        "global_span_cost": 110,
+    },
+    "pca_gls_distance": {
+        "optimization_target": "distance",
+        "first_solution_strategy": "path_cheapest_arc",
+        "local_search_metaheuristic": "guided_local_search",
+        "solver_time_limit_s": 20,
+        "time_slack_s": 3600,
+        "max_route_time_s": 16000,
+        "drop_penalty": 1_000_000,
+        "global_span_cost": 100,
+    },
+}
+RO_PORTFOLIO_MAX_CANDIDATES = 4
+RO_PORTFOLIO_PROBE_OUTPUT_NAME = "_portfolio_probe_result.json"
 
 PASSWORD_HASH_ITERATIONS = 120_000
 PASSWORD_RESET_TTL_MINUTES = 30
@@ -173,6 +208,7 @@ _graph_cache: OrderedDict[tuple[str, int], object] = OrderedDict()
 _graph_cache_lock = Lock()
 DEFAULT_DEPARTURE_TIME_S = parse_clock_to_seconds(DEFAULT_DEPARTURE_TIME)
 VERSUS_FORFEIT_TIMEOUT_SECONDS = 300
+VERSUS_COUNTDOWN_SECONDS = 3
 VERSUS_WINNER_RULES = {"score_time", "time", "objectives"}
 VERSUS_MATCH_MODES = {"private", "queue", "invite"}
 VERSUS_MAP_SOURCES = {"template", "custom"}
@@ -258,6 +294,27 @@ def _validate_email(value: str) -> str:
     if "@" not in email or "." not in email.split("@")[-1]:
         raise ValueError("Adresse email invalide")
     return email
+
+
+def _normalize_oauth_provider(value: str | None) -> str:
+    provider = str(value or "").strip().lower()
+    if not provider:
+        raise ValueError("provider OAuth requis")
+    return provider
+
+
+def _oauth_player_id(provider: str, provider_account_id: str) -> str:
+    digest = hashlib.sha1(f"{provider}:{provider_account_id}".encode("utf-8")).hexdigest()[:16]
+    return f"oauth_{provider}_{digest}"
+
+
+def _sanitize_avatar_hint(value: str | None) -> str | None:
+    avatar = str(value or "").strip()
+    if not avatar:
+        return None
+    if len(avatar) <= 8:
+        return avatar
+    return None
 
 
 def _max_clients_for_radius(radius_km: float) -> int:
@@ -573,7 +630,10 @@ def _normalize_ai_profile(value: str | None) -> str:
 
 def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
     if not mission.get("ai_profile"):
+        import math as _math
         optimization_target = str(payload.get("optimization_target", "time"))
+        _nc = max(1, int(mission.get("num_clients", int(payload.get("num_vehicles", 3)) * 3)))
+        _max_v = min(_nc, max(1, _math.ceil(_nc / 3)))
         return {
             "profile": "adaptatif",
             "label": "Adaptative",
@@ -581,11 +641,12 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
             "description": "Réutilise les paramètres de mission sans biais de profil.",
             "difficulty_bonus": 0.0,
             "optimization_target": "distance" if optimization_target == "distance" else "time",
-            "num_vehicles": max(1, int(payload.get("num_vehicles", 3))),
+            "num_vehicles": _max_v,
+            "vehicle_fixed_cost": int(14400 * 0.15),
             "vehicle_capacity": max(1, int(payload.get("vehicle_capacity", 200))),
             "speed_multiplier": round(max(0.5, float(payload.get("speed_multiplier", 1.0))), 2),
-            "solver_time_limit_s": 20,
-            "first_solution_strategy": "path_cheapest_arc",
+            "solver_time_limit_s": 25,
+            "first_solution_strategy": "savings",
             "local_search_metaheuristic": "guided_local_search",
             "time_slack_s": 3600,
             "max_route_time_s": 14400,
@@ -596,7 +657,6 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
     profile_key = _normalize_ai_profile(mission.get("ai_profile"))
     preset = AI_PROFILE_PRESETS.get(profile_key, AI_PROFILE_PRESETS["express"])
     speed_multiplier = max(0.5, float(payload.get("speed_multiplier", 1.0)) * float(preset["speed_multiplier_factor"]))
-    num_vehicles = max(1, int(payload.get("num_vehicles", 3)))
     vehicle_capacity = max(1, int(payload.get("vehicle_capacity", 200)))
     optimization_target = str(preset.get("optimization_target") or payload.get("optimization_target", "time"))
 
@@ -607,6 +667,22 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
         time_slack_s += 1200
         max_route_time_s += 900
 
+    # Limite de temps adaptative : √(n/20) — petites missions résolues plus vite,
+    # grandes missions (>20 clients) bénéficient de plus de budget de recherche.
+    num_clients = max(1, int(mission.get("num_clients", 15)))
+    base_time_limit = int(preset["solver_time_limit_s"])
+    scale = (float(num_clients) / 20.0) ** 0.5
+    adaptive_time_limit = max(8, min(45, int(round(float(base_time_limit) * scale))))
+
+    # Plafond de véhicules dynamique : OR-Tools dispose de max_vehicles slots mais
+    # choisit librement combien en utiliser grâce au coût fixe par véhicule.
+    # Formule : ceil(n / 3) véhicules minimum, plafonné à min(n, 6).
+    import math as _math
+    max_vehicles = min(num_clients, max(1, _math.ceil(num_clients / 3)))
+    # Coût fixe = 15 % du temps max par route — rend chaque véhicule supplémentaire
+    # coûteux sauf si il réduit réellement le makespan.
+    vehicle_fixed_cost = int(max_route_time_s * 0.15)
+
     return {
         "profile": profile_key,
         "label": str(preset["label"]),
@@ -614,10 +690,11 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
         "description": str(preset["description"]),
         "difficulty_bonus": float(preset["difficulty_bonus"]),
         "optimization_target": "distance" if optimization_target == "distance" else "time",
-        "num_vehicles": num_vehicles,
+        "num_vehicles": max_vehicles,
+        "vehicle_fixed_cost": vehicle_fixed_cost,
         "vehicle_capacity": vehicle_capacity,
         "speed_multiplier": round(speed_multiplier, 2),
-        "solver_time_limit_s": int(preset["solver_time_limit_s"]),
+        "solver_time_limit_s": adaptive_time_limit,
         "first_solution_strategy": str(preset["first_solution_strategy"]),
         "local_search_metaheuristic": str(preset["local_search_metaheuristic"]),
         "time_slack_s": time_slack_s,
@@ -1208,6 +1285,125 @@ def _apply_ortools_tuning_policy(ai_strategy: dict, policy: dict) -> dict:
     return tuned
 
 
+def _context_complexity_multiplier(mission: dict) -> float:
+    multiplier = 1.0
+    num_clients = max(1, int(mission.get("num_clients", 1)))
+    client_bucket = _client_bucket(num_clients)
+    weather_bucket = _weather_bucket(str(mission.get("weather_key", "clear")))
+    density_bucket = _density_bucket(mission, num_clients)
+    budget_bucket = _budget_bucket(mission, num_clients)
+
+    if client_bucket == "medium":
+        multiplier += 0.20
+    elif client_bucket == "large":
+        multiplier += 0.45
+
+    if weather_bucket == "rainy":
+        multiplier += 0.10
+    elif weather_bucket == "snowy":
+        multiplier += 0.18
+    elif weather_bucket in {"stormy", "real"}:
+        multiplier += 0.28
+
+    if bool(mission.get("random_incidents", False)):
+        multiplier += 0.30
+    if density_bucket == "dense":
+        multiplier += 0.16
+    elif density_bucket == "urban":
+        multiplier += 0.08
+    if budget_bucket == "tight":
+        multiplier += 0.12
+    return max(0.8, multiplier)
+
+
+def _adapt_ai_strategy_budget(ai_strategy: dict, mission: dict, *, phase: str) -> tuple[dict, dict]:
+    tuned = dict(ai_strategy)
+    base_limit = max(6, int(tuned.get("solver_time_limit_s", 20)))
+    complexity = _context_complexity_multiplier(mission)
+
+    if phase == "probe":
+        probe_scale = min(0.72, 0.50 + 0.12 * max(0.0, complexity - 1.0))
+        tuned_limit = max(6, min(12, int(round(float(base_limit) * probe_scale))))
+        tuned["solver_time_limit_s"] = tuned_limit
+        return tuned, {
+            "phase": "probe",
+            "base_limit_s": base_limit,
+            "complexity_multiplier": round(complexity, 3),
+            "solver_time_limit_s": tuned_limit,
+        }
+
+    tuned_limit = max(8, min(45, int(round(float(base_limit) * complexity))))
+    tuned["solver_time_limit_s"] = tuned_limit
+    if tuned_limit > base_limit:
+        ratio = float(tuned_limit) / float(max(base_limit, 1))
+        time_slack_s = int(tuned.get("time_slack_s", 3600))
+        max_route_time_s = int(tuned.get("max_route_time_s", 14400))
+        tuned["time_slack_s"] = int(round(float(time_slack_s) * min(1.35, 1.0 + 0.22 * (ratio - 1.0))))
+        tuned["max_route_time_s"] = int(round(float(max_route_time_s) * min(1.30, 1.0 + 0.18 * (ratio - 1.0))))
+    return tuned, {
+        "phase": "final",
+        "base_limit_s": base_limit,
+        "complexity_multiplier": round(complexity, 3),
+        "solver_time_limit_s": tuned_limit,
+    }
+
+
+def _merge_ro_policy(strategy: dict, policy: dict, *, source: str) -> dict:
+    merged = _apply_ortools_tuning_policy(strategy, policy)
+    merged["ro_policy_source"] = source
+    return merged
+
+
+def _build_ro_portfolio_candidates(base_strategy: dict, ortools_tuning: dict | None = None) -> list[dict]:
+    candidates: list[dict] = []
+    seen_policy_ids: set[str] = set()
+
+    def append_candidate(candidate_id: str, strategy: dict, source: str) -> None:
+        policy = _extract_ortools_policy(strategy)
+        if not policy:
+            return
+        policy_id = _ortools_policy_id(policy)
+        if policy_id in seen_policy_ids:
+            return
+        seen_policy_ids.add(policy_id)
+        candidates.append(
+            {
+                "candidate_id": candidate_id,
+                "source": source,
+                "policy_id": policy_id,
+                "strategy": dict(strategy),
+            }
+        )
+
+    append_candidate("base", dict(base_strategy), "base")
+
+    top_candidates = ortools_tuning.get("top_candidates", []) if isinstance(ortools_tuning, dict) else []
+    for index, candidate in enumerate(top_candidates[:3], start=1):
+        policy = candidate.get("policy", {}) if isinstance(candidate, dict) else {}
+        if not isinstance(policy, dict) or not policy:
+            continue
+        append_candidate(
+            f"tuner_top_{index}",
+            _merge_ro_policy(base_strategy, policy, source=f"tuner_top_{index}"),
+            f"tuner_top_{index}",
+        )
+
+    preferred_presets = ["pca_gls_fast", "savings_tabu", "pca_gls_distance"]
+    target = str(base_strategy.get("optimization_target", "time"))
+    if target == "distance":
+        preferred_presets = ["pca_gls_distance", "pca_gls_fast", "savings_tabu"]
+    for preset_id in preferred_presets:
+        preset = RO_PORTFOLIO_PRESETS.get(preset_id)
+        if not preset:
+            continue
+        append_candidate(
+            f"preset_{preset_id}",
+            _merge_ro_policy(base_strategy, preset, source=f"preset_{preset_id}"),
+            f"preset_{preset_id}",
+        )
+
+    return candidates[:RO_PORTFOLIO_MAX_CANDIDATES]
+
 def get_ortools_tuner_recommendation(mission_id: str) -> dict:
     _, mission, _ = load_mission_bundle(mission_id)
     profile = _normalize_ai_profile(mission.get("ai_profile"))
@@ -1656,13 +1852,25 @@ def _evaluate_secondary_objectives(
 
 
 def _row_to_client(row) -> dict:
-    return {
+    d = {
         "id": int(row["id"]),
         "lat": float(row["lat"]),
         "lon": float(row["lon"]),
         "nom_client": str(row.get("nom_client", f"Client {int(row['id'])}")),
         "poids_colis": float(row.get("poids_colis", 0)),
     }
+    if "tw_start" in row and "tw_end" in row:
+        d["tw_start"] = float(row.get("tw_start", 0))
+        d["tw_end"] = float(row.get("tw_end", 28800))
+    # Cargo fields — present only on missions generated with the new generator
+    cargo_code = row.get("cargo_code")
+    if cargo_code and str(cargo_code) not in ("nan", "None", ""):
+        d["cargo_code"] = str(cargo_code)
+        d["cargo_label"] = str(row.get("cargo_label", ""))
+        d["cargo_emoji"] = str(row.get("cargo_emoji", "📦"))
+        constraint = row.get("cargo_constraint")
+        d["cargo_constraint"] = None if str(constraint) in ("nan", "None", "") else str(constraint)
+    return d
 
 
 def _serialize_state_with_stats(paths: MissionPaths, mission: dict, state) -> dict:
@@ -1757,6 +1965,7 @@ def create_mission(payload: dict) -> dict:
         center_lat=payload.get("center_lat"),
         center_lon=payload.get("center_lon"),
         search_radius_km=radius_km,
+        departure_hour=payload.get("departure_hour"),
     )
     if not success:
         raise ValueError(message or "Generation de zone impossible")
@@ -2248,12 +2457,117 @@ def _build_incident_matrix(paths: MissionPaths, mission: dict) -> str | None:
     return str(paths.incident_matrix_file)
 
 
+def _solve_vrp_from_strategy(
+    paths: MissionPaths,
+    mission: dict,
+    weather: dict,
+    incident_matrix_path: str | None,
+    ai_strategy: dict,
+    *,
+    output_path: str | Path | None = None,
+    human_routes: dict | None = None,
+) -> dict:
+    target_output_path = str(output_path or paths.results_file)
+    return solve_vrp(
+        num_vehicles=int(ai_strategy["num_vehicles"]),
+        vehicle_capacity=int(ai_strategy["vehicle_capacity"]),
+        speed_multiplier=float(ai_strategy["speed_multiplier"]),
+        forced_weather=weather,
+        incident_matrix_path=incident_matrix_path,
+        data_path=str(paths.data_file),
+        time_matrix_path=str(paths.time_matrix_file),
+        dist_matrix_path=str(paths.dist_matrix_file),
+        weather_file=str(paths.weather_file),
+        output_path=target_output_path,
+        optimization_target=ai_strategy["optimization_target"],
+        solver_time_limit_s=int(ai_strategy["solver_time_limit_s"]),
+        first_solution_strategy=ai_strategy["first_solution_strategy"],
+        local_search_metaheuristic=ai_strategy["local_search_metaheuristic"],
+        time_slack_s=int(ai_strategy["time_slack_s"]),
+        max_route_time_s=int(ai_strategy["max_route_time_s"]),
+        drop_penalty=int(ai_strategy["drop_penalty"]),
+        global_span_cost=int(ai_strategy["global_span_cost"]),
+        initial_routes=human_routes or None,
+        vehicle_fixed_cost=int(ai_strategy.get("vehicle_fixed_cost", 0)),
+    )
+
+
+def _run_ro_portfolio_probe(
+    paths: MissionPaths,
+    mission: dict,
+    weather: dict,
+    incident_matrix_path: str | None,
+    candidates: list[dict],
+) -> dict:
+    probe_output_path = paths.root_dir / RO_PORTFOLIO_PROBE_OUTPUT_NAME
+    probe_results: list[dict] = []
+    best_candidate: dict | None = None
+
+    for candidate in candidates:
+        strategy = dict(candidate.get("strategy", {}))
+        if not strategy:
+            continue
+        probe_strategy, budget_meta = _adapt_ai_strategy_budget(strategy, mission, phase="probe")
+        try:
+            solved = _solve_vrp_from_strategy(
+                paths,
+                mission,
+                weather,
+                incident_matrix_path,
+                probe_strategy,
+                output_path=probe_output_path,
+            )
+            if not isinstance(solved, dict):
+                raise RuntimeError("solve_vrp returned no result")
+            cost = _compute_training_cost(mission, solved, benchmark=None)
+            if cost is None:
+                fallback_time = _safe_float(solved.get("total_time_s"))
+                fallback_dist = _safe_float(solved.get("total_dist_m"), 0.0)
+                if fallback_time is None:
+                    raise RuntimeError("probe solution has no cost")
+                cost = float(fallback_time) + 0.01 * float(fallback_dist or 0.0)
+            candidate_row = {
+                "candidate_id": candidate.get("candidate_id"),
+                "source": candidate.get("source"),
+                "policy_id": candidate.get("policy_id"),
+                "probe_cost": round(float(cost), 4),
+                "probe_budget": budget_meta,
+                "status": "ok",
+            }
+            probe_results.append(candidate_row)
+            if best_candidate is None or float(cost) < float(best_candidate["cost"]):
+                best_candidate = {
+                    "cost": float(cost),
+                    "strategy": dict(strategy),
+                    "candidate": candidate_row,
+                }
+        except Exception as exc:
+            probe_results.append(
+                {
+                    "candidate_id": candidate.get("candidate_id"),
+                    "source": candidate.get("source"),
+                    "policy_id": candidate.get("policy_id"),
+                    "status": "failed",
+                    "error": str(exc),
+                    "probe_budget": budget_meta,
+                }
+            )
+
+    selected_strategy = dict(best_candidate["strategy"]) if best_candidate else dict(candidates[0]["strategy"]) if candidates else {}
+    return {
+        "selected_strategy": selected_strategy,
+        "selected_candidate": best_candidate["candidate"] if best_candidate else None,
+        "probe_results": probe_results,
+    }
+
+
 def _solve_mission_internal(
     mission_id: str,
     payload: dict,
     *,
     mission_for_strategy: dict | None = None,
     ai_strategy_override: dict | None = None,
+    use_portfolio: bool = False,
 ) -> dict:
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
     df = read_points(paths.data_file)
@@ -2268,25 +2582,33 @@ def _solve_mission_internal(
     incident_matrix_path = _build_incident_matrix(paths, mission)
     strategy_mission = mission_for_strategy or mission
     ai_strategy = deepcopy(ai_strategy_override) if ai_strategy_override else resolve_ai_strategy(strategy_mission, payload)
-    results = solve_vrp(
-        num_vehicles=int(ai_strategy["num_vehicles"]),
-        vehicle_capacity=int(ai_strategy["vehicle_capacity"]),
-        speed_multiplier=float(ai_strategy["speed_multiplier"]),
-        forced_weather=weather,
-        incident_matrix_path=incident_matrix_path,
-        data_path=str(paths.data_file),
-        time_matrix_path=str(paths.time_matrix_file),
-        dist_matrix_path=str(paths.dist_matrix_file),
-        weather_file=str(paths.weather_file),
-        output_path=str(paths.results_file),
-        optimization_target=ai_strategy["optimization_target"],
-        solver_time_limit_s=int(ai_strategy["solver_time_limit_s"]),
-        first_solution_strategy=ai_strategy["first_solution_strategy"],
-        local_search_metaheuristic=ai_strategy["local_search_metaheuristic"],
-        time_slack_s=int(ai_strategy["time_slack_s"]),
-        max_route_time_s=int(ai_strategy["max_route_time_s"]),
-        drop_penalty=int(ai_strategy["drop_penalty"]),
-        global_span_cost=int(ai_strategy["global_span_cost"]),
+
+    # Portfolio léger : 2 presets sondés rapidement, on garde la meilleure config.
+    # Activé pour solve_mission (basic) ; solve_mission_learned a son propre portfolio
+    # complet avec tuner. On saute le portfolio si ai_strategy_override est fourni
+    # (évite de re-sonder lors de l'appel interne depuis solve_mission_learned).
+    if use_portfolio and ai_strategy_override is None:
+        try:
+            candidates = _build_ro_portfolio_candidates(ai_strategy)[:2]
+            portfolio_probe = _run_ro_portfolio_probe(
+                paths, mission, weather, incident_matrix_path, candidates
+            )
+            selected = portfolio_probe.get("selected_strategy")
+            if selected:
+                ai_strategy = dict(selected)
+                ai_strategy, _ = _adapt_ai_strategy_budget(ai_strategy, mission, phase="final")
+                ai_strategy["ro_portfolio"] = {
+                    "enabled": True,
+                    "candidate_count": len(candidates),
+                    "selected_candidate": portfolio_probe.get("selected_candidate"),
+                }
+        except Exception:
+            pass  # repli silencieux sur la stratégie initiale
+
+    human_routes = {k: [int(c) for c in v] for k, v in human_state.routes_by_sleigh.items() if v}
+    results = _solve_vrp_from_strategy(
+        paths, mission, weather, incident_matrix_path, ai_strategy,
+        human_routes=human_routes or None,
     )
     if not results:
         raise RuntimeError("Aucune solution VRP trouvee")
@@ -2298,10 +2620,11 @@ def _solve_mission_internal(
         budget_initial=int(mission.get("budget", 0)),
         budget_spent=int(ai_strategy["num_vehicles"]) * int(mission.get("sleigh_cost", 0)),
         data_path=str(paths.data_file),
-        time_matrix_path=str(paths.time_matrix_file),
+        time_matrix_path=str(incident_matrix_path or paths.time_matrix_file),
         dist_matrix_path=str(paths.dist_matrix_file),
         optimized_json_path=str(paths.results_file),
         benchmark_file=str(paths.benchmark_file),
+        time_scale_factor=float(weather.get("factor", 1.0)) / max(float(ai_strategy.get("speed_multiplier", 1.0)), 0.1),
     )
     ai_segments, ai_stop_meta = build_ai_payload(df, graph, results)
     comparison = get_comparison(mission_id)
@@ -2329,24 +2652,38 @@ def _solve_mission_internal(
 
 
 def solve_mission(mission_id: str, payload: dict) -> dict:
-    return _solve_mission_internal(mission_id, payload)
+    return _solve_mission_internal(mission_id, payload, use_portfolio=True)
 
 
 def solve_mission_learned(mission_id: str, payload: dict) -> dict:
-    _, mission, _ = load_mission_bundle(mission_id)
+    paths, mission, _ = load_mission_bundle(mission_id)
+    learning_notes: list[str] = []
     model_payload = load_ai_learning_model()
     if not model_payload:
-        train_ai_learning_model(limit=1000)
+        try:
+            train_ai_learning_model(limit=1000)
+        except ValueError as exc:
+            learning_notes.append(f"ai_learning_unavailable: {exc}")
         model_payload = load_ai_learning_model()
-    if not model_payload:
-        raise RuntimeError("Modèle apprenant indisponible après entraînement.")
 
-    recommendation = recommend_ai_profile_for_mission(mission, model=model_payload)
-    recommended_profile = recommendation["profile"]
-    mission_with_learned_profile = {**mission, "ai_profile": recommended_profile}
-    ai_strategy = resolve_ai_strategy(mission_with_learned_profile, payload)
-    ai_strategy["profile_origin"] = "learned"
-    ai_strategy["learning"] = recommendation
+    recommendation: dict | None = None
+    mission_with_learned_profile = dict(mission)
+    ai_strategy = resolve_ai_strategy(mission, payload)
+    ai_strategy["profile_origin"] = "fallback_preset"
+
+    if model_payload:
+        try:
+            recommendation = recommend_ai_profile_for_mission(mission, model=model_payload)
+            recommended_profile = recommendation["profile"]
+            mission_with_learned_profile = {**mission, "ai_profile": recommended_profile}
+            ai_strategy = resolve_ai_strategy(mission_with_learned_profile, payload)
+            ai_strategy["profile_origin"] = "learned"
+            ai_strategy["learning"] = recommendation
+        except (FileNotFoundError, ValueError) as exc:
+            learning_notes.append(f"ai_recommendation_failed: {exc}")
+    else:
+        learning_notes.append("ai_learning_model_missing_after_train")
+
     ortools_tuning: dict | None = None
 
     tuner_model = load_ortools_tuner_model()
@@ -2354,33 +2691,60 @@ def solve_mission_learned(mission_id: str, payload: dict) -> dict:
         try:
             train_ortools_tuner_model(limit=2000)
             tuner_model = load_ortools_tuner_model()
-        except ValueError:
+        except ValueError as exc:
+            learning_notes.append(f"ortools_tuner_unavailable: {exc}")
             tuner_model = None
-    if tuner_model:
+
+    if tuner_model and recommendation:
         try:
             ortools_tuning = recommend_ortools_tuning_for_mission(
                 mission,
-                recommended_profile,
+                recommendation["profile"],
                 model=tuner_model,
             )
             ai_strategy = _apply_ortools_tuning_policy(ai_strategy, ortools_tuning["policy"])
             ai_strategy["ortools_tuning"] = ortools_tuning
             ai_strategy["tuning_origin"] = "learned_ortools"
-        except ValueError:
+        except ValueError as exc:
+            learning_notes.append(f"ortools_recommendation_failed: {exc}")
             ortools_tuning = None
+
+    weather = load_weather(paths.weather_file, mission.get("weather_key"))
+    incident_matrix_path = _build_incident_matrix(paths, mission)
+    portfolio_candidates = _build_ro_portfolio_candidates(ai_strategy, ortools_tuning=ortools_tuning)
+    portfolio_probe = _run_ro_portfolio_probe(
+        paths,
+        mission,
+        weather,
+        incident_matrix_path,
+        portfolio_candidates,
+    )
+    selected_strategy = dict(portfolio_probe.get("selected_strategy") or ai_strategy)
+    selected_strategy, budget_meta = _adapt_ai_strategy_budget(selected_strategy, mission, phase="final")
+    selected_strategy["ro_adaptive_budget"] = budget_meta
+    selected_strategy["ro_portfolio"] = {
+        "enabled": True,
+        "candidate_count": len(portfolio_candidates),
+        "selected_candidate": portfolio_probe.get("selected_candidate"),
+        "probe_results": portfolio_probe.get("probe_results", []),
+    }
 
     result = _solve_mission_internal(
         mission_id,
         payload,
         mission_for_strategy=mission_with_learned_profile,
-        ai_strategy_override=ai_strategy,
+        ai_strategy_override=selected_strategy,
     )
     result["learning"] = {
-        "used_model": True,
-        "model_path": str(AI_LEARNING_MODEL_FILE),
+        "used_model": bool(recommendation),
+        "model_path": str(AI_LEARNING_MODEL_FILE) if model_payload else None,
         "recommendation": recommendation,
         "ortools_tuning": ortools_tuning,
-        "ortools_model_path": str(ORTOOLS_TUNER_MODEL_FILE) if ortools_tuning else None,
+        "ortools_model_path": str(ORTOOLS_TUNER_MODEL_FILE) if tuner_model else None,
+        "fallback_to_preset": recommendation is None,
+        "notes": learning_notes,
+        "ro_portfolio": selected_strategy.get("ro_portfolio"),
+        "ro_adaptive_budget": budget_meta,
     }
     return result
 
@@ -2444,6 +2808,64 @@ def get_comparison(mission_id: str) -> dict:
     return comparison_payload
 
 
+def get_graph_metrics(mission_id: str) -> dict:
+    paths, _, _ = load_mission_bundle(mission_id)
+    if not paths.graph_file.exists():
+        raise FileNotFoundError("Graphe introuvable pour cette mission.")
+    graph = load_graph(paths.graph_file)
+    return ro_improvements.compute_graph_metrics(graph)
+
+
+def get_dijkstra_steps(mission_id: str, from_node: int, to_node: int) -> dict:
+    paths, _, _ = load_mission_bundle(mission_id)
+    if not paths.graph_file.exists():
+        raise FileNotFoundError("Graphe introuvable pour cette mission.")
+    graph = load_graph(paths.graph_file)
+    return ro_improvements.dijkstra_steps(graph, from_node, to_node)
+
+
+def get_bidirectional_astar_steps(mission_id: str, from_node: int, to_node: int) -> dict:
+    paths, _, _ = load_mission_bundle(mission_id)
+    if not paths.graph_file.exists():
+        raise FileNotFoundError("Graphe introuvable pour cette mission.")
+    graph = load_graph(paths.graph_file)
+    astar = ro_improvements.bidirectional_astar_steps(graph, from_node, to_node)
+    unidir = ro_improvements.dijkstra_steps(graph, from_node, to_node)
+    astar["nodes_explored_unidir"] = unidir["steps_count"]
+    reduction = 0.0
+    if unidir["steps_count"] > 0:
+        reduction = round(
+            (1.0 - astar["nodes_explored_astar_bidir"] / unidir["steps_count"]) * 100.0, 1
+        )
+    astar["reduction_pct"] = reduction
+    return astar
+
+
+def get_bidirectional_dijkstra_steps(mission_id: str, from_node: int, to_node: int) -> dict:
+    paths, _, _ = load_mission_bundle(mission_id)
+    if not paths.graph_file.exists():
+        raise FileNotFoundError("Graphe introuvable pour cette mission.")
+    graph = load_graph(paths.graph_file)
+    bidir = ro_improvements.bidirectional_dijkstra_steps(graph, from_node, to_node)
+    unidir = ro_improvements.dijkstra_steps(graph, from_node, to_node)
+    bidir["nodes_explored_unidir"] = unidir["steps_count"]
+    reduction = 0.0
+    if unidir["steps_count"] > 0:
+        reduction = round(
+            (1.0 - bidir["nodes_explored_bidir"] / unidir["steps_count"]) * 100.0, 1
+        )
+    bidir["reduction_pct"] = reduction
+    return bidir
+
+
+def get_floyd_warshall(mission_id: str) -> dict:
+    paths, _, _ = load_mission_bundle(mission_id)
+    if not paths.time_matrix_file.exists():
+        raise FileNotFoundError("Matrice de temps introuvable pour cette mission.")
+    matrix = np.load(paths.time_matrix_file)
+    return ro_improvements.floyd_warshall(matrix)
+
+
 def get_debrief(mission_id: str) -> dict:
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
     results = _read_json(paths.results_file)
@@ -2456,22 +2878,62 @@ def get_debrief(mission_id: str) -> dict:
     human_summary = summarize_segments(human_segments)
     human_time_s = human_summary["total_time_s"] or None
     weather = load_weather(paths.weather_file, mission.get("weather_key"))
+    df = read_points(paths.data_file)
     graph = load_graph(paths.graph_file)
-    human_live_stats = build_human_live_stats(df=read_points(paths.data_file), graph=graph, state=human_state, weather_factor=float(weather.get("factor", 1.0)))
+    human_live_stats = build_human_live_stats(df=df, graph=graph, state=human_state, weather_factor=float(weather.get("factor", 1.0)))
+
+    two_opt_result = None
+    or_opt_result = None
+    nearest_neighbor_result = None
+    optimality_result = None
+    if paths.time_matrix_file.exists() and any(human_state.routes_by_sleigh.values()):
+        try:
+            time_matrix = np.load(paths.time_matrix_file)
+            id_to_idx = {int(row["id"]): idx for idx, (_, row) in enumerate(df.iterrows())}
+            depot_idx = id_to_idx.get(0, 0)
+            routes_idx = {
+                sid: [id_to_idx[int(cid)] for cid in route if int(cid) in id_to_idx]
+                for sid, route in human_state.routes_by_sleigh.items()
+            }
+            two_opt_result = ro_improvements.two_opt_routes(routes_idx, time_matrix, depot_idx)
+            or_opt_result = ro_improvements.or_opt_routes(routes_idx, time_matrix, depot_idx)
+            num_clients = len(df) - 1  # exclude depot
+            if num_clients > 0:
+                nearest_neighbor_result = ro_improvements.nearest_neighbor_tour(num_clients, time_matrix, depot_idx)
+            human_total_s = float(human_summary.get("total_time_s") or 0.0)
+            if human_total_s > 0:
+                optimality_result = ro_improvements.optimality_gap(human_total_s, time_matrix, depot_idx)
+        except Exception:
+            two_opt_result = None
 
     time_saved_pct = float(benchmark["savings"]["time_saved_pct"])
     co2_saved_kg = float(benchmark["savings"]["co2_saved_kg"])
     budget_remaining_pct = float(benchmark.get("budget", {}).get("remaining_pct", 50.0))
-    co2_score = min(co2_saved_kg / 20.0 * 100.0, 100.0)
+
+    # Recalibration : OR-Tools économise typiquement 20-40% vs solution naïve.
+    # On normalise sur 40% max (× 2.5) pour que 40% → 100 pts sur la composante temps.
+    time_score_pct = max(0.0, min(100.0, time_saved_pct * 2.5))
+
+    # CO2 : missions de 10 clients ≈ 0.3-1 kg économisés. Seuil 1 kg pour le max
+    # (au lieu de 20 kg, qui rendait la composante quasi nulle).
+    num_clients = max(int(mission.get("num_clients", 10)), 1)
+    co2_ref_kg = max(1.0, num_clients * 0.1)  # 0.1 kg/client de référence
+    co2_score = max(0.0, min(co2_saved_kg / co2_ref_kg * 100.0, 100.0))
+    budget_remaining_pct = max(0.0, min(100.0, budget_remaining_pct))
+
     ai_strategy = results.get("ai_strategy", resolve_ai_strategy(mission, {}))
-    base_score = 0.60 * time_saved_pct + 0.25 * co2_score + 0.15 * budget_remaining_pct
+    base_score = 0.60 * time_score_pct + 0.25 * co2_score + 0.15 * budget_remaining_pct
+    base_score = max(0.0, min(base_score, 100.0))
     ai_profile_bonus = float(ai_strategy.get("difficulty_bonus", 0.0))
     incident_bonus = 10.0 if mission.get("random_incidents", False) else 0.0
     human_bonus = 0.0
     human_beat_ai = human_time_s is not None and human_time_s < float(results.get("total_time_s", 0))
     if human_beat_ai:
         human_bonus = 5.0
-    final_score = min(base_score + ai_profile_bonus + incident_bonus + human_bonus, 100.0)
+    # Bonus météo : conditions difficiles récompensées (+0 par temps clair, jusqu'à +8 par tempête)
+    weather_factor = float(weather.get("factor", 1.0))
+    weather_bonus = round(max(0.0, (weather_factor - 1.0) * 8.0), 1)
+    final_score = max(0.0, min(base_score + ai_profile_bonus + incident_bonus + human_bonus + weather_bonus, 100.0))
     final_score = round(final_score, 1)
     secondary_objectives = _evaluate_secondary_objectives(
         mission,
@@ -2512,6 +2974,7 @@ def get_debrief(mission_id: str) -> dict:
                 "ai_profile_bonus": round(ai_profile_bonus, 1),
                 "incident_bonus": round(incident_bonus, 1),
                 "human_bonus": round(human_bonus, 1),
+                "weather_bonus": weather_bonus,
                 "final_score": final_score,
             },
         },
@@ -2529,6 +2992,10 @@ def get_debrief(mission_id: str) -> dict:
             "ai_sleighs": _build_ai_sleigh_summaries(results),
             "ai_strategy": results.get("ai_strategy"),
             "secondary_objectives": secondary_objectives,
+            "two_opt": two_opt_result,
+            "or_opt": or_opt_result,
+            "nearest_neighbor": nearest_neighbor_result,
+            "optimality_gap": optimality_result,
             "recommendations": _build_debrief_recommendations(
                 mission, results, human_summary, human_state, human_live_stats, benchmark
             ),
@@ -2607,6 +3074,309 @@ def get_player(player_id: str) -> dict:
     return _public_player(player)
 
 
+def _public_social_player(player: dict) -> dict:
+    return {
+        "player_id": player["player_id"],
+        "display_name": player["display_name"],
+        "callsign": player.get("callsign"),
+        "avatar": player.get("avatar"),
+    }
+
+
+def _social_friendship_entry(entry: dict) -> dict:
+    return {
+        "peer_player_id": str(entry.get("peer_player_id") or ""),
+        "peer_display_name": entry.get("peer_display_name"),
+        "peer_callsign": entry.get("peer_callsign"),
+        "peer_avatar": entry.get("peer_avatar"),
+        "status": str(entry.get("status") or ""),
+        "requester_player_id": str(entry.get("requester_player_id") or ""),
+        "addressee_player_id": str(entry.get("addressee_player_id") or ""),
+        "created_at": entry.get("created_at"),
+        "updated_at": entry.get("updated_at"),
+        "responded_at": entry.get("responded_at"),
+    }
+
+
+def _sanitize_direct_message_body(value: object) -> str:
+    body = str(value or "").strip()
+    if not body:
+        raise ValueError("Message vide")
+    if len(body) > 1000:
+        raise ValueError("Message trop long (1000 caractères max)")
+    return body
+
+
+def _is_social_blocked(player_a_id: str, player_b_id: str) -> bool:
+    return repository.is_user_blocked(player_a_id, player_b_id) or repository.is_user_blocked(player_b_id, player_a_id)
+
+
+def _direct_message_entry(message: dict, current_player_id: str) -> dict:
+    sender_player_id = str(message.get("sender_player_id") or "")
+    return {
+        "message_id": str(message.get("message_id") or ""),
+        "conversation_key": str(message.get("conversation_key") or ""),
+        "sender_player_id": sender_player_id,
+        "sender_display_name": message.get("sender_display_name"),
+        "sender_avatar": message.get("sender_avatar"),
+        "recipient_player_id": str(message.get("recipient_player_id") or ""),
+        "recipient_display_name": message.get("recipient_display_name"),
+        "recipient_avatar": message.get("recipient_avatar"),
+        "body": str(message.get("body") or ""),
+        "created_at": message.get("created_at"),
+        "read_at": message.get("read_at"),
+        "is_mine": sender_player_id == current_player_id,
+    }
+
+
+def search_social_players(player_id: str, query: str | None = None, limit: int = 12) -> dict:
+    _require_player(player_id)
+    bounded_limit = max(1, min(int(limit), 30))
+    players = repository.list_players(search=query, limit=bounded_limit, exclude_player_id=player_id)
+    filtered: list[dict] = []
+    for candidate in players:
+        candidate_id = str(candidate.get("player_id") or "")
+        if candidate_id and _is_social_blocked(player_id, candidate_id):
+            continue
+        filtered.append(candidate)
+    return {"players": [_public_social_player(player) for player in filtered]}
+
+
+def list_social_friendships(player_id: str) -> dict:
+    _require_player(player_id)
+    friendships = repository.list_friendships_for_player(player_id, statuses=("accepted", "pending"))
+
+    friends: list[dict] = []
+    incoming_requests: list[dict] = []
+    outgoing_requests: list[dict] = []
+    for entry in friendships:
+        social_entry = _social_friendship_entry(entry)
+        peer_player_id = social_entry["peer_player_id"]
+        if peer_player_id and _is_social_blocked(player_id, peer_player_id):
+            continue
+        status = social_entry["status"]
+        if status == "accepted":
+            friends.append(social_entry)
+        elif status == "pending":
+            if social_entry["addressee_player_id"] == player_id:
+                incoming_requests.append(social_entry)
+            else:
+                outgoing_requests.append(social_entry)
+    return {
+        "friends": friends,
+        "incoming_requests": incoming_requests,
+        "outgoing_requests": outgoing_requests,
+    }
+
+
+def send_friend_request(payload: dict) -> dict:
+    requester_player_id = str(payload.get("player_id") or "")
+    friend_player_id = str(payload.get("friend_player_id") or "")
+    _require_player(requester_player_id)
+    _require_player(friend_player_id)
+    if requester_player_id == friend_player_id:
+        raise ValueError("Impossible de vous ajouter vous-même")
+    if _is_social_blocked(requester_player_id, friend_player_id):
+        raise ValueError("Action impossible: ce joueur est bloqué")
+
+    existing = repository.get_friendship_between(requester_player_id, friend_player_id)
+    if existing:
+        status = str(existing.get("status") or "")
+        if status == "accepted":
+            raise ValueError("Vous êtes déjà amis")
+        if status == "pending":
+            if str(existing.get("requester_player_id") or "") == requester_player_id:
+                raise ValueError("Demande déjà envoyée")
+            raise ValueError("Cette personne vous a déjà envoyé une demande")
+
+    friendship = repository.create_or_reset_friend_request(requester_player_id, friend_player_id)
+    if not friendship:
+        raise RuntimeError("Impossible de créer la demande d'ami")
+    return {"status": "pending", "friendship": _social_friendship_entry(friendship)}
+
+
+def respond_friend_request(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    friend_player_id = str(payload.get("friend_player_id") or "")
+    action = str(payload.get("action") or "").strip().lower()
+    _require_player(player_id)
+    _require_player(friend_player_id)
+
+    if action not in {"accept", "decline"}:
+        raise ValueError("Action inconnue")
+    if _is_social_blocked(player_id, friend_player_id):
+        raise ValueError("Action impossible: ce joueur est bloqué")
+
+    friendship = repository.get_friendship_between(player_id, friend_player_id)
+    if not friendship:
+        raise FileNotFoundError("Demande d'ami introuvable")
+    if str(friendship.get("status") or "") != "pending":
+        raise ValueError("Aucune demande en attente")
+    if str(friendship.get("addressee_player_id") or "") != player_id:
+        raise ValueError("Seul le destinataire peut répondre")
+
+    next_status = "accepted" if action == "accept" else "declined"
+    repository.update_friendship_status(
+        player_id,
+        friend_player_id,
+        status=next_status,
+        responded_at=_now_iso(),
+    )
+    updated = repository.get_friendship_between(player_id, friend_player_id)
+    if not updated:
+        raise FileNotFoundError("Demande d'ami introuvable")
+    return {"status": next_status, "friendship": _social_friendship_entry(updated)}
+
+
+def remove_friendship(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    friend_player_id = str(payload.get("friend_player_id") or "")
+    _require_player(player_id)
+    _require_player(friend_player_id)
+
+    friendship = repository.get_friendship_between(player_id, friend_player_id)
+    if not friendship:
+        raise FileNotFoundError("Relation introuvable")
+    repository.delete_friendship(player_id, friend_player_id)
+    return {"status": "removed"}
+
+
+def block_player(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    blocked_player_id = str(payload.get("blocked_player_id") or "")
+    _require_player(player_id)
+    _require_player(blocked_player_id)
+    if player_id == blocked_player_id:
+        raise ValueError("Impossible de vous bloquer vous-même")
+    repository.create_user_block(player_id, blocked_player_id)
+    repository.delete_friendship(player_id, blocked_player_id)
+    return {"status": "blocked"}
+
+
+def unblock_player(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    blocked_player_id = str(payload.get("blocked_player_id") or "")
+    _require_player(player_id)
+    _require_player(blocked_player_id)
+    repository.remove_user_block(player_id, blocked_player_id)
+    return {"status": "unblocked"}
+
+
+def list_blocked_players(player_id: str) -> dict:
+    _require_player(player_id)
+    blocked_rows = repository.list_blocked_players(player_id)
+    return {
+        "blocked": [
+            {
+                "player_id": row.get("blocked_player_id"),
+                "display_name": row.get("blocked_display_name"),
+                "callsign": row.get("blocked_callsign"),
+                "avatar": row.get("blocked_avatar"),
+                "blocked_at": row.get("created_at"),
+            }
+            for row in blocked_rows
+        ]
+    }
+
+
+def list_direct_conversations(player_id: str, limit: int = 30) -> dict:
+    _require_player(player_id)
+    bounded_limit = max(1, min(int(limit), 60))
+    conversations = repository.list_direct_conversations(player_id, limit=bounded_limit)
+    payload: list[dict] = []
+    for conversation in conversations:
+        peer_player_id = str(conversation.get("peer_player_id") or "")
+        if peer_player_id and _is_social_blocked(player_id, peer_player_id):
+            continue
+        last_message = conversation.get("last_message")
+        payload.append(
+            {
+                "conversation_key": conversation.get("conversation_key"),
+                "peer_player_id": conversation.get("peer_player_id"),
+                "peer_display_name": conversation.get("peer_display_name"),
+                "peer_callsign": conversation.get("peer_callsign"),
+                "peer_avatar": conversation.get("peer_avatar"),
+                "unread_count": int(conversation.get("unread_count") or 0),
+                "last_message_at": conversation.get("last_message_at"),
+                "last_message": _direct_message_entry(last_message, player_id) if isinstance(last_message, dict) else None,
+                "hidden": bool(conversation.get("hidden")),
+                "cleared_before_at": conversation.get("cleared_before_at"),
+            }
+        )
+    return {"conversations": payload}
+
+
+def send_direct_message(payload: dict) -> dict:
+    sender_player_id = str(payload.get("player_id") or "")
+    recipient_player_id = str(payload.get("recipient_player_id") or "")
+    _require_player(sender_player_id)
+    _require_player(recipient_player_id)
+    if sender_player_id == recipient_player_id:
+        raise ValueError("Impossible de vous envoyer un message")
+    if _is_social_blocked(sender_player_id, recipient_player_id):
+        raise ValueError("Action impossible: ce joueur est bloqué")
+
+    friendship = repository.get_friendship_between(sender_player_id, recipient_player_id)
+    if not friendship or str(friendship.get("status") or "") != "accepted":
+        raise ValueError("Vous devez être amis pour écrire à ce joueur")
+
+    body = _sanitize_direct_message_body(payload.get("body"))
+    message = repository.create_direct_message(
+        message_id=uuid.uuid4().hex[:24],
+        sender_player_id=sender_player_id,
+        recipient_player_id=recipient_player_id,
+        body=body,
+    )
+    if not message:
+        raise RuntimeError("Impossible d'envoyer ce message")
+    return {"message": _direct_message_entry(message, sender_player_id)}
+
+
+def list_direct_messages(player_id: str, peer_player_id: str, limit: int = 60, before: str | None = None) -> dict:
+    player = _require_player(player_id)
+    peer_player = _require_player(peer_player_id)
+    if _is_social_blocked(player_id, peer_player_id):
+        raise ValueError("Conversation indisponible")
+    friendship = repository.get_friendship_between(player_id, peer_player_id)
+    if not friendship or str(friendship.get("status") or "") != "accepted":
+        raise ValueError("Vous devez être amis pour consulter cette conversation")
+
+    bounded_limit = max(1, min(int(limit), 200))
+    repository.mark_direct_messages_read(recipient_player_id=player_id, sender_player_id=peer_player_id)
+    messages = repository.list_direct_messages(player_id, peer_player_id, limit=bounded_limit, before=before)
+    return {
+        "peer": _public_social_player(peer_player),
+        "self": _public_social_player(player),
+        "messages": [_direct_message_entry(message, player_id) for message in messages],
+    }
+
+
+def remove_direct_conversation(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    peer_player_id = str(payload.get("with_player_id") or "")
+    _require_player(player_id)
+    _require_player(peer_player_id)
+    state = repository.clear_direct_conversation_for_player(player_id, peer_player_id)
+    return {
+        "status": "cleared",
+        "conversation_key": state.get("conversation_key"),
+        "cleared_before_at": state.get("cleared_before_at"),
+    }
+
+
+def restore_direct_conversation(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    peer_player_id = str(payload.get("with_player_id") or "")
+    _require_player(player_id)
+    _require_player(peer_player_id)
+    state = repository.restore_direct_conversation_for_player(player_id, peer_player_id)
+    return {
+        "status": "restored",
+        "conversation_key": state.get("conversation_key"),
+        "restored": bool(state.get("restored")),
+    }
+
+
 def register_player(payload: dict) -> dict:
     email = _validate_email(payload.get("email"))
     display_name = str(payload.get("display_name", "")).strip()
@@ -2652,6 +3422,42 @@ def login_player(payload: dict) -> dict:
     except sqlite3.IntegrityError as exc:
         raise ValueError("Impossible de connecter ce compte") from exc
     return _public_player(updated)
+
+
+def oauth_sync_player(payload: dict) -> dict:
+    provider = _normalize_oauth_provider(payload.get("provider"))
+    provider_account_id = str(payload.get("provider_account_id") or "").strip()
+    if not provider_account_id:
+        raise ValueError("provider_account_id OAuth requis")
+
+    display_name = str(payload.get("display_name") or "").strip()
+    if not display_name:
+        raise ValueError("Nom de joueur requis")
+
+    email_raw = payload.get("email")
+    email = _validate_email(str(email_raw)) if email_raw else None
+    callsign = str(payload.get("callsign") or "").strip() or None
+    avatar = _sanitize_avatar_hint(payload.get("avatar"))
+    now_iso = _utcnow().isoformat()
+
+    existing_by_email = repository.get_player_by_email(email) if email else None
+    player_id = str(existing_by_email["player_id"]) if existing_by_email else _oauth_player_id(provider, provider_account_id)
+    existing_player = repository.get_player(player_id)
+    base_player = existing_player or existing_by_email
+
+    try:
+        upserted = repository.upsert_player(
+            player_id=player_id,
+            display_name=display_name,
+            email=email,
+            password_hash=base_player.get("password_hash") if base_player else None,
+            callsign=callsign if callsign is not None else (base_player.get("callsign") if base_player else None),
+            avatar=avatar if avatar is not None else (base_player.get("avatar") if base_player else None),
+            last_login_at=now_iso,
+        )
+    except sqlite3.IntegrityError as exc:
+        raise ValueError("Impossible de synchroniser le compte OAuth") from exc
+    return _public_player(upserted)
 
 
 def request_password_reset(payload: dict) -> dict:
@@ -3141,6 +3947,57 @@ def _start_versus_match_if_ready(match_id: str) -> None:
     )
 
 
+def _versus_progress_for_mission(mission_id: str | None) -> dict:
+    if not mission_id:
+        return {
+            "assigned_clients": 0,
+            "total_clients": 0,
+            "progress_pct": 0.0,
+            "elapsed_s": 0,
+            "updated_at": None,
+        }
+
+    snapshot = repository.get_mission_snapshot(str(mission_id))
+    if not snapshot:
+        return {
+            "assigned_clients": 0,
+            "total_clients": 0,
+            "progress_pct": 0.0,
+            "elapsed_s": 0,
+            "updated_at": None,
+        }
+
+    mission_payload = snapshot.get("mission") if isinstance(snapshot.get("mission"), dict) else {}
+    state_payload = snapshot.get("human_state") if isinstance(snapshot.get("human_state"), dict) else {}
+    assigned_clients_raw = state_payload.get("assigned_clients") if isinstance(state_payload, dict) else []
+    segments_by_sleigh = state_payload.get("segments_by_sleigh") if isinstance(state_payload, dict) else {}
+
+    assigned_clients = {
+        int(client_id)
+        for client_id in (assigned_clients_raw or [])
+        if isinstance(client_id, (int, float, str))
+    }
+    total_clients = max(0, int(mission_payload.get("num_clients") or 0))
+    progress_pct = (float(len(assigned_clients)) / float(total_clients) * 100.0) if total_clients > 0 else 0.0
+
+    elapsed_s = 0.0
+    if isinstance(segments_by_sleigh, dict):
+        for sleigh_segments in segments_by_sleigh.values():
+            if not isinstance(sleigh_segments, list):
+                continue
+            for segment in sleigh_segments:
+                if isinstance(segment, dict):
+                    elapsed_s += max(0.0, float(segment.get("time_s") or 0.0))
+
+    return {
+        "assigned_clients": len(assigned_clients),
+        "total_clients": total_clients,
+        "progress_pct": round(progress_pct, 2),
+        "elapsed_s": int(round(elapsed_s)),
+        "updated_at": snapshot.get("updated_at"),
+    }
+
+
 def _build_versus_match_state(match_id: str, viewer_player_id: str) -> dict:
     match = repository.get_versus_match(match_id)
     if not match:
@@ -3190,6 +4047,9 @@ def _build_versus_match_state(match_id: str, viewer_player_id: str) -> dict:
     started_elapsed_s = None
     if started_at_dt:
         started_elapsed_s = max(0, int((now_dt - started_at_dt).total_seconds()))
+    countdown_remaining_s = None
+    if str(match.get("status")) == "live" and started_elapsed_s is not None and started_elapsed_s < VERSUS_COUNTDOWN_SECONDS:
+        countdown_remaining_s = max(0, VERSUS_COUNTDOWN_SECONDS - started_elapsed_s)
 
     return {
         "match_id": match["match_id"],
@@ -3206,12 +4066,20 @@ def _build_versus_match_state(match_id: str, viewer_player_id: str) -> dict:
         "reference_mission_id": match.get("reference_mission_id"),
         "started_at": match.get("started_at"),
         "started_elapsed_s": started_elapsed_s,
+        "countdown_total_s": VERSUS_COUNTDOWN_SECONDS,
+        "countdown_remaining_s": countdown_remaining_s,
         "completed_at": match.get("completed_at"),
         "winner_player_id": match.get("winner_player_id"),
         "result_reason": match.get("result_reason"),
         "created_at": match.get("created_at"),
         "updated_at": match.get("updated_at"),
-        "participants": state_participants,
+        "participants": [
+            {
+                **participant,
+                "progress": _versus_progress_for_mission(participant.get("mission_id")),
+            }
+            for participant in state_participants
+        ],
         "current_player_mission_id": self_participant.get("mission_id") if self_participant else None,
     }
 
@@ -3324,6 +4192,49 @@ def leave_versus_queue(payload: dict) -> dict:
     _require_player(player_id)
     repository.remove_versus_queue_player(player_id)
     return {"status": "left"}
+
+
+def get_versus_queue_status(payload: dict) -> dict:
+    player_id = str(payload.get("player_id") or "")
+    _require_player(player_id)
+    template_id = _normalize_versus_template_id(payload.get("template_id"))
+    winner_rule = _normalize_versus_winner_rule(payload.get("winner_rule"))
+
+    existing_match = repository.get_latest_versus_match_for_player(player_id, statuses=("waiting_ready", "live"))
+    if existing_match:
+        return {
+            "status": "matched",
+            "match": _build_versus_match_state(str(existing_match["match_id"]), player_id),
+        }
+
+    queue_entry = repository.get_versus_queue_entry(player_id)
+    if not queue_entry:
+        return {"status": "idle"}
+
+    if (
+        str(queue_entry.get("template_id") or "") != template_id
+        or str(queue_entry.get("winner_rule") or "") != winner_rule
+    ):
+        return {"status": "idle"}
+
+    opponent = repository.find_versus_queue_opponent(player_id, template_id, winner_rule)
+    if opponent:
+        host_player_id = str(opponent["player_id"])
+        match_id = _create_versus_match_pair(
+            mode="queue",
+            host_player_id=host_player_id,
+            opponent_player_id=player_id,
+            template_id=template_id,
+            map_source="template",
+            mission_config=None,
+            winner_rule=winner_rule,
+        )
+        return {
+            "status": "matched",
+            "match": _build_versus_match_state(match_id, player_id),
+        }
+
+    return {"status": "queued", "queue_entry": queue_entry}
 
 
 def create_versus_invite(payload: dict) -> dict:

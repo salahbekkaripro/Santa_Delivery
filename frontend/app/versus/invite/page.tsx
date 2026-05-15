@@ -4,8 +4,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { GuidedOnboarding, type GuidedOnboardingStep } from "@/components/guided-onboarding";
 import { VersusMapBuilder, VersusMapBuilderHandle } from "@/components/versus-map-builder";
 import { usePlayer } from "@/components/player-provider";
+import { TeleprinterText } from "@/components/teleprinter-text";
 import {
   acceptVersusInvite,
   createVersusInvite,
@@ -15,6 +17,34 @@ import {
 } from "@/lib/api";
 import type { VersusInvite, VersusMapSource, VersusMissionConfig, VersusWinnerRule } from "@/lib/types";
 import { DEFAULT_CUSTOM_MISSION_CONFIG, WINNER_RULE_OPTIONS, formatMissionSummary, ruleLabel } from "@/lib/versus";
+
+const INVITE_ONBOARDING_STEPS: GuidedOnboardingStep[] = [
+  {
+    targetId: "invite-overview",
+    title: "Invitation ciblée",
+    description: "Tu crées un duel pour un joueur précis, qui accepte ou refuse depuis sa boîte d'invitations.",
+  },
+  {
+    targetId: "invite-target",
+    title: "Renseigne le joueur cible",
+    description: "Entre son player_id exact pour éviter d'envoyer l'invitation au mauvais destinataire.",
+  },
+  {
+    targetId: "invite-config",
+    title: "Prépare la carte et la règle",
+    description: "Choisis template/custom puis règle de victoire. La configuration est figée à l'envoi.",
+  },
+  {
+    targetId: "invite-send",
+    title: "Envoie l'invitation",
+    description: "Le joueur ciblé verra un résumé de map complet avant d'accepter.",
+  },
+  {
+    targetId: "invite-inbox",
+    title: "Gère les invitations reçues",
+    description: "Accepte pour ouvrir directement le lobby live, ou refuse pour décliner le duel.",
+  },
+];
 
 function InviteMapPreview({ invite }: { invite: VersusInvite }) {
   const summary = invite.mission_summary;
@@ -99,8 +129,6 @@ export default function VersusInvitePage() {
     mutationFn: (inviteId: string) => acceptVersusInvite(inviteId, { player_id: player!.id }),
     onSuccess: ({ match }) => {
       setError(null);
-      setFeedback("Invitation acceptée.");
-      invitesQuery.refetch();
       router.push(`/versus/match/${match.match_id}`);
     },
     onError: (err: Error) => setError(err.message),
@@ -117,7 +145,15 @@ export default function VersusInvitePage() {
   });
 
   if (!isReady) {
-    return <div className="page-shell"><div className="page-stack"><div className="panel">Chargement...</div></div></div>;
+    return (
+      <div className="page-shell">
+        <div className="page-stack">
+          <div className="panel-loading" style={{ height: 110 }} />
+          <div className="panel-loading" style={{ height: 180 }} />
+          <div className="panel-loading" style={{ height: 120 }} />
+        </div>
+      </div>
+    );
   }
 
   if (!player) {
@@ -142,14 +178,14 @@ export default function VersusInvitePage() {
   return (
     <div className="page-shell">
       <div className="page-stack">
-        <section className="hero">
+        <section className="hero" data-onboarding-id="invite-overview">
           <h1>Versus · Invitation</h1>
-          <p>Étape 2/3: crée une invitation ciblée ou réponds à celles reçues.</p>
+          <TeleprinterText text="Étape 2/3: crée une invitation ciblée ou réponds à celles reçues." />
         </section>
 
-        <section className="panel stack">
+        <section className="panel stack" data-onboarding-id="invite-config">
           <strong>Créer une invitation</strong>
-          <label className="field">
+          <label className="field" data-onboarding-id="invite-target">
             <span>Identifiant joueur cible</span>
             <input
               type="text"
@@ -186,6 +222,7 @@ export default function VersusInvitePage() {
             className="primary-button"
             onClick={() => createInviteMutation.mutate()}
             disabled={isInviteDisabled}
+            data-onboarding-id="invite-send"
           >
             {createInviteMutation.isPending ? "Envoi..." : "Envoyer l'invitation"}
           </button>
@@ -197,7 +234,7 @@ export default function VersusInvitePage() {
           )}
         </section>
 
-        <section className="panel stack">
+        <section className="panel stack" data-onboarding-id="invite-inbox">
           <div className="panel-head">
             <strong>Invitations reçues</strong>
             <span className="muted">{invites.length} en attente</span>
@@ -246,6 +283,12 @@ export default function VersusInvitePage() {
         <section className="panel stack">
           <Link className="secondary-button" href="/versus">← Retour choix mode</Link>
         </section>
+
+        <GuidedOnboarding
+          storageKey="operation-noel-onboarding-versus-invite-v1"
+          tutorialLabel="Versus invitation"
+          steps={INVITE_ONBOARDING_STEPS}
+        />
       </div>
     </div>
   );

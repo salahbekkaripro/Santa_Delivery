@@ -2,10 +2,28 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getComparison, getDebrief, getMission } from "@/lib/api";
 import { MapSurface } from "@/components/map-surface";
 import { AISleighSummary, ComparisonPayload, DebriefPayload, HumanSleighSummary, MissionResponse } from "@/lib/types";
+
+function useCountUp(target: number, duration = 1400) {
+  const [value, setValue] = useState(0);
+  const rafRef = useRef(0);
+  useEffect(() => {
+    const start = Date.now();
+    const tick = () => {
+      const elapsed = Date.now() - start;
+      const t = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setValue(Math.round(eased * target));
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [target, duration]);
+  return value;
+}
 
 function asMinutes(seconds: number) {
   return `${Math.round(seconds / 60)} min`;
@@ -31,6 +49,7 @@ export function ResultsView({ missionId }: { missionId: string }) {
     queryKey: ["debrief", missionId],
     queryFn: () => getDebrief(missionId)
   });
+  const animatedScore = useCountUp(Number(debriefQuery.data?.score.value ?? 0));
 
   if (missionQuery.isLoading || comparisonQuery.isLoading || debriefQuery.isLoading) {
     return (
@@ -72,7 +91,6 @@ export function ResultsView({ missionId }: { missionId: string }) {
   const aiStrategy = debrief.results.ai_strategy ?? comparison.summary_metrics.ai.strategy;
   const aiLearning = aiStrategy?.learning;
   const aiProfileOrigin = aiStrategy?.profile_origin ?? (aiLearning ? "learned" : "preset");
-  const score = debrief.score.value;
 
   return (
     <div className="page-shell">
@@ -84,7 +102,7 @@ export function ResultsView({ missionId }: { missionId: string }) {
             <div>
               <h1>Résultats</h1>
               <div className="score-big-display" style={{ marginTop: 8 }}>
-                <span className="score-big-number">{score}</span>
+                <span className="score-big-number score-big-number--reveal">{animatedScore}</span>
                 <span className="score-big-denom">/100</span>
               </div>
               <span className="score-rank-badge">
@@ -249,6 +267,27 @@ export function ResultsView({ missionId }: { missionId: string }) {
           </div>
         </section>
 
+      </div>
+
+      {/* CTA contextuel */}
+      <div className="results-cta-bar">
+        <div className="results-cta-bar-inner">
+          <div className="results-cta-outcome">
+            <span className="results-cta-icon">{humanWon ? "🏆" : "🤖"}</span>
+            <span>{humanWon ? "Vous avez battu l'IA !" : "L'IA vous devance — réessayez ?"}</span>
+          </div>
+          <div className="results-cta-actions">
+            <Link className="secondary-button" href={`/mission/${missionId}`}>
+              ↺ Rejouer
+            </Link>
+            <Link className="primary-button" href={`/mission/${missionId}/debrief`}>
+              📊 Débriefing complet →
+            </Link>
+            <Link className="secondary-button" href="/campaign">
+              🗺️ Campagne
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );

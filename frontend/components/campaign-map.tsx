@@ -4,7 +4,9 @@ import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { GuidedOnboarding, type GuidedOnboardingStep } from "@/components/guided-onboarding";
 import { usePlayer } from "@/components/player-provider";
+import { TeleprinterText } from "@/components/teleprinter-text";
 import { createMission } from "@/lib/api";
 import {
   CAMPAIGN_MISSIONS,
@@ -34,6 +36,29 @@ const WEATHER_ICONS: Record<string, string> = {
   real: "🌡",
 };
 
+const SOLO_ONBOARDING_STEPS: GuidedOnboardingStep[] = [
+  {
+    targetId: "solo-hero",
+    title: "Campagne solo en 30 secondes",
+    description: "Ici tu suis ta progression, tes étoiles et ton niveau débloqué contre l'IA.",
+  },
+  {
+    targetId: "solo-rules",
+    title: "Lis les règles de progression",
+    description: "Les paliers de score te donnent jusqu'à 3 étoiles et ouvrent les niveaux suivants.",
+  },
+  {
+    targetId: "solo-missions",
+    title: "Choisis une mission et lance",
+    description: "Commence par la première mission disponible, trace ta tournée puis compare ton score à l'IA.",
+  },
+  {
+    targetId: "solo-versus-link",
+    title: "Ensuite passe en versus",
+    description: "Quand tu veux du duel live, passe au mode versus depuis ce raccourci.",
+  },
+];
+
 function chapterSummary(progress: CampaignProgress) {
   const stars = Object.values(progress.starsByLevel).reduce((sum, count) => sum + Number(count), 0);
   return { completed: progress.completedLevels.length, total: CAMPAIGN_MISSIONS.length, stars };
@@ -49,6 +74,7 @@ export function CampaignMap() {
   const router = useRouter();
   const { player } = usePlayer();
   const [progress, setProgress] = useState<CampaignProgress>(getDefaultCampaignProgress());
+  const [launchError, setLaunchError] = useState<string | null>(null);
 
   useEffect(() => {
     setProgress(readCampaignProgress());
@@ -73,6 +99,7 @@ export function CampaignMap() {
       }
       router.push(`/mission/${data.mission_id}`);
     },
+    onError: (error: Error) => setLaunchError(error.message),
   });
 
   return (
@@ -80,14 +107,13 @@ export function CampaignMap() {
       <div className="page-stack campaign-stack">
 
         {/* HERO */}
-        <section className="campaign-hero">
+        <section className="campaign-hero" data-onboarding-id="solo-hero">
           <div className="campaign-hero-copy">
             <span className="salon-badge">🎄 Campagne · Solo contre IA</span>
             <h1>La route vers le Pôle Nord</h1>
-            <p>
-              8 villes à travers le monde. 8 profils IA à vaincre. Chaque mission débloque la suivante —
-              bats l&apos;IA et prouve que tu mérites le rang de Maître Livreur.
-            </p>
+            <TeleprinterText
+              text="8 villes à travers le monde. 8 profils IA à vaincre. Chaque mission débloque la suivante - bats l'IA et prouve que tu mérites le rang de Maître Livreur."
+            />
             <div className="campaign-hero-ribbon">
               <span className="campaign-hero-pill">Progression persistante</span>
               <span className="campaign-hero-pill">IA adaptative</span>
@@ -119,7 +145,7 @@ export function CampaignMap() {
         </section>
 
         {/* INFO PANELS */}
-        <section className="grid-3 campaign-info-grid">
+        <section className="grid-3 campaign-info-grid" data-onboarding-id="solo-rules">
           <div className="panel stack">
             <strong>📋 Règles de progression</strong>
             <span className="muted">Un niveau terminé débloque le suivant.</span>
@@ -129,7 +155,9 @@ export function CampaignMap() {
           <div className="panel stack">
             <strong>🎮 Autres modes</strong>
             <Link className="secondary-button" href="/">← Retour au hub</Link>
-            <Link className="secondary-button" href="/versus">⚔️ Mode Versus</Link>
+            <Link className="secondary-button" href="/versus" data-onboarding-id="solo-versus-link">
+              ⚔️ Mode Versus
+            </Link>
             <Link className="secondary-button" href="/leaderboard">🏆 Panthéon</Link>
           </div>
           <div className="panel stack">
@@ -161,7 +189,7 @@ export function CampaignMap() {
         </section>
 
         {/* CARTE DES MISSIONS */}
-        <section className="campaign-path">
+        <section className="campaign-path" data-onboarding-id="solo-missions">
           {CAMPAIGN_MISSIONS.map((mission, index) => {
             const status = missionStatus(mission, progress);
             const stars = Number(progress.starsByLevel[mission.level] ?? 0);
@@ -170,16 +198,17 @@ export function CampaignMap() {
             const cityIcon = CITY_ICONS[mission.level] ?? "🏙";
             const weatherIcon = WEATHER_ICONS[mission.weather_key] ?? "🌡";
 
+            const isNext = status === "unlocked" && !progress.completedLevels.includes(mission.level);
             return (
-              <div key={mission.level} className={`campaign-row ${index % 2 === 0 ? "is-left" : "is-right"} status-${status}`}>
+              <div key={mission.level} className={`campaign-row ${index % 2 === 0 ? "is-left" : "is-right"} status-${status}${isNext ? " is-next" : ""}`}>
                 <div className="campaign-node-column">
-                  <div className={`campaign-node status-${status}`}>
+                  <div className={`campaign-node status-${status}${isNext ? " is-next" : ""}`}>
                     {status === "completed" ? "✓" : status === "locked" ? "🔒" : mission.level}
                   </div>
                   {index < CAMPAIGN_MISSIONS.length - 1 && <div className="campaign-link" />}
                 </div>
 
-                <article className={`campaign-card status-${status}`}>
+                <article className={`campaign-card status-${status}${isNext ? " is-next" : ""}`}>
                   <div className="campaign-card-head">
                     <div>
                       <span className="campaign-chapter">{mission.chapter}</span>
@@ -189,7 +218,7 @@ export function CampaignMap() {
                       </h2>
                     </div>
                     <span className={`tag salon-status-chip status-${status}`}>
-                      {status === "completed" ? "✓ Terminé" : status === "unlocked" ? "Disponible" : "🔒 Verrouillé"}
+                      {status === "completed" ? "✓ Terminé" : isNext ? "▶ Jouer maintenant" : status === "unlocked" ? "Disponible" : "🔒 Verrouillé"}
                     </span>
                   </div>
 
@@ -230,7 +259,7 @@ export function CampaignMap() {
                     <button
                       className="primary-button campaign-launch-button"
                       disabled={status === "locked" || launchMutation.isPending || !player}
-                      onClick={() => launchMutation.mutate(mission)}
+                      onClick={() => { setLaunchError(null); launchMutation.mutate(mission); }}
                     >
                       {!player
                         ? "🔑 Connexion requise"
@@ -240,12 +269,21 @@ export function CampaignMap() {
                         ? "↺ Rejouer"
                         : "🚀 Lancer"}
                     </button>
+                    {launchError && launchMutation.variables?.level === mission.level && (
+                      <div className="error-box" style={{ marginTop: 6, fontSize: "0.82rem" }}>{launchError}</div>
+                    )}
                   </div>
                 </article>
               </div>
             );
           })}
         </section>
+
+        <GuidedOnboarding
+          storageKey="operation-noel-onboarding-solo-v1"
+          tutorialLabel="Solo"
+          steps={SOLO_ONBOARDING_STEPS}
+        />
 
       </div>
     </div>

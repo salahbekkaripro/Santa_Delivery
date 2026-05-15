@@ -194,6 +194,7 @@ export function MissionCreator() {
     sleigh_cost: 500,
     weather_key: "real",
     random_incidents: false,
+    departure_hour: null as number | null,
   });
 
   const createMutation = useMutation({
@@ -731,6 +732,28 @@ export function MissionCreator() {
                 onChange={(event) => setSandbox((prev) => ({ ...prev, sleigh_cost: Number(event.target.value) }))}
               />
             </label>
+            <label className="field">
+              <span>Heure de départ (trafic)</span>
+              <select
+                value={sandbox.departure_hour ?? ""}
+                onChange={(event) =>
+                  setSandbox((prev) => ({
+                    ...prev,
+                    departure_hour: event.target.value === "" ? null : Number(event.target.value),
+                  }))
+                }
+              >
+                <option value="">Sans congestion</option>
+                <option value="7">7h · ×1.4</option>
+                <option value="8">8h · Pointe matin ×1.7</option>
+                <option value="9">9h · ×1.5</option>
+                <option value="12">12h · Méridienne ×1.2</option>
+                <option value="13">13h · ×1.3</option>
+                <option value="17">17h · ×1.6</option>
+                <option value="18">18h · Pointe soir ×1.8</option>
+                <option value="19">19h · ×1.4</option>
+              </select>
+            </label>
           </div>
           {!canAutocompleteAddress ? (
             <div className="error-box">
@@ -798,6 +821,7 @@ export function MissionCreator() {
                   sleigh_cost: requestedSleighCost,
                   weather_key: sandbox.weather_key,
                   random_incidents: sandbox.random_incidents,
+                  departure_hour: sandbox.departure_hour,
                   level: null,
                 });
               }}

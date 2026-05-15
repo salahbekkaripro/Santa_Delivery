@@ -2,12 +2,20 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useEffect } from "react";
 import { usePlayer } from "@/components/player-provider";
-import { getDebrief, saveLeaderboard } from "@/lib/api";
+import { getDebrief, getGraphMetrics, saveLeaderboard } from "@/lib/api";
 import { CAMPAIGN_MISSIONS, getStarsForScore, recordCampaignCompletion } from "@/lib/campaign";
-import { AISleighSummary, DebriefPayload, HumanSleighSummary } from "@/lib/types";
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { AISleighSummary, DebriefPayload, HumanSleighSummary, OrOptSleighResult, TwoOptSleighResult } from "@/lib/types";
+
+const DebriefPerformanceChart = dynamic(
+  () => import("@/components/debrief-performance-chart").then((mod) => mod.DebriefPerformanceChart),
+  {
+    ssr: false,
+    loading: () => <div className="panel-loading" style={{ height: 260 }} />,
+  },
+);
 
 function asMinutes(seconds: number) {
   return `${Math.round(seconds / 60)} min`;
@@ -32,6 +40,11 @@ export function DebriefView({ missionId }: { missionId: string }) {
   const debriefQuery = useQuery({
     queryKey: ["debrief", missionId],
     queryFn: () => getDebrief(missionId)
+  });
+  const graphMetricsQuery = useQuery({
+    queryKey: ["graph-metrics", missionId],
+    queryFn: () => getGraphMetrics(missionId),
+    retry: false,
   });
 
   const leaderboardMutation = useMutation({
@@ -172,17 +185,7 @@ export function DebriefView({ missionId }: { missionId: string }) {
         <section className="grid-2">
           <div className="chart-container">
             <strong>Comparaison de performance</strong>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="Humain" fill="#9e2f3f" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="IA" fill="#17324d" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <DebriefPerformanceChart data={chartData} />
           </div>
           <div className="grid-2" style={{ gap: "14px", alignContent: "start" }}>
             <div className="metric-card is-good">
@@ -249,7 +252,7 @@ export function DebriefView({ missionId }: { missionId: string }) {
             <span className="muted">Gain vs naïf : {asMinutes(analysis.naive_vs_ai_delta_s)}</span>
             {scoreBreakdown && (
               <span className="muted" style={{ fontSize: "0.8rem" }}>
-                Score : {scoreBreakdown.base_score} (base) + {scoreBreakdown.ai_profile_bonus} (IA) + {scoreBreakdown.incident_bonus} (incidents) + {scoreBreakdown.human_bonus} (duel)
+                Score : {scoreBreakdown.base_score} (base) + {scoreBreakdown.ai_profile_bonus} (IA) + {scoreBreakdown.incident_bonus} (incidents) + {scoreBreakdown.human_bonus} (duel) + {scoreBreakdown.weather_bonus ?? 0} (météo)
               </span>
             )}
             {campaignLevel > 0 && (
@@ -283,8 +286,8 @@ export function DebriefView({ missionId }: { missionId: string }) {
         <section className="grid-2">
           <div className="panel stack">
             <strong>Traîneaux humain</strong>
-            {(debriefPayload.human.sleighs ?? []).length > 0 ? (
-              (debriefPayload.human.sleighs ?? []).map((sleigh: HumanSleighSummary) => (
+            {(debriefPayload.human.sleighs ?? []).filter((s: HumanSleighSummary) => s.stop_count > 0).length > 0 ? (
+              (debriefPayload.human.sleighs ?? []).filter((s: HumanSleighSummary) => s.stop_count > 0).map((sleigh: HumanSleighSummary) => (
                 <div key={`human-${sleigh.sleigh_id}`} className="sleigh-row">
                   <span className="sleigh-row-id">#{sleigh.sleigh_id + 1}</span>
                   <div className="sleigh-row-stats">
@@ -347,6 +350,151 @@ export function DebriefView({ missionId }: { missionId: string }) {
                 </div>
               ))}
             </div>
+          </section>
+        )}
+
+        {/* 2-OPT */}
+        {analysis.two_opt && (
+          <section className="panel stack">
+            <strong>🔁 Optimisation 2-opt (solution humaine)</strong>
+            <span className="muted">
+              Gain total : {asMinutes(analysis.two_opt.total_improvement_s)} ({analysis.two_opt.total_improvement_pct}%)
+              — humain {asMinutes(analysis.two_opt.total_human_time_s)} → optimisé {asMinutes(analysis.two_opt.total_two_opt_time_s)}
+            </span>
+            <div className="sleigh-row" style={{ fontWeight: 600, borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
+              <span style={{ flex: 1 }}>Traîneau</span>
+              <span style={{ flex: 1 }}>Humain</span>
+              <span style={{ flex: 1 }}>2-opt</span>
+              <span style={{ flex: 1 }}>Gain</span>
+            </div>
+            {Object.entries(analysis.two_opt.sleighs).filter(([, s]) => (s as TwoOptSleighResult).human_time_s > 0).map(([sid, s]: [string, TwoOptSleighResult]) => (
+              <div key={sid} className="sleigh-row">
+                <span className="sleigh-row-id">#{Number(sid) + 1}</span>
+                <div className="sleigh-row-stats">
+                  <span>{asMinutes(s.human_time_s)}</span>
+                  <span>{asMinutes(s.two_opt_time_s)}</span>
+                  <span className={s.improvement_pct > 0 ? "is-good" : ""}>
+                    {s.improvement_pct > 0 ? `-${s.improvement_pct}%` : "—"}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
+
+        {/* OR-OPT */}
+        {analysis.or_opt && (
+          <section className="panel stack">
+            <strong>🔀 Or-opt inter-routes (relocalisation)</strong>
+            <span className="muted">
+              Gain total : {asMinutes(analysis.or_opt.total_improvement_s)} ({analysis.or_opt.total_improvement_pct}%)
+              — humain {asMinutes(analysis.or_opt.total_human_time_s)} → optimisé {asMinutes(analysis.or_opt.total_or_opt_time_s)}
+            </span>
+            <div className="sleigh-row" style={{ fontWeight: 600, borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
+              <span style={{ flex: 1 }}>Traîneau</span>
+              <span style={{ flex: 1 }}>Humain</span>
+              <span style={{ flex: 1 }}>Or-opt</span>
+              <span style={{ flex: 1 }}>Gain</span>
+            </div>
+            {Object.entries(analysis.or_opt.sleighs).filter(([, s]) => (s as OrOptSleighResult).human_time_s > 0).map(([sid, s]: [string, OrOptSleighResult]) => (
+              <div key={sid} className="sleigh-row">
+                <span className="sleigh-row-id">#{Number(sid) + 1}</span>
+                <div className="sleigh-row-stats">
+                  <span>{asMinutes(s.human_time_s)}</span>
+                  <span>{asMinutes(s.or_opt_time_s)}</span>
+                  <span className={s.improvement_pct > 0 ? "is-good" : ""}>
+                    {s.improvement_pct > 0 ? `-${s.improvement_pct}%` : "—"}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
+
+        {/* NEAREST NEIGHBOR */}
+        {analysis.nearest_neighbor && (
+          <section className="panel stack">
+            <strong>📍 Baseline Nearest Neighbor (greedy mono-véhicule)</strong>
+            <span className="muted">
+              Tournée NN : {asMinutes(analysis.nearest_neighbor.total_time_s)} · {analysis.nearest_neighbor.steps_count} étapes
+            </span>
+            <div className="sleigh-row" style={{ fontWeight: 600, borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
+              <span style={{ flex: "0 0 2rem" }}>#</span>
+              <span style={{ flex: 1 }}>De → Vers</span>
+              <span style={{ flex: 1 }}>Coût</span>
+              <span style={{ flex: 1 }}>Cumulé</span>
+            </div>
+            {analysis.nearest_neighbor.steps.slice(0, 8).map((step) => (
+              <div key={step.step} className="sleigh-row">
+                <span className="sleigh-row-id" style={{ background: "var(--accent)" }}>{step.step}</span>
+                <div className="sleigh-row-stats">
+                  <span>{step.from_node} → {step.to_node}</span>
+                  <span>{asMinutes(step.cost_s)}</span>
+                  <span>{asMinutes(step.cumulative_s)}</span>
+                </div>
+              </div>
+            ))}
+            {analysis.nearest_neighbor.steps.length > 8 && (
+              <span className="muted" style={{ fontSize: "0.8rem" }}>… et {analysis.nearest_neighbor.steps.length - 8} étapes supplémentaires</span>
+            )}
+          </section>
+        )}
+
+        {/* GAP D'OPTIMALITÉ */}
+        {analysis.optimality_gap && (
+          <section className="panel stack">
+            <strong>📐 Gap d&apos;optimalité (borne inférieure)</strong>
+            <div className="grid-2" style={{ gap: 10 }}>
+              <div className="metric-card">
+                <div className="metric-label">Borne inférieure</div>
+                <div className="metric-value">{asMinutes(analysis.optimality_gap.lower_bound_s)}</div>
+              </div>
+              <div className="metric-card">
+                <div className="metric-label">Votre solution</div>
+                <div className="metric-value">{asMinutes(analysis.optimality_gap.solution_cost_s)}</div>
+              </div>
+            </div>
+            <span className="muted">
+              Gap d&apos;optimalité : {analysis.optimality_gap.gap_pct !== null ? `${analysis.optimality_gap.gap_pct}%` : "N/A"}
+              {" "}· Interprétation : <strong>{analysis.optimality_gap.interpretation}</strong>
+            </span>
+          </section>
+        )}
+
+        {/* MÉTRIQUES GRAPHE */}
+        {graphMetricsQuery.data && (
+          <section className="panel stack">
+            <strong>🗺️ Métriques du graphe routier</strong>
+            <div className="grid-2" style={{ gap: 10 }}>
+              <div className="metric-card">
+                <div className="metric-label">Nœuds</div>
+                <div className="metric-value">{graphMetricsQuery.data.num_nodes.toLocaleString()}</div>
+              </div>
+              <div className="metric-card">
+                <div className="metric-label">Arcs</div>
+                <div className="metric-value">{graphMetricsQuery.data.num_edges.toLocaleString()}</div>
+              </div>
+              <div className="metric-card">
+                <div className="metric-label">Degré moyen</div>
+                <div className="metric-value">{graphMetricsQuery.data.avg_degree}</div>
+              </div>
+              <div className="metric-card">
+                <div className="metric-label">Clustering moyen</div>
+                <div className="metric-value">{graphMetricsQuery.data.avg_clustering}</div>
+              </div>
+              <div className="metric-card">
+                <div className="metric-label">Plus grande CFC</div>
+                <div className="metric-value">{graphMetricsQuery.data.largest_scc_pct}%</div>
+              </div>
+              <div className="metric-card">
+                <div className="metric-label">Densité</div>
+                <div className="metric-value">{graphMetricsQuery.data.density}</div>
+              </div>
+            </div>
+            <span className="muted" style={{ fontSize: "0.8rem" }}>
+              Top carrefours (betweenness) :{" "}
+              {graphMetricsQuery.data.top_betweenness_nodes.map((n) => `#${n.node} (${n.score})`).join(" · ")}
+            </span>
           </section>
         )}
 

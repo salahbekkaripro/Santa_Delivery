@@ -319,6 +319,91 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(history[0]["match_id"], "m3")
         self.assertIn(history[0]["winner_rule"], {"score_time", "time", "objectives"})
 
+    def test_friendships_and_direct_messages(self):
+        repository.upsert_player(player_id="p1", display_name="Alpha", db_path=self.db_path)
+        repository.upsert_player(player_id="p2", display_name="Bravo", db_path=self.db_path)
+        repository.upsert_player(player_id="p3", display_name="Charlie", db_path=self.db_path)
+
+        repository.create_or_reset_friend_request("p1", "p2", db_path=self.db_path)
+        relation = repository.get_friendship_between("p1", "p2", db_path=self.db_path)
+        self.assertIsNotNone(relation)
+        self.assertEqual(relation["status"], "pending")
+        self.assertEqual(relation["requester_player_id"], "p1")
+
+        repository.update_friendship_status("p1", "p2", status="accepted", responded_at="2026-05-14T12:00:00+00:00", db_path=self.db_path)
+        accepted = repository.list_friendships_for_player("p1", statuses=("accepted",), db_path=self.db_path)
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["peer_player_id"], "p2")
+
+        repository.create_direct_message(
+            message_id="msg-1",
+            sender_player_id="p1",
+            recipient_player_id="p2",
+            body="Salut Bravo",
+            db_path=self.db_path,
+        )
+        repository.create_direct_message(
+            message_id="msg-2",
+            sender_player_id="p2",
+            recipient_player_id="p1",
+            body="Salut Alpha",
+            db_path=self.db_path,
+        )
+
+        conversations = repository.list_direct_conversations("p1", limit=10, db_path=self.db_path)
+        self.assertEqual(len(conversations), 1)
+        self.assertEqual(conversations[0]["peer_player_id"], "p2")
+        self.assertEqual(conversations[0]["unread_count"], 1)
+
+        repository.mark_direct_messages_read(recipient_player_id="p1", sender_player_id="p2", db_path=self.db_path)
+        messages = repository.list_direct_messages("p1", "p2", limit=20, db_path=self.db_path)
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["sender_player_id"], "p1")
+        self.assertEqual(messages[1]["sender_player_id"], "p2")
+        self.assertIsNotNone(messages[1]["read_at"])
+
+        repository.delete_friendship("p1", "p2", db_path=self.db_path)
+        self.assertIsNone(repository.get_friendship_between("p1", "p2", db_path=self.db_path))
+
+    def test_blocks_and_clear_conversation_locally(self):
+        repository.upsert_player(player_id="p1", display_name="Alpha", db_path=self.db_path)
+        repository.upsert_player(player_id="p2", display_name="Bravo", db_path=self.db_path)
+
+        repository.create_user_block("p1", "p2", db_path=self.db_path)
+        self.assertTrue(repository.is_user_blocked("p1", "p2", db_path=self.db_path))
+        blocked = repository.list_blocked_players("p1", db_path=self.db_path)
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["blocked_player_id"], "p2")
+
+        repository.create_direct_message(
+            message_id="m-a",
+            sender_player_id="p1",
+            recipient_player_id="p2",
+            body="hello",
+            db_path=self.db_path,
+        )
+        repository.create_direct_message(
+            message_id="m-b",
+            sender_player_id="p2",
+            recipient_player_id="p1",
+            body="hi",
+            db_path=self.db_path,
+        )
+        cleared_state = repository.clear_direct_conversation_for_player("p1", "p2", db_path=self.db_path)
+        self.assertEqual(cleared_state["player_id"], "p1")
+        self.assertEqual(repository.list_direct_messages("p1", "p2", db_path=self.db_path), [])
+        self.assertEqual(len(repository.list_direct_messages("p2", "p1", db_path=self.db_path)), 2)
+        hidden_conversations = repository.list_direct_conversations("p1", limit=10, db_path=self.db_path)
+        self.assertEqual(len(hidden_conversations), 1)
+        self.assertTrue(hidden_conversations[0]["hidden"])
+        self.assertEqual(hidden_conversations[0]["peer_player_id"], "p2")
+        restored_state = repository.restore_direct_conversation_for_player("p1", "p2", db_path=self.db_path)
+        self.assertTrue(restored_state["restored"])
+        self.assertEqual(len(repository.list_direct_messages("p1", "p2", db_path=self.db_path)), 2)
+
+        repository.remove_user_block("p1", "p2", db_path=self.db_path)
+        self.assertFalse(repository.is_user_blocked("p1", "p2", db_path=self.db_path))
+
 
 if __name__ == "__main__":
     unittest.main()

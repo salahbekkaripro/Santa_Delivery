@@ -10,7 +10,7 @@ shapely
 plotly
 streamlit-folium
 fastapi
-uvicorn
+uvicorn[standard]
 httpx
 pytest
 pytest-asyncio

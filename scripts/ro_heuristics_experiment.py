@@ -369,6 +369,7 @@ def _build_summary(
 ) -> dict[str, Any]:
     policy_stats: dict[str, dict[str, Any]] = {}
     winners_by_instance: dict[str, dict[str, Any]] = {}
+    context_win_rates: dict[str, dict[str, Any]] = {}
 
     for policy_id in policy_ids:
         ok_records = [r for r in records if r.policy_id == policy_id and r.status == "ok"]
@@ -394,6 +395,7 @@ def _build_summary(
             continue
         best = min(feasible, key=lambda row: float(row.composite_cost))
         winners_by_instance[mission_id] = {
+            "context_key": best.context_key,
             "best_policy_id": best.policy_id,
             "best_policy_label": best.policy_label,
             "best_composite_cost": best.composite_cost,
@@ -404,6 +406,39 @@ def _build_summary(
         pid = str(winner["best_policy_id"])
         if pid in win_counts:
             win_counts[pid] += 1
+
+    contexts = sorted({record.context_key for record in records if record.context_key})
+    for context_key in contexts:
+        context_winners = [winner for winner in winners_by_instance.values() if str(winner.get("context_key", "")) == context_key]
+        mission_count = len(context_winners)
+        wins_by_policy = {policy_id: 0 for policy_id in policy_ids}
+        for winner in context_winners:
+            pid = str(winner["best_policy_id"])
+            if pid in wins_by_policy:
+                wins_by_policy[pid] += 1
+        win_rate_by_policy = {
+            policy_id: (round(float(wins) / float(mission_count), 4) if mission_count > 0 else None)
+            for policy_id, wins in wins_by_policy.items()
+        }
+
+        avg_cost_by_policy: dict[str, float | None] = {}
+        for policy_id in policy_ids:
+            costs = [
+                float(record.composite_cost)
+                for record in records
+                if record.context_key == context_key
+                and record.policy_id == policy_id
+                and record.status == "ok"
+                and record.composite_cost is not None
+            ]
+            avg_cost_by_policy[policy_id] = round(float(np.mean(np.array(costs, dtype=float))), 4) if costs else None
+
+        context_win_rates[context_key] = {
+            "mission_count": mission_count,
+            "wins_by_policy": wins_by_policy,
+            "win_rate_by_policy": win_rate_by_policy,
+            "avg_cost_by_policy": avg_cost_by_policy,
+        }
 
     baseline_id = policy_ids[0]
     baseline_records = {
@@ -435,6 +470,7 @@ def _build_summary(
         "policies": policy_stats,
         "wins_by_policy": win_counts,
         "winners_by_instance": winners_by_instance,
+        "context_win_rates": context_win_rates,
         "baseline_policy_id": baseline_id,
         "deltas_vs_baseline": deltas_vs_baseline,
     }

@@ -1,0 +1,88 @@
+{
+  "metadata": {
+    "city": "paris5",
+    "initial_nodes": 124,
+    "initial_scc": 124
+  },
+  "critical_removal": [
+    {
+      "pct_removed": 0,
+      "nodes_removed": 0,
+      "largest_scc_size": 124,
+      "connectivity_loss_pct": 0.0
+    },
+    {
+      "pct_removed": 1.0,
+      "nodes_removed": 1,
+      "largest_scc_size": 49,
+      "connectivity_loss_pct": 60.48
+    },
+    {
+      "pct_removed": 2.0,
+      "nodes_removed": 2,
+      "largest_scc_size": 47,
+      "connectivity_loss_pct": 62.1
+    },
+    {
+      "pct_removed": 5.0,
+      "nodes_removed": 6,
+      "largest_scc_size": 41,
+      "connectivity_loss_pct": 66.94
+    },
+    {
+      "pct_removed": 10.0,
+      "nodes_removed": 12,
+      "largest_scc_size": 34,
+      "connectivity_loss_pct": 72.58
+    },
+    {
+      "pct_removed": 15.0,
+      "nodes_removed": 18,
+      "largest_scc_size": 34,
+      "connectivity_loss_pct": 72.58
+    },
+    {
+      "pct_removed": 20.0,
+      "nodes_removed": 24,
+      "largest_scc_size": 34,
+      "connectivity_loss_pct": 72.58
+    }
+  ],
+  "random_removal": [
+    {
+      "pct_removed": 0,
+      "largest_scc_size": 124,
+      "connectivity_loss_pct": 0.0
+    },
+    {
+      "pct_removed": 1.0,
+      "largest_scc_size": 117,
+      "connectivity_loss_pct": 5.65
+    },
+    {
+      "pct_removed": 2.0,
+      "largest_scc_size": 119,
+      "connectivity_loss_pct": 4.03
+    },
+    {
+      "pct_removed": 5.0,
+      "largest_scc_size": 62,
+      "connectivity_loss_pct": 50.0
+    },
+    {
+      "pct_removed": 10.0,
+      "largest_scc_size": 31,
+      "connectivity_loss_pct": 75.0
+    },
+    {
+      "pct_removed": 15.0,
+      "largest_scc_size": 16,
+      "connectivity_loss_pct": 87.1
+    },
+    {
+      "pct_removed": 20.0,
+      "largest_scc_size": 26,
+      "connectivity_loss_pct": 79.03
+    }
+  ]
+}

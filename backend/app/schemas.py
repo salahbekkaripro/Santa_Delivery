@@ -80,6 +80,15 @@ class AuthLoginRequest(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
+class AuthOAuthSyncRequest(BaseModel):
+    provider: str = Field(min_length=2, max_length=40)
+    provider_account_id: str = Field(min_length=2, max_length=200)
+    display_name: str = Field(min_length=1, max_length=80)
+    email: str | None = Field(default=None, max_length=160)
+    avatar: str | None = Field(default=None, max_length=280)
+    callsign: str | None = Field(default=None, max_length=80)
+
+
 class ForgotPasswordRequest(BaseModel):
     email: str = Field(min_length=5, max_length=160)
 
@@ -264,3 +273,30 @@ class VersusReadyRequest(BaseModel):
 
 class VersusSubmitRequest(BaseModel):
     player_id: str = Field(min_length=3, max_length=80)
+
+
+class SocialFriendRequestCreate(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    friend_player_id: str = Field(min_length=3, max_length=80)
+
+
+class SocialFriendRequestRespond(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    friend_player_id: str = Field(min_length=3, max_length=80)
+    action: Literal["accept", "decline"]
+
+
+class SocialDirectMessageCreate(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    recipient_player_id: str = Field(min_length=3, max_length=80)
+    body: str = Field(min_length=1, max_length=1000)
+
+
+class SocialBlockRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    blocked_player_id: str = Field(min_length=3, max_length=80)
+
+
+class SocialConversationRemoveRequest(BaseModel):
+    player_id: str = Field(min_length=3, max_length=80)
+    with_player_id: str = Field(min_length=3, max_length=80)

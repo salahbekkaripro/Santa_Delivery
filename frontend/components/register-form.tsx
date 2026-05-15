@@ -3,6 +3,7 @@
 import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { signIn as nextAuthSignIn } from "next-auth/react";
 import { FormEvent, useState } from "react";
 import { usePlayer } from "@/components/player-provider";
 import { registerPlayer } from "@/lib/api";
@@ -19,6 +20,9 @@ export function RegisterForm({ redirectTo = "/" }: { redirectTo?: string }) {
   const [callsign, setCallsign] = useState("");
   const [avatar, setAvatar] = useState(avatarChoices[0]);
   const [error, setError] = useState<string | null>(null);
+  const [oauthPending, setOauthPending] = useState<"google" | "github" | null>(null);
+  const googleEnabled = process.env.NEXT_PUBLIC_AUTH_GOOGLE_ENABLED === "1";
+  const githubEnabled = process.env.NEXT_PUBLIC_AUTH_GITHUB_ENABLED === "1";
 
   const registerMutation = useMutation({
     mutationFn: registerPlayer,
@@ -42,6 +46,19 @@ export function RegisterForm({ redirectTo = "/" }: { redirectTo?: string }) {
     registerMutation.mutate({ display_name: displayName, email, password, callsign, avatar });
   }
 
+  async function handleOAuthSignIn(provider: "google" | "github") {
+    try {
+      setError(null);
+      setOauthPending(provider);
+      await nextAuthSignIn(provider, {
+        callbackUrl: redirectTo.startsWith("/") ? redirectTo : "/",
+      });
+    } catch (oauthError) {
+      setError(oauthError instanceof Error ? oauthError.message : "Impossible de lancer la connexion OAuth.");
+      setOauthPending(null);
+    }
+  }
+
   return (
     <div className="auth-shell">
       <div className="auth-card auth-card-wide">
@@ -55,6 +72,30 @@ export function RegisterForm({ redirectTo = "/" }: { redirectTo?: string }) {
         </div>
         <div className="auth-card-body">
           <form onSubmit={handleSubmit} className="auth-form auth-form-gap-md">
+            <div className="auth-links-row auth-links-row-center">
+              {googleEnabled && (
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => handleOAuthSignIn("google")}
+                  disabled={oauthPending !== null}
+                >
+                  {oauthPending === "google" ? "Connexion Google..." : "Créer avec Google"}
+                </button>
+              )}
+              {githubEnabled && (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => handleOAuthSignIn("github")}
+                  disabled={oauthPending !== null}
+                >
+                  {oauthPending === "github" ? "Connexion GitHub..." : "Créer avec GitHub"}
+                </button>
+              )}
+            </div>
+            <span className="muted auth-muted-note">ou création locale</span>
+
             <label className="field">
               <span>Nom de joueur</span>
               <input

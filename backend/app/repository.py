@@ -182,6 +182,48 @@ def init_db(db_path: str | Path | None = None) -> None:
                 FOREIGN KEY (winner_player_id) REFERENCES players(player_id),
                 FOREIGN KEY (loser_player_id) REFERENCES players(player_id)
             );
+            CREATE TABLE IF NOT EXISTS friendships (
+                user_low_id TEXT NOT NULL,
+                user_high_id TEXT NOT NULL,
+                requester_player_id TEXT NOT NULL,
+                addressee_player_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                responded_at TEXT,
+                PRIMARY KEY (user_low_id, user_high_id),
+                FOREIGN KEY (user_low_id) REFERENCES players(player_id),
+                FOREIGN KEY (user_high_id) REFERENCES players(player_id),
+                FOREIGN KEY (requester_player_id) REFERENCES players(player_id),
+                FOREIGN KEY (addressee_player_id) REFERENCES players(player_id)
+            );
+            CREATE TABLE IF NOT EXISTS direct_messages (
+                message_id TEXT PRIMARY KEY,
+                conversation_key TEXT NOT NULL,
+                sender_player_id TEXT NOT NULL,
+                recipient_player_id TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                read_at TEXT,
+                FOREIGN KEY (sender_player_id) REFERENCES players(player_id),
+                FOREIGN KEY (recipient_player_id) REFERENCES players(player_id)
+            );
+            CREATE TABLE IF NOT EXISTS user_blocks (
+                blocker_player_id TEXT NOT NULL,
+                blocked_player_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (blocker_player_id, blocked_player_id),
+                FOREIGN KEY (blocker_player_id) REFERENCES players(player_id),
+                FOREIGN KEY (blocked_player_id) REFERENCES players(player_id)
+            );
+            CREATE TABLE IF NOT EXISTS direct_conversation_states (
+                player_id TEXT NOT NULL,
+                conversation_key TEXT NOT NULL,
+                cleared_before_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (player_id, conversation_key),
+                FOREIGN KEY (player_id) REFERENCES players(player_id)
+            );
             """
         )
         _ensure_column(conn, "players", "email", "email TEXT")
@@ -218,6 +260,18 @@ def init_db(db_path: str | Path | None = None) -> None:
             ON versus_queue(template_id, winner_rule, enqueued_at ASC);
             CREATE INDEX IF NOT EXISTS idx_versus_leaderboard_created_at
             ON versus_leaderboard(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_friendships_requester_status
+            ON friendships(requester_player_id, status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_friendships_addressee_status
+            ON friendships(addressee_player_id, status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_direct_messages_conversation_created
+            ON direct_messages(conversation_key, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_direct_messages_recipient_read
+            ON direct_messages(recipient_player_id, read_at, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked
+            ON user_blocks(blocked_player_id, blocker_player_id);
+            CREATE INDEX IF NOT EXISTS idx_direct_conversation_states_player
+            ON direct_conversation_states(player_id, updated_at DESC);
             """
         )
         conn.commit()
@@ -418,6 +472,658 @@ def get_player_by_email(email: str, db_path: str | Path | None = None) -> dict |
             (email,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def list_players(
+    search: str | None = None,
+    limit: int = 20,
+    exclude_player_id: str | None = None,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    init_db(db_path)
+    normalized_search = str(search or "").strip()
+    with connect(db_path) as conn:
+        if normalized_search:
+            pattern = f"%{normalized_search}%"
+            if exclude_player_id:
+                rows = conn.execute(
+                    """
+                    SELECT player_id, display_name, email, callsign, avatar, last_login_at, created_at, updated_at
+                    FROM players
+                    WHERE player_id <> ?
+                      AND (
+                        player_id LIKE ?
+                        OR display_name LIKE ?
+                        OR COALESCE(callsign, '') LIKE ?
+                      )
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (exclude_player_id, pattern, pattern, pattern, int(limit)),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT player_id, display_name, email, callsign, avatar, last_login_at, created_at, updated_at
+                    FROM players
+                    WHERE (
+                        player_id LIKE ?
+                        OR display_name LIKE ?
+                        OR COALESCE(callsign, '') LIKE ?
+                    )
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (pattern, pattern, pattern, int(limit)),
+                ).fetchall()
+        else:
+            if exclude_player_id:
+                rows = conn.execute(
+                    """
+                    SELECT player_id, display_name, email, callsign, avatar, last_login_at, created_at, updated_at
+                    FROM players
+                    WHERE player_id <> ?
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (exclude_player_id, int(limit)),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT player_id, display_name, email, callsign, avatar, last_login_at, created_at, updated_at
+                    FROM players
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (int(limit),),
+                ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _pair_players(player_a_id: str, player_b_id: str) -> tuple[str, str]:
+    first = str(player_a_id)
+    second = str(player_b_id)
+    return (first, second) if first < second else (second, first)
+
+
+def _conversation_key(player_a_id: str, player_b_id: str) -> str:
+    low_id, high_id = _pair_players(player_a_id, player_b_id)
+    return f"{low_id}::{high_id}"
+
+
+def _peer_player_from_conversation_key(player_id: str, conversation_key: str) -> str | None:
+    parts = str(conversation_key or "").split("::", 1)
+    if len(parts) != 2:
+        return None
+    low_id, high_id = parts
+    if low_id == player_id:
+        return high_id
+    if high_id == player_id:
+        return low_id
+    return None
+
+
+def get_friendship_between(
+    player_a_id: str,
+    player_b_id: str,
+    db_path: str | Path | None = None,
+) -> dict | None:
+    init_db(db_path)
+    low_id, high_id = _pair_players(player_a_id, player_b_id)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT user_low_id, user_high_id, requester_player_id, addressee_player_id, status, created_at, updated_at, responded_at
+            FROM friendships
+            WHERE user_low_id = ? AND user_high_id = ?
+            """,
+            (low_id, high_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_or_reset_friend_request(
+    requester_player_id: str,
+    addressee_player_id: str,
+    db_path: str | Path | None = None,
+) -> dict | None:
+    init_db(db_path)
+    low_id, high_id = _pair_players(requester_player_id, addressee_player_id)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT created_at FROM friendships WHERE user_low_id = ? AND user_high_id = ?",
+            (low_id, high_id),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now
+        conn.execute(
+            """
+            INSERT INTO friendships (
+                user_low_id, user_high_id, requester_player_id, addressee_player_id, status, created_at, updated_at, responded_at
+            )
+            VALUES (?, ?, ?, ?, 'pending', ?, ?, NULL)
+            ON CONFLICT(user_low_id, user_high_id) DO UPDATE SET
+                requester_player_id = excluded.requester_player_id,
+                addressee_player_id = excluded.addressee_player_id,
+                status = 'pending',
+                updated_at = excluded.updated_at,
+                responded_at = NULL
+            """,
+            (low_id, high_id, requester_player_id, addressee_player_id, created_at, now),
+        )
+        conn.commit()
+    return get_friendship_between(requester_player_id, addressee_player_id, db_path=db_path)
+
+
+def update_friendship_status(
+    player_a_id: str,
+    player_b_id: str,
+    status: str,
+    responded_at: str | None = None,
+    db_path: str | Path | None = None,
+) -> None:
+    init_db(db_path)
+    low_id, high_id = _pair_players(player_a_id, player_b_id)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE friendships
+            SET status = ?, responded_at = ?, updated_at = ?
+            WHERE user_low_id = ? AND user_high_id = ?
+            """,
+            (status, responded_at, now, low_id, high_id),
+        )
+        conn.commit()
+
+
+def delete_friendship(
+    player_a_id: str,
+    player_b_id: str,
+    db_path: str | Path | None = None,
+) -> None:
+    init_db(db_path)
+    low_id, high_id = _pair_players(player_a_id, player_b_id)
+    with connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM friendships WHERE user_low_id = ? AND user_high_id = ?",
+            (low_id, high_id),
+        )
+        conn.commit()
+
+
+def list_friendships_for_player(
+    player_id: str,
+    statuses: tuple[str, ...] | None = None,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    init_db(db_path)
+    normalized_statuses = tuple(str(status).strip() for status in (statuses or ()) if str(status).strip())
+    with connect(db_path) as conn:
+        if normalized_statuses:
+            placeholders = ", ".join("?" for _ in normalized_statuses)
+            rows = conn.execute(
+                f"""
+                SELECT
+                    friendships.user_low_id,
+                    friendships.user_high_id,
+                    friendships.requester_player_id,
+                    friendships.addressee_player_id,
+                    friendships.status,
+                    friendships.created_at,
+                    friendships.updated_at,
+                    friendships.responded_at,
+                    CASE
+                        WHEN friendships.user_low_id = ? THEN friendships.user_high_id
+                        ELSE friendships.user_low_id
+                    END AS peer_player_id,
+                    peer.display_name AS peer_display_name,
+                    peer.callsign AS peer_callsign,
+                    peer.avatar AS peer_avatar
+                FROM friendships
+                LEFT JOIN players AS peer ON peer.player_id = CASE
+                    WHEN friendships.user_low_id = ? THEN friendships.user_high_id
+                    ELSE friendships.user_low_id
+                END
+                WHERE (friendships.user_low_id = ? OR friendships.user_high_id = ?)
+                  AND friendships.status IN ({placeholders})
+                ORDER BY friendships.updated_at DESC
+                """,
+                (player_id, player_id, player_id, player_id, *normalized_statuses),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT
+                    friendships.user_low_id,
+                    friendships.user_high_id,
+                    friendships.requester_player_id,
+                    friendships.addressee_player_id,
+                    friendships.status,
+                    friendships.created_at,
+                    friendships.updated_at,
+                    friendships.responded_at,
+                    CASE
+                        WHEN friendships.user_low_id = ? THEN friendships.user_high_id
+                        ELSE friendships.user_low_id
+                    END AS peer_player_id,
+                    peer.display_name AS peer_display_name,
+                    peer.callsign AS peer_callsign,
+                    peer.avatar AS peer_avatar
+                FROM friendships
+                LEFT JOIN players AS peer ON peer.player_id = CASE
+                    WHEN friendships.user_low_id = ? THEN friendships.user_high_id
+                    ELSE friendships.user_low_id
+                END
+                WHERE friendships.user_low_id = ? OR friendships.user_high_id = ?
+                ORDER BY friendships.updated_at DESC
+                """,
+                (player_id, player_id, player_id, player_id),
+            ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_direct_message(
+    message_id: str,
+    sender_player_id: str,
+    recipient_player_id: str,
+    body: str,
+    db_path: str | Path | None = None,
+) -> dict | None:
+    init_db(db_path)
+    now = _utcnow()
+    conversation_key = _conversation_key(sender_player_id, recipient_player_id)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO direct_messages (
+                message_id, conversation_key, sender_player_id, recipient_player_id, body, created_at, read_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (message_id, conversation_key, sender_player_id, recipient_player_id, body, now),
+        )
+        conn.commit()
+    return get_direct_message(message_id, db_path=db_path)
+
+
+def get_direct_message(message_id: str, db_path: str | Path | None = None) -> dict | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT
+                messages.message_id,
+                messages.conversation_key,
+                messages.sender_player_id,
+                sender.display_name AS sender_display_name,
+                sender.avatar AS sender_avatar,
+                messages.recipient_player_id,
+                recipient.display_name AS recipient_display_name,
+                recipient.avatar AS recipient_avatar,
+                messages.body,
+                messages.created_at,
+                messages.read_at
+            FROM direct_messages AS messages
+            LEFT JOIN players AS sender ON sender.player_id = messages.sender_player_id
+            LEFT JOIN players AS recipient ON recipient.player_id = messages.recipient_player_id
+            WHERE messages.message_id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def mark_direct_messages_read(
+    recipient_player_id: str,
+    sender_player_id: str,
+    db_path: str | Path | None = None,
+) -> None:
+    init_db(db_path)
+    now = _utcnow()
+    conversation_key = _conversation_key(recipient_player_id, sender_player_id)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE direct_messages
+            SET read_at = ?
+            WHERE conversation_key = ?
+              AND recipient_player_id = ?
+              AND sender_player_id = ?
+              AND read_at IS NULL
+            """,
+            (now, conversation_key, recipient_player_id, sender_player_id),
+        )
+        conn.commit()
+
+
+def list_direct_messages(
+    player_id: str,
+    peer_player_id: str,
+    limit: int = 60,
+    before: str | None = None,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    init_db(db_path)
+    conversation_key = _conversation_key(player_id, peer_player_id)
+    with connect(db_path) as conn:
+        if before:
+            rows = conn.execute(
+                """
+                SELECT
+                    messages.message_id,
+                    messages.conversation_key,
+                    messages.sender_player_id,
+                    sender.display_name AS sender_display_name,
+                    sender.avatar AS sender_avatar,
+                    messages.recipient_player_id,
+                    recipient.display_name AS recipient_display_name,
+                    recipient.avatar AS recipient_avatar,
+                    messages.body,
+                    messages.created_at,
+                    messages.read_at
+                FROM direct_messages AS messages
+                LEFT JOIN players AS sender ON sender.player_id = messages.sender_player_id
+                LEFT JOIN players AS recipient ON recipient.player_id = messages.recipient_player_id
+                WHERE messages.conversation_key = ?
+                  AND messages.created_at > COALESCE(
+                    (
+                        SELECT state.cleared_before_at
+                        FROM direct_conversation_states AS state
+                        WHERE state.player_id = ? AND state.conversation_key = ?
+                    ),
+                    ''
+                  )
+                  AND messages.created_at < ?
+                ORDER BY messages.created_at DESC
+                LIMIT ?
+                """,
+                (conversation_key, player_id, conversation_key, before, int(limit)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT
+                    messages.message_id,
+                    messages.conversation_key,
+                    messages.sender_player_id,
+                    sender.display_name AS sender_display_name,
+                    sender.avatar AS sender_avatar,
+                    messages.recipient_player_id,
+                    recipient.display_name AS recipient_display_name,
+                    recipient.avatar AS recipient_avatar,
+                    messages.body,
+                    messages.created_at,
+                    messages.read_at
+                FROM direct_messages AS messages
+                LEFT JOIN players AS sender ON sender.player_id = messages.sender_player_id
+                LEFT JOIN players AS recipient ON recipient.player_id = messages.recipient_player_id
+                WHERE messages.conversation_key = ?
+                  AND messages.created_at > COALESCE(
+                    (
+                        SELECT state.cleared_before_at
+                        FROM direct_conversation_states AS state
+                        WHERE state.player_id = ? AND state.conversation_key = ?
+                    ),
+                    ''
+                  )
+                ORDER BY messages.created_at DESC
+                LIMIT ?
+                """,
+                (conversation_key, player_id, conversation_key, int(limit)),
+            ).fetchall()
+    messages = [dict(row) for row in rows]
+    messages.reverse()
+    return messages
+
+
+def clear_direct_conversation_for_player(
+    player_id: str,
+    peer_player_id: str,
+    db_path: str | Path | None = None,
+) -> dict:
+    init_db(db_path)
+    conversation_key = _conversation_key(player_id, peer_player_id)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO direct_conversation_states (
+                player_id, conversation_key, cleared_before_at, updated_at
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(player_id, conversation_key) DO UPDATE SET
+                cleared_before_at = excluded.cleared_before_at,
+                updated_at = excluded.updated_at
+            """,
+            (player_id, conversation_key, now, now),
+        )
+        conn.commit()
+    return {
+        "player_id": player_id,
+        "conversation_key": conversation_key,
+        "cleared_before_at": now,
+        "updated_at": now,
+    }
+
+
+def restore_direct_conversation_for_player(
+    player_id: str,
+    peer_player_id: str,
+    db_path: str | Path | None = None,
+) -> dict:
+    init_db(db_path)
+    conversation_key = _conversation_key(player_id, peer_player_id)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM direct_conversation_states
+            WHERE player_id = ? AND conversation_key = ?
+            """,
+            (player_id, conversation_key),
+        )
+        conn.commit()
+    return {
+        "player_id": player_id,
+        "conversation_key": conversation_key,
+        "restored": int(cursor.rowcount or 0) > 0,
+    }
+
+
+def list_direct_conversations(
+    player_id: str,
+    limit: int = 30,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                messages.message_id,
+                messages.conversation_key,
+                messages.sender_player_id,
+                messages.recipient_player_id,
+                messages.body,
+                messages.created_at,
+                messages.read_at
+            FROM direct_messages AS messages
+            LEFT JOIN direct_conversation_states AS states
+                ON states.player_id = ? AND states.conversation_key = messages.conversation_key
+            WHERE (messages.sender_player_id = ? OR messages.recipient_player_id = ?)
+              AND messages.created_at > COALESCE(states.cleared_before_at, '')
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (player_id, player_id, player_id, max(int(limit) * 40, 240)),
+        ).fetchall()
+
+    summaries: list[dict] = []
+    summary_by_key: dict[str, dict] = {}
+    for row in rows:
+        payload = dict(row)
+        conversation_key = str(payload["conversation_key"])
+        sender_player_id = str(payload["sender_player_id"])
+        recipient_player_id = str(payload["recipient_player_id"])
+        peer_player_id = recipient_player_id if sender_player_id == player_id else sender_player_id
+        if conversation_key not in summary_by_key:
+            summary = {
+                "conversation_key": conversation_key,
+                "peer_player_id": peer_player_id,
+                "last_message": payload,
+                "last_message_at": payload["created_at"],
+                "unread_count": 0,
+                "hidden": False,
+                "cleared_before_at": None,
+            }
+            summary_by_key[conversation_key] = summary
+            summaries.append(summary)
+        if recipient_player_id == player_id and payload.get("read_at") is None:
+            summary_by_key[conversation_key]["unread_count"] = int(summary_by_key[conversation_key]["unread_count"]) + 1
+
+    with connect(db_path) as conn:
+        hidden_rows = conn.execute(
+            """
+            SELECT
+                states.conversation_key,
+                states.cleared_before_at,
+                states.updated_at
+            FROM direct_conversation_states AS states
+            WHERE states.player_id = ?
+              AND EXISTS (
+                SELECT 1
+                FROM direct_messages AS messages
+                WHERE messages.conversation_key = states.conversation_key
+                  AND (messages.sender_player_id = ? OR messages.recipient_player_id = ?)
+              )
+            ORDER BY states.updated_at DESC
+            LIMIT ?
+            """,
+            (player_id, player_id, player_id, max(int(limit) * 4, 120)),
+        ).fetchall()
+    for row in hidden_rows:
+        payload = dict(row)
+        conversation_key = str(payload.get("conversation_key") or "")
+        if not conversation_key or conversation_key in summary_by_key:
+            continue
+        peer_player_id = _peer_player_from_conversation_key(player_id, conversation_key)
+        if not peer_player_id:
+            continue
+        summary = {
+            "conversation_key": conversation_key,
+            "peer_player_id": peer_player_id,
+            "last_message": None,
+            "last_message_at": payload.get("updated_at") or payload.get("cleared_before_at"),
+            "unread_count": 0,
+            "hidden": True,
+            "cleared_before_at": payload.get("cleared_before_at"),
+        }
+        summary_by_key[conversation_key] = summary
+        summaries.append(summary)
+
+    summaries.sort(key=lambda item: str(item["last_message_at"]), reverse=True)
+    trimmed = summaries[: int(limit)]
+    enriched: list[dict] = []
+    for item in trimmed:
+        peer = get_player(str(item["peer_player_id"]), db_path=db_path)
+        enriched.append(
+            {
+                "conversation_key": item["conversation_key"],
+                "peer_player_id": item["peer_player_id"],
+                "peer_display_name": peer.get("display_name") if peer else None,
+                "peer_callsign": peer.get("callsign") if peer else None,
+                "peer_avatar": peer.get("avatar") if peer else None,
+                "last_message": item["last_message"],
+                "unread_count": int(item["unread_count"]),
+                "last_message_at": item["last_message_at"],
+                "hidden": bool(item.get("hidden")),
+                "cleared_before_at": item.get("cleared_before_at"),
+            }
+        )
+    return enriched
+
+
+def create_user_block(
+    blocker_player_id: str,
+    blocked_player_id: str,
+    db_path: str | Path | None = None,
+) -> dict:
+    init_db(db_path)
+    now = _utcnow()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_blocks (blocker_player_id, blocked_player_id, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(blocker_player_id, blocked_player_id) DO NOTHING
+            """,
+            (blocker_player_id, blocked_player_id, now),
+        )
+        conn.commit()
+    return {
+        "blocker_player_id": blocker_player_id,
+        "blocked_player_id": blocked_player_id,
+        "created_at": now,
+    }
+
+
+def remove_user_block(
+    blocker_player_id: str,
+    blocked_player_id: str,
+    db_path: str | Path | None = None,
+) -> None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM user_blocks WHERE blocker_player_id = ? AND blocked_player_id = ?",
+            (blocker_player_id, blocked_player_id),
+        )
+        conn.commit()
+
+
+def is_user_blocked(
+    blocker_player_id: str,
+    blocked_player_id: str,
+    db_path: str | Path | None = None,
+) -> bool:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM user_blocks
+            WHERE blocker_player_id = ? AND blocked_player_id = ?
+            LIMIT 1
+            """,
+            (blocker_player_id, blocked_player_id),
+        ).fetchone()
+    return row is not None
+
+
+def list_blocked_players(
+    blocker_player_id: str,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                blocks.blocker_player_id,
+                blocks.blocked_player_id,
+                blocks.created_at,
+                players.display_name AS blocked_display_name,
+                players.callsign AS blocked_callsign,
+                players.avatar AS blocked_avatar
+            FROM user_blocks AS blocks
+            LEFT JOIN players ON players.player_id = blocks.blocked_player_id
+            WHERE blocks.blocker_player_id = ?
+            ORDER BY blocks.created_at DESC
+            """,
+            (blocker_player_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def create_password_reset_token(

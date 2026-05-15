@@ -16,6 +16,7 @@ export type MissionConfig = {
   ai_profile?: string | null;
   secondary_objectives?: SecondaryObjective[] | null;
   generation_message?: string;
+  departure_hour?: number | null;
 };
 
 export type PlayerProfile = {
@@ -27,6 +28,54 @@ export type PlayerProfile = {
   last_login_at?: string | null;
   created_at: string;
   updated_at?: string;
+};
+
+export type SocialPlayer = {
+  player_id: string;
+  display_name: string;
+  callsign?: string | null;
+  avatar?: string | null;
+};
+
+export type SocialFriendship = {
+  peer_player_id: string;
+  peer_display_name?: string | null;
+  peer_callsign?: string | null;
+  peer_avatar?: string | null;
+  status: "pending" | "accepted" | "declined";
+  requester_player_id: string;
+  addressee_player_id: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  responded_at?: string | null;
+};
+
+export type SocialDirectMessage = {
+  message_id: string;
+  conversation_key: string;
+  sender_player_id: string;
+  sender_display_name?: string | null;
+  sender_avatar?: string | null;
+  recipient_player_id: string;
+  recipient_display_name?: string | null;
+  recipient_avatar?: string | null;
+  body: string;
+  created_at?: string | null;
+  read_at?: string | null;
+  is_mine: boolean;
+};
+
+export type SocialConversation = {
+  conversation_key: string;
+  peer_player_id: string;
+  peer_display_name?: string | null;
+  peer_callsign?: string | null;
+  peer_avatar?: string | null;
+  unread_count: number;
+  last_message_at?: string | null;
+  last_message?: SocialDirectMessage | null;
+  hidden?: boolean;
+  cleared_before_at?: string | null;
 };
 
 export type SecondaryObjective = {
@@ -121,6 +170,12 @@ export type ClientPoint = {
   lon: number;
   nom_client: string;
   poids_colis: number;
+  tw_start?: number;
+  tw_end?: number;
+  cargo_code?: string;
+  cargo_label?: string;
+  cargo_emoji?: string;
+  cargo_constraint?: string | null;
 };
 
 export type RouteSegment = {
@@ -216,6 +271,12 @@ export type RouteOption = {
   projected_overload_kg?: number;
 };
 
+export type MapInteractionState = {
+  click_to_confirm_enabled: boolean;
+  confirming_route_key?: string;
+  last_action?: "validated" | "undone" | "error";
+};
+
 export type SummaryMetrics = {
   total_dist_m: number;
   total_time_s: number;
@@ -250,6 +311,7 @@ export type SolveResponse = {
     tours: Array<{ vehicle_id: number; route_ids: number[]; duration_s: number; weight_kg: number }>;
     dropped_points: number[];
     ai_strategy?: AIStrategy;
+    weather?: { factor: number; desc: string };
   };
   benchmark: {
     naive: { total_time_s: number; total_dist_m: number; tours: any[] };
@@ -298,6 +360,7 @@ export type DebriefPayload = {
       ai_profile_bonus: number;
       incident_bonus: number;
       human_bonus: number;
+      weather_bonus: number;
       final_score: number;
     };
   };
@@ -314,6 +377,10 @@ export type DebriefPayload = {
     ai_sleighs: AISleighSummary[];
     ai_strategy?: AIStrategy;
     secondary_objectives?: SecondaryObjectiveResult[];
+    two_opt?: TwoOptResult | null;
+    or_opt?: OrOptResult | null;
+    nearest_neighbor?: NearestNeighborResult | null;
+    optimality_gap?: OptimalityGapResult | null;
     recommendations: string[];
   };
 };
@@ -338,6 +405,122 @@ export type AdjacentNode = {
   dist_m: number;
   time_s: number;
   label: string;
+};
+
+export type GraphMetrics = {
+  num_nodes: number;
+  num_edges: number;
+  avg_degree: number;
+  max_degree: number;
+  density: number;
+  is_strongly_connected: boolean;
+  num_scc: number;
+  largest_scc_size: number;
+  largest_scc_pct: number;
+  avg_clustering: number;
+  top_betweenness_nodes: { node: number; score: number; lat: number; lon: number }[];
+};
+
+export type DijkstraStep = {
+  step: number;
+  node: number;
+  dist: number;
+  lat: number;
+  lon: number;
+  predecessor: number | null;
+};
+
+export type DijkstraResult = {
+  from_node: number;
+  to_node: number;
+  steps: DijkstraStep[];
+  steps_count: number;
+  path: number[];
+  path_length: number;
+  total_cost: number;
+  reached: boolean;
+  truncated: boolean;
+};
+
+export type AstarBiDirStep = {
+  step: number;
+  direction: "forward" | "backward";
+  node: number;
+  g: number;
+  f: number;
+  lat: number;
+  lon: number;
+  predecessor: number | null;
+};
+
+export type AstarCompareResult = {
+  from_node: number;
+  to_node: number;
+  steps_forward: AstarBiDirStep[];
+  steps_backward: AstarBiDirStep[];
+  meeting_node: number | null;
+  path: number[];
+  path_length: number;
+  total_cost: number;
+  reached: boolean;
+  truncated: boolean;
+  nodes_explored_astar_bidir: number;
+  nodes_explored_unidir: number;
+  reduction_pct: number;
+};
+
+export type TwoOptSleighResult = {
+  human_time_s: number;
+  two_opt_time_s: number;
+  improvement_s: number;
+  improvement_pct: number;
+  optimized_route: number[];
+};
+
+export type TwoOptResult = {
+  sleighs: Record<string, TwoOptSleighResult>;
+  total_human_time_s: number;
+  total_two_opt_time_s: number;
+  total_improvement_s: number;
+  total_improvement_pct: number;
+};
+
+export type OrOptSleighResult = {
+  human_time_s: number;
+  or_opt_time_s: number;
+  improvement_s: number;
+  improvement_pct: number;
+  optimized_route: number[];
+};
+
+export type OrOptResult = {
+  sleighs: Record<string, OrOptSleighResult>;
+  total_human_time_s: number;
+  total_or_opt_time_s: number;
+  total_improvement_s: number;
+  total_improvement_pct: number;
+};
+
+export type NearestNeighborStep = {
+  step: number;
+  from_node: number;
+  to_node: number;
+  cost_s: number;
+  cumulative_s: number;
+};
+
+export type NearestNeighborResult = {
+  route: number[];
+  total_time_s: number;
+  steps_count: number;
+  steps: NearestNeighborStep[];
+};
+
+export type OptimalityGapResult = {
+  lower_bound_s: number;
+  solution_cost_s: number;
+  gap_pct: number | null;
+  interpretation: string;
 };
 
 export type VersusWinnerRule = "score_time" | "time" | "objectives";
@@ -403,6 +586,13 @@ export type VersusParticipant = {
   forfeit_at?: string | null;
   last_seen_at?: string | null;
   forfeit_deadline_at?: string | null;
+  progress?: {
+    assigned_clients: number;
+    total_clients: number;
+    progress_pct: number;
+    elapsed_s: number;
+    updated_at?: string | null;
+  };
   is_self: boolean;
 };
 
@@ -421,6 +611,8 @@ export type VersusMatch = {
   reference_mission_id?: string | null;
   started_at?: string | null;
   started_elapsed_s?: number | null;
+  countdown_total_s?: number | null;
+  countdown_remaining_s?: number | null;
   completed_at?: string | null;
   winner_player_id?: string | null;
   result_reason?: string | null;

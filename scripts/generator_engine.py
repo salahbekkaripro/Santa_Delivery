@@ -8,6 +8,26 @@ import numpy as np
 import requests
 import networkx as nx
 
+# ---------------------------------------------------------------------------
+# Profil de congestion horaire (facteur multiplicatif sur la durée de trajet)
+# ---------------------------------------------------------------------------
+TRAFFIC_PROFILE: dict[int, float] = {
+    7: 1.4, 8: 1.7, 9: 1.5, 10: 1.1, 11: 1.0, 12: 1.2,
+    13: 1.3, 14: 1.1, 15: 1.0, 16: 1.1, 17: 1.6, 18: 1.8,
+    19: 1.4, 20: 1.1,
+}
+
+# ---------------------------------------------------------------------------
+# Catégories de cargaison
+# ---------------------------------------------------------------------------
+CARGO_CATEGORIES = [
+    {"code": "normal",    "label": "Colis standard", "emoji": "📦", "weight_factor": 1.0, "constraint": None},
+    {"code": "fragile",   "label": "Fragile",        "emoji": "🔮", "weight_factor": 0.8, "constraint": "slow"},
+    {"code": "refrigere", "label": "Réfrigéré",      "emoji": "🧊", "weight_factor": 1.0, "constraint": "time_window_strict"},
+    {"code": "gros",      "label": "Encombrant",     "emoji": "🛋️", "weight_factor": 1.5, "constraint": "capacity"},
+]
+_CARGO_WEIGHTS = [0.60, 0.20, 0.10, 0.10]
+
 # Configuration des chemins
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
@@ -16,6 +36,45 @@ DATA_PATH = os.path.join(CORE_DATA, 'livraisons_5eme.csv') # On garde le même n
 GRAPH_PATH = os.path.join(CORE_DATA, 'paris5.graphml')
 TIME_MATRIX = os.path.join(CORE_DATA, 'live_time_matrix.npy')
 DIST_MATRIX = os.path.join(CORE_DATA, 'matrix_5eme.npy')
+
+def _fetch_overpass_pois(lat: float, lon: float, radius_m: int = 1500, max_results: int = 200) -> list[str]:
+    """Fetch real POI names from OpenStreetMap via Overpass API.
+    Returns a list of names; falls back to [] if the API is unreachable.
+    """
+    query = (
+        f"[out:json][timeout:10];"
+        f"("
+        f'node["name"]["shop"](around:{radius_m},{lat},{lon});'
+        f'node["name"]["amenity"](around:{radius_m},{lat},{lon});'
+        f'node["name"]["tourism"](around:{radius_m},{lat},{lon});'
+        f");"
+        f"out {max_results};"
+    )
+    try:
+        r = requests.post(
+            "https://overpass-api.de/api/interpreter",
+            data={"data": query},
+            timeout=12,
+        )
+        r.raise_for_status()
+        elements = r.json().get("elements", [])
+        names = [
+            el["tags"]["name"]
+            for el in elements
+            if "tags" in el and "name" in el["tags"]
+        ]
+        unique = list(dict.fromkeys(names))  # deduplicate while preserving order
+        return unique[:max_results]
+    except Exception as exc:
+        print(f"⚠️ Overpass API indisponible : {exc}")
+        return []
+
+
+def apply_traffic_factor(durations: np.ndarray, departure_hour: int) -> np.ndarray:
+    """Apply hourly congestion multiplier to a duration matrix."""
+    factor = TRAFFIC_PROFILE.get(int(departure_hour), 1.0)
+    return durations * factor
+
 
 def _fallback_dist_m(num_clients: int) -> int:
     # Distance en mètres pour graph_from_point si la géométrie d'un lieu est
@@ -123,6 +182,7 @@ def generate_new_zone(
     center_lat=None,
     center_lon=None,
     search_radius_km=None,
+    departure_hour=None,
 ):
     """
     Télécharge une nouvelle zone et génère des points de livraison.
@@ -229,27 +289,48 @@ def generate_new_zone(
         "nom_client": "DEPOT CENTRAL"
     })
     
-    # Clients
-    noms_fictifs = ["Boulangerie", "Pharmacie", "Café de la Gare", "Hôtel de Ville", "Librairie", "Supermarché", "Garage", "École", "Mairie", "Poste"]
+    # Enrichissement Overpass : noms réels depuis OSM
+    center_lat_poi = float(center_lat) if center_lat is not None else float(depot_node[1]["y"])
+    center_lon_poi = float(center_lon) if center_lon is not None else float(depot_node[1]["x"])
+    radius_poi = max(800, int(float(search_radius_km or 1.5) * 1000))
+    poi_names = _fetch_overpass_pois(center_lat_poi, center_lon_poi, radius_poi)
+    noms_fictifs = ["Boulangerie", "Pharmacie", "Café de la Gare", "Hôtel de Ville",
+                    "Librairie", "Supermarché", "Garage", "École", "Mairie", "Poste"]
+
     for i, node in enumerate(clients_nodes):
         # Fenêtres de temps aléatoires (sur une base de 2h = 7200s)
         # 30% des clients ont une contrainte forte (matin ou fin de tournée)
         has_constraint = random.random() < 0.3
-        tw_start, tw_end = 0, 14400 # Par défaut 4h de large (très large)
+        tw_start, tw_end = 0, 14400
         if has_constraint:
             if random.random() < 0.5:
-                tw_start, tw_end = 0, 3600 # Livraison impérative dans la 1ère heure
+                tw_start, tw_end = 0, 3600
             else:
-                tw_start, tw_end = 3600, 7200 # Livraison dans la 2ème heure
-        
+                tw_start, tw_end = 3600, 7200
+
+        # Nom : POI réel si disponible, sinon fictif
+        if i < len(poi_names):
+            client_name = poi_names[i]
+        else:
+            client_name = f"{random.choice(noms_fictifs)} {i + 1}"
+
+        # Catégorie de cargaison pondérée
+        cargo = random.choices(CARGO_CATEGORIES, weights=_CARGO_WEIGHTS, k=1)[0]
+        base_weight = random.randint(5, 50)
+        actual_weight = max(1, round(base_weight * cargo["weight_factor"]))
+
         data.append({
             "id": i + 1,
-            "lat": node[1]['y'],
-            "lon": node[1]['x'],
-            "poids_colis": random.randint(5, 50),
-            "nom_client": f"{random.choice(noms_fictifs)} {i+1}",
+            "lat": node[1]["y"],
+            "lon": node[1]["x"],
+            "poids_colis": actual_weight,
+            "nom_client": client_name,
             "tw_start": tw_start,
-            "tw_end": tw_end
+            "tw_end": tw_end,
+            "cargo_code": cargo["code"],
+            "cargo_label": cargo["label"],
+            "cargo_emoji": cargo["emoji"],
+            "cargo_constraint": cargo["constraint"],
         })
     
     # Depot a aussi une fenêtre de temps (ouverture/fermeture)
@@ -266,6 +347,9 @@ def generate_new_zone(
     max_osrm_points = int(os.getenv("OSRM_MAX_POINTS", "40"))
     if len(df) > max_osrm_points:
         durations, distances = _compute_matrices_local(G, node_ids)
+        if departure_hour is not None:
+            durations = apply_traffic_factor(durations, int(departure_hour))
+            print(f"🚦 Facteur trafic appliqué pour {departure_hour}h : ×{TRAFFIC_PROFILE.get(int(departure_hour), 1.0)}")
         np.save(time_matrix_path, durations)
         np.save(dist_matrix_path, distances)
         print(f"✅ Matrices locales de temps/distance ({len(df)}x{len(df)}) générées.")
@@ -292,7 +376,11 @@ def generate_new_zone(
                 if "durations" not in res:
                     raise RuntimeError("OSRM: champ 'durations' manquant")
 
-                np.save(time_matrix_path, np.array(res["durations"]))
+                osrm_durations = np.array(res["durations"])
+                if departure_hour is not None:
+                    osrm_durations = apply_traffic_factor(osrm_durations, int(departure_hour))
+                    print(f"🚦 Facteur trafic appliqué pour {departure_hour}h : ×{TRAFFIC_PROFILE.get(int(departure_hour), 1.0)}")
+                np.save(time_matrix_path, osrm_durations)
                 np.save(dist_matrix_path, np.array(res.get("distances", [])))
                 print(f"✅ Matrices OSRM de temps/distance ({len(df)}x{len(df)}) générées.")
                 return True, ""
@@ -309,6 +397,9 @@ def generate_new_zone(
         try:
             print("↪️ Fallback local: calcul des matrices via NetworkX…")
             durations, distances = _compute_matrices_local(G, node_ids)
+            if departure_hour is not None:
+                durations = apply_traffic_factor(durations, int(departure_hour))
+                print(f"🚦 Facteur trafic appliqué pour {departure_hour}h : ×{TRAFFIC_PROFILE.get(int(departure_hour), 1.0)}")
             np.save(time_matrix_path, durations)
             np.save(dist_matrix_path, distances)
             print(f"✅ Matrices locales de temps/distance ({len(df)}x{len(df)}) générées.")

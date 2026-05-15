@@ -3,8 +3,11 @@ import type {
   AiLearningEvaluationResponse,
   AiLearningRecommendation,
   AiLearningTrainResponse,
+  AstarCompareResult,
   ComparisonPayload,
   DebriefPayload,
+  DijkstraResult,
+  GraphMetrics,
   HumanState,
   LeaderboardEntry,
   MissionConfig,
@@ -13,6 +16,10 @@ import type {
   PlayerProfile,
   RouteOption,
   SolveResponse,
+  SocialConversation,
+  SocialDirectMessage,
+  SocialFriendship,
+  SocialPlayer,
   VersusInvite,
   VersusLeaderboardEntry,
   VersusMapSource,
@@ -24,6 +31,9 @@ import type {
 } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const WS_BASE_URL = API_BASE_URL.startsWith("https://")
+  ? API_BASE_URL.replace("https://", "wss://")
+  : API_BASE_URL.replace("http://", "ws://");
 
 function normalizePlayer(payload: {
   player_id: string;
@@ -155,6 +165,29 @@ export function loginPlayer(payload: { email: string; password: string }) {
   }).then(normalizePlayer);
 }
 
+export function syncOAuthPlayer(payload: {
+  provider: string;
+  provider_account_id: string;
+  display_name: string;
+  email?: string | null;
+  callsign?: string | null;
+  avatar?: string | null;
+}) {
+  return apiFetch<{
+    player_id: string;
+    display_name: string;
+    email?: string | null;
+    callsign?: string | null;
+    avatar?: string | null;
+    created_at: string;
+    last_login_at?: string | null;
+    updated_at: string;
+  }>("/api/auth/oauth-sync", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }).then(normalizePlayer);
+}
+
 export function requestPasswordReset(payload: { email: string }) {
   return apiFetch<{
     status: string;
@@ -181,6 +214,120 @@ export function resetPassword(payload: { token: string; password: string }) {
     method: "POST",
     body: JSON.stringify(payload)
   }).then(normalizePlayer);
+}
+
+export function searchSocialPlayers(playerId: string, query: string, limit: number = 12) {
+  const params = new URLSearchParams({
+    player_id: playerId,
+    q: query,
+    limit: String(limit),
+  });
+  return apiFetch<{ players: SocialPlayer[] }>(`/api/social/players?${params.toString()}`);
+}
+
+export function getSocialFriendships(playerId: string) {
+  return apiFetch<{
+    friends: SocialFriendship[];
+    incoming_requests: SocialFriendship[];
+    outgoing_requests: SocialFriendship[];
+  }>(`/api/social/friends?player_id=${encodeURIComponent(playerId)}`);
+}
+
+export function sendFriendRequest(payload: { player_id: string; friend_player_id: string }) {
+  return apiFetch<{ status: string; friendship: SocialFriendship }>("/api/social/friends/request", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function respondFriendRequest(payload: {
+  player_id: string;
+  friend_player_id: string;
+  action: "accept" | "decline";
+}) {
+  return apiFetch<{ status: string; friendship: SocialFriendship }>("/api/social/friends/respond", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function removeFriendship(payload: { player_id: string; friend_player_id: string }) {
+  return apiFetch<{ status: string }>("/api/social/friends/remove", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getDirectConversations(playerId: string, limit: number = 30) {
+  const params = new URLSearchParams({
+    player_id: playerId,
+    limit: String(limit),
+  });
+  return apiFetch<{ conversations: SocialConversation[] }>(`/api/social/messages/conversations?${params.toString()}`);
+}
+
+export function getDirectMessages(payload: {
+  player_id: string;
+  with_player_id: string;
+  limit?: number;
+  before?: string;
+}) {
+  const params = new URLSearchParams({
+    player_id: payload.player_id,
+    with_player_id: payload.with_player_id,
+    limit: String(payload.limit ?? 60),
+  });
+  if (payload.before) {
+    params.set("before", payload.before);
+  }
+  return apiFetch<{ peer: SocialPlayer; self: SocialPlayer; messages: SocialDirectMessage[] }>(
+    `/api/social/messages?${params.toString()}`
+  );
+}
+
+export function sendDirectMessage(payload: { player_id: string; recipient_player_id: string; body: string }) {
+  return apiFetch<{ message: SocialDirectMessage }>("/api/social/messages", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function removeDirectConversation(payload: { player_id: string; with_player_id: string }) {
+  return apiFetch<{ status: string; conversation_key: string; cleared_before_at: string }>("/api/social/messages/conversation/remove", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function restoreDirectConversation(payload: { player_id: string; with_player_id: string }) {
+  return apiFetch<{ status: string; conversation_key: string; restored: boolean }>("/api/social/messages/conversation/restore", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getBlockedPlayers(playerId: string) {
+  return apiFetch<{ blocked: Array<{ player_id: string; display_name?: string | null; callsign?: string | null; avatar?: string | null; blocked_at?: string | null }> }>(
+    `/api/social/blocks?player_id=${encodeURIComponent(playerId)}`
+  );
+}
+
+export function blockPlayer(payload: { player_id: string; blocked_player_id: string }) {
+  return apiFetch<{ status: string }>("/api/social/blocks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function unblockPlayer(payload: { player_id: string; blocked_player_id: string }) {
+  return apiFetch<{ status: string }>("/api/social/blocks/remove", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getSocialWebSocketUrl(playerId: string) {
+  return `${WS_BASE_URL}/ws/social/${encodeURIComponent(playerId)}`;
 }
 
 export function getMission(missionId: string) {
@@ -309,6 +456,22 @@ export function getDebrief(missionId: string) {
   return apiFetch<DebriefPayload>(`/api/missions/${missionId}/debrief`);
 }
 
+export function getGraphMetrics(missionId: string) {
+  return apiFetch<GraphMetrics>(`/api/missions/${missionId}/graph/metrics`);
+}
+
+export function getDijkstraSteps(missionId: string, fromNode: number, toNode: number) {
+  return apiFetch<DijkstraResult>(
+    `/api/missions/${missionId}/graph/dijkstra-steps?from_node=${fromNode}&to_node=${toNode}`,
+  );
+}
+
+export function getBidirectionalAstarSteps(missionId: string, fromNode: number, toNode: number) {
+  return apiFetch<AstarCompareResult>(
+    `/api/missions/${missionId}/graph/bidirectional-astar-steps?from_node=${fromNode}&to_node=${toNode}`,
+  );
+}
+
 export function saveLeaderboard(
   missionId: string,
   payload: { player_name: string; player_id?: string; callsign?: string; avatar?: string }
@@ -377,6 +540,23 @@ export function leaveVersusQueue(payload: { player_id: string; template_id?: str
   });
 }
 
+export function getVersusQueueStatus(payload: {
+  player_id: string;
+  template_id: string;
+  winner_rule: VersusWinnerRule;
+}) {
+  const params = new URLSearchParams({
+    player_id: payload.player_id,
+    template_id: payload.template_id,
+    winner_rule: payload.winner_rule,
+  });
+  return apiFetch<{
+    status: "idle" | "queued" | "matched";
+    queue_entry?: { player_id: string; template_id: string; winner_rule: string; enqueued_at: string; updated_at: string };
+    match?: VersusMatch;
+  }>(`/api/versus/queue/status?${params.toString()}`);
+}
+
 export function createVersusInvite(payload: {
   player_id: string;
   invitee_player_id: string;
@@ -435,4 +615,9 @@ export function getVersusPlayerStats(limit: number = 20, maxMatches: number = 50
   return apiFetch<{ entries: VersusPlayerStatsEntry[] }>(
     `/api/versus/stats?limit=${limit}&max_matches=${maxMatches}`,
   );
+}
+
+export function getVersusWebSocketUrl(matchId: string, playerId: string) {
+  const params = new URLSearchParams({ player_id: playerId });
+  return `${WS_BASE_URL}/ws/versus/${encodeURIComponent(matchId)}?${params.toString()}`;
 }

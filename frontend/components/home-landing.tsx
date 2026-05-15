@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import type { Route } from "next";
+import { usePlayer } from "./player-provider";
 
 const modes = [
   {
@@ -19,6 +22,14 @@ const modes = [
     cta: "Mode versus →",
   },
   {
+    icon: "💬",
+    label: "Communauté",
+    title: "Social",
+    description: "Ajoute des amis, gère tes demandes et discute en messages privés 1v1.",
+    href: "/social" as Route,
+    cta: "Ouvrir le social hub →",
+  },
+  {
     icon: "🎪",
     label: "Démo live",
     title: "Salon",
@@ -27,12 +38,28 @@ const modes = [
     cta: "Ouvrir le salon →",
   },
   {
-    icon: "🏆",
-    label: "Classement",
-    title: "Panthéon",
-    description: "Les meilleurs agents de livraison. Consulte les scores, profils et zones conquises.",
-    href: "/leaderboard" as Route,
-    cta: "Voir le classement →",
+    icon: "🧮",
+    label: "Solveur",
+    title: "Solveur libre",
+    description: "Saisis n'importe quelle adresse, choisis le nombre de colis — l'IA calcule la tournée optimale sur le vrai réseau routier.",
+    href: "/solver" as Route,
+    cta: "Lancer le solveur →",
+  },
+  {
+    icon: "🔬",
+    label: "Algorithmes",
+    title: "Coulisses",
+    description: "Graphe OSM, Dijkstra animé, OR-Tools et 2-opt expliqués interactivement.",
+    href: "/explore" as Route,
+    cta: "Explorer →",
+  },
+  {
+    icon: "📊",
+    label: "Données",
+    title: "Données & projet",
+    description: "Sources ouvertes (OSM, Overpass, OpenWeatherMap), pipeline de traitement et architecture du projet.",
+    href: "/data" as Route,
+    cta: "Découvrir →",
   },
 ];
 
@@ -50,106 +77,130 @@ const flowSteps = [
 ];
 
 export function HomeLanding() {
-  return (
-    <div className="page-shell">
-      <div className="page-stack">
+  const { player, isReady } = usePlayer();
 
-        {/* HERO */}
-        <section className="home-hero reveal-lift">
-          <div className="home-hero-copy">
-            <span className="home-hero-kicker">🎄 Portail officiel · Saison 2025</span>
-            <h1 className="home-hero-title">Operation<br />Noël</h1>
-            <p className="home-hero-desc">
-              Tu es l&apos;agent de livraison du Père Noël. Planifie tes tournées de traîneaux, bats l&apos;IA et deviens légende du Pôle Nord.
-            </p>
-            <div className="home-hero-actions">
-              <Link className="home-hero-cta" href="/campaign">
-                🚀 Commencer la campagne
+  return (
+    <div className="home-root">
+
+      {/* HERO PLEIN ÉCRAN */}
+      <section className="home-hero">
+        <div className="home-hero-stars" aria-hidden="true" />
+        <div className="home-hero-glow-a" aria-hidden="true" />
+        <div className="home-hero-glow-b" aria-hidden="true" />
+
+        <div className="home-hero-inner">
+          <span className="home-hero-kicker">🎄 Portail officiel · Saison 2026</span>
+
+          <h1 className="home-hero-title">
+            Operation
+            <em className="home-hero-title-accent">Noël</em>
+          </h1>
+
+          <p className="home-hero-desc">
+            Tu es l&apos;agent de livraison du Père Noël.<br />
+            Planifie tes tournées, bats l&apos;IA et deviens légende du Pôle Nord.
+          </p>
+
+          <div className="home-hero-actions">
+            <Link className="home-hero-cta" href="/campaign">
+              🚀 Commencer la campagne
+            </Link>
+            <Link className="home-hero-ghost" href="/salon">
+              Démo rapide
+            </Link>
+          </div>
+
+          <div className="home-hero-metrics">
+            {quickStats.map((item) => (
+              <div key={item.label} className="home-hero-metric">
+                <strong>{item.value}</strong>
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="home-hero-scroll" aria-hidden="true">↓</div>
+      </section>
+
+      {/* CONTENU */}
+      <div className="page-shell">
+        <div className="page-stack">
+
+          {/* MODES */}
+          <div className="home-modes-grid">
+            {modes.map((mode, index) => (
+              <Link
+                key={mode.href}
+                className={`home-mode-card reveal-lift reveal-delay-${index + 1}`}
+                href={mode.href}
+              >
+                <div className="home-mode-head">
+                  <span className="home-mode-icon">{mode.icon}</span>
+                  <span className="home-mode-index">{String(index + 1).padStart(2, "0")}</span>
+                </div>
+                <span className="home-mode-label">{mode.label}</span>
+                <h2 className="home-mode-title">{mode.title}</h2>
+                <p className="home-mode-desc">{mode.description}</p>
+                <span className="home-mode-arrow">{mode.cta}</span>
               </Link>
-              <Link className="home-hero-ghost" href="/salon">
-                Démo rapide
-              </Link>
+            ))}
+          </div>
+
+          {/* AUTH COMPACT */}
+          {!player && isReady && (
+            <section className="home-auth-row">
+              <div className="home-auth-row-copy">
+                <strong>Rejoins le Panthéon</strong>
+                <p>
+                  Crée un compte pour sauvegarder ta progression, entrer au classement mondial et débloquer
+                  l&apos;historique de missions.
+                </p>
+              </div>
+              <div className="home-auth-row-actions">
+                <Link className="primary-button" href="/register">
+                  S&apos;inscrire gratuitement
+                </Link>
+                <Link className="secondary-button home-auth-ghost-btn" href="/login">
+                  Se connecter
+                </Link>
+              </div>
+            </section>
+          )}
+
+          {/* FLOW STRIP */}
+          <section className="home-flow-strip">
+            <div className="home-flow-copy">
+              <strong>Comment ça marche</strong>
+              <p>
+                Crée ou choisis une mission, pilote tes traîneaux sur la carte, puis compare ton plan avec
+                l&apos;IA pour maximiser ton score final.
+              </p>
             </div>
-            <div className="home-hero-metrics">
-              {quickStats.map((item) => (
-                <div key={item.label} className="home-hero-metric">
-                  <span>{item.label}</span>
-                  <strong>{item.value}</strong>
+            <div className="home-flow-steps">
+              {flowSteps.map((step) => (
+                <span key={step} className="home-flow-step">{step}</span>
+              ))}
+            </div>
+            <div className="home-flow-stats">
+              {[
+                { label: "Villes", value: "∞" },
+                { label: "Profils IA", value: "6" },
+                { label: "Niveaux", value: "8" },
+              ].map((stat) => (
+                <div key={stat.label} className="home-flow-stat">
+                  <div className="home-flow-value">{stat.value}</div>
+                  <div className="home-flow-label">{stat.label}</div>
                 </div>
               ))}
             </div>
-          </div>
-
-          <div className="home-auth-panel">
-            <strong>Accès joueur</strong>
-            <p className="muted">
-              Crée un compte pour sauvegarder ta progression, ton score et entrer au Panthéon.
-            </p>
-            <div className="home-auth-benefits">
-              <span>✓ Progression sauvegardée</span>
-              <span>✓ Classement joueur</span>
-              <span>✓ Historique des missions</span>
+            <div className="home-flow-cta">
+              <Link className="secondary-button" href="/campaign">Voir la campagne</Link>
+              <Link className="secondary-button" href="/leaderboard">Explorer le Panthéon</Link>
             </div>
-            <Link className="primary-button home-auth-link" href="/register">
-              S&apos;inscrire gratuitement
-            </Link>
-            <div className="home-auth-divider">ou</div>
-            <Link className="secondary-button home-auth-link" href="/login">
-              Se connecter
-            </Link>
-            <span className="muted home-auth-note">
-              Joue sans compte pour tester
-            </span>
-          </div>
-        </section>
+          </section>
 
-        {/* MODES */}
-        <div className="home-modes-grid">
-          {modes.map((mode, index) => (
-            <Link key={mode.href} className={`home-mode-card reveal-lift reveal-delay-${index + 1}`} href={mode.href}>
-              <div className="home-mode-head">
-                <span className="home-mode-icon">{mode.icon}</span>
-                <span className="home-mode-index">{String(index + 1).padStart(2, "0")}</span>
-              </div>
-              <span className="home-mode-label">{mode.label}</span>
-              <h2 className="home-mode-title">{mode.title}</h2>
-              <p className="home-mode-desc">{mode.description}</p>
-              <span className="home-mode-arrow">{mode.cta}</span>
-            </Link>
-          ))}
         </div>
-
-        {/* INFO STRIP */}
-        <section className="home-flow-strip">
-          <div className="home-flow-copy">
-            <strong>Comment ça marche</strong>
-            <p>
-              Crée ou choisis une mission, pilote tes traîneaux sur la carte, puis compare ton plan avec l&apos;IA pour maximiser ton score final.
-            </p>
-          </div>
-          <div className="home-flow-steps">
-            {flowSteps.map((step) => (
-              <span key={step} className="home-flow-step">{step}</span>
-            ))}
-          </div>
-          <div className="home-flow-stats">
-            {[
-              { label: "Villes", value: "∞" },
-              { label: "Profils IA", value: "6" },
-              { label: "Niveaux", value: "8" },
-            ].map((stat) => (
-              <div key={stat.label} className="home-flow-stat">
-                <div className="home-flow-value">{stat.value}</div>
-                <div className="home-flow-label">{stat.label}</div>
-              </div>
-            ))}
-          </div>
-          <div className="home-flow-cta">
-            <Link className="secondary-button" href="/campaign">Voir la campagne</Link>
-            <Link className="secondary-button" href="/leaderboard">Explorer le Panthéon</Link>
-          </div>
-        </section>
-
       </div>
     </div>
   );

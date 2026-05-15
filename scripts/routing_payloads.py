@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
@@ -220,6 +221,35 @@ def _remove_incident_edges(graph, blocked_undirected: set[tuple[int, int]]):
     return cleaned
 
 
+def _apply_incident_penalties(
+    graph,
+    blocked_undirected: set[tuple[int, int]],
+    penalty_factor: float = 1.5,
+) -> Any:
+    """
+    Pénalités douces sur les arêtes incidentées : multiplie travel_time et length
+    par penalty_factor au lieu de supprimer l'arête.
+
+    Avantage vs. suppression : le joueur conserve toujours des options de route,
+    même à travers une zone accidentée, mais paie un surcoût en temps.
+    Permet d'expliquer le compromis coût/disponibilité (ex. : détour 2 km
+    vs. traverser l'incident avec +50% de temps).
+    """
+    if not blocked_undirected or penalty_factor <= 1.0:
+        return graph
+    penalized = graph.copy()
+    for source, target in blocked_undirected:
+        for u, v in ((source, target), (target, source)):
+            if penalized.has_edge(u, v):
+                for key in penalized[u][v]:
+                    edata = penalized[u][v][key]
+                    if "travel_time" in edata and edata["travel_time"] is not None:
+                        edata["travel_time"] = float(edata["travel_time"]) * penalty_factor
+                    if "length" in edata and edata["length"] is not None:
+                        edata["length"] = float(edata["length"]) * penalty_factor
+    return penalized
+
+
 def _incident_signature(blocked_undirected: set[tuple[int, int]]) -> str:
     if not blocked_undirected:
         return "none"
@@ -246,14 +276,62 @@ def _cached_incident_safe_graph(graph, blocked_undirected: set[tuple[int, int]])
     return safer_graph
 
 
+_incident_penalty_cache: OrderedDict[tuple, Any] = OrderedDict()
+_incident_penalty_cache_lock = Lock()
+
+
+def _cached_incident_penalty_graph(
+    graph, blocked_undirected: set[tuple[int, int]], penalty_factor: float = 1.5
+):
+    if not blocked_undirected:
+        return graph
+    signature = _incident_signature(blocked_undirected)
+    cache_key = (id(graph), int(graph.number_of_edges()), signature, round(penalty_factor, 3))
+    with _incident_penalty_cache_lock:
+        cached = _incident_penalty_cache.get(cache_key)
+        if cached is not None:
+            _incident_penalty_cache.move_to_end(cache_key)
+            return cached
+    penalized = _apply_incident_penalties(graph, blocked_undirected, penalty_factor)
+    with _incident_penalty_cache_lock:
+        _incident_penalty_cache[cache_key] = penalized
+        _incident_penalty_cache.move_to_end(cache_key)
+        while len(_incident_penalty_cache) > INCIDENT_GRAPH_CACHE_MAX:
+            _incident_penalty_cache.popitem(last=False)
+    return penalized
+
+
+def _make_haversine_heuristic(graph):
+    """Heuristique admissible pour A* : distance vol à 50 km/h (13.89 m/s)."""
+    def _h(u: int, v: int) -> float:
+        ud = graph.nodes[u]
+        vd = graph.nodes[v]
+        lat1 = math.radians(float(ud["y"]))
+        lon1 = math.radians(float(ud["x"]))
+        lat2 = math.radians(float(vd["y"]))
+        lon2 = math.radians(float(vd["x"]))
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        dist_m = 6_371_000.0 * 2.0 * math.asin(math.sqrt(a))
+        return dist_m / 13.89
+    return _h
+
+
 def _collect_candidate_routes(graph, origin: int, dest: int, k_pool: int) -> list[list[int]]:
     routes: list[list[int]] = []
     try:
-        fastest = ox.routing.shortest_path(graph, origin, dest, weight="travel_time")
+        heuristic = _make_haversine_heuristic(graph)
+        fastest = nx.astar_path(graph, origin, dest, heuristic=heuristic, weight="travel_time")
         if fastest:
             routes.append(fastest)
     except Exception:
-        pass
+        try:
+            fastest = ox.routing.shortest_path(graph, origin, dest, weight="travel_time")
+            if fastest:
+                routes.append(fastest)
+        except Exception:
+            pass
     try:
         shortest = ox.routing.shortest_path(graph, origin, dest, weight="length")
         if shortest:
@@ -290,19 +368,31 @@ def compute_route_options(
     time_factor: float = 1.0,
     k: int = 3,
     incident_segments: list[dict] | None = None,
+    incident_penalty_factor: float = 1.5,
 ) -> list[dict]:
+    """
+    incident_penalty_factor : multiplicateur appliqué sur travel_time et length
+    des arêtes incidentées (1.5 = +50% de temps). Les routes traversant une zone
+    accidentée restent disponibles mais coûtent plus cher. Mettre à 0.0 pour
+    revenir au comportement strict (suppression des arêtes).
+    """
     origin = ox.distance.nearest_nodes(graph, X=float(from_lon), Y=float(from_lat))
     dest = ox.distance.nearest_nodes(graph, X=float(to_lon), Y=float(to_lat))
     blocked_directed, blocked_undirected = _incident_edge_sets(incident_segments)
     k_pool = max(int(k) * 4, 8)
     routing_graph = graph
     if blocked_undirected:
-        safer_graph = _cached_incident_safe_graph(graph, blocked_undirected)
-        routes = _collect_candidate_routes(safer_graph, int(origin), int(dest), k_pool)
-        if routes:
-            routing_graph = safer_graph
+        use_soft = incident_penalty_factor > 1.0
+        if use_soft:
+            routing_graph = _cached_incident_penalty_graph(graph, blocked_undirected, incident_penalty_factor)
+            routes = _collect_candidate_routes(routing_graph, int(origin), int(dest), k_pool)
         else:
-            routes = _collect_candidate_routes(graph, int(origin), int(dest), k_pool)
+            safer_graph = _cached_incident_safe_graph(graph, blocked_undirected)
+            routes = _collect_candidate_routes(safer_graph, int(origin), int(dest), k_pool)
+            if routes:
+                routing_graph = safer_graph
+            else:
+                routes = _collect_candidate_routes(graph, int(origin), int(dest), k_pool)
     else:
         routes = _collect_candidate_routes(graph, int(origin), int(dest), k_pool)
 
@@ -327,6 +417,7 @@ def compute_route_options(
                 "incident_overlap": has_incident_overlap,
             }
         )
+    use_soft_penalties = incident_penalty_factor > 1.0 and bool(blocked_undirected)
     options.sort(key=lambda item: (bool(item.get("incident_overlap", False)), item["time_s"], item["dist_m"]))
     safe_options = [option for option in options if not option.get("incident_overlap", False)]
     blocked_options = [option for option in options if option.get("incident_overlap", False)]
@@ -344,7 +435,15 @@ def compute_route_options(
             tags.append("Plus court")
         if not tags:
             tags.append(f"Alternative diverse {idx + 1}")
-        option["label"] = f"{' / '.join(tags)} · {_format_minutes(option['time_s'])} · {option['dist_m'] / 1000:.2f} km"
+        label = f"{' / '.join(tags)} · {_format_minutes(option['time_s'])} · {option['dist_m'] / 1000:.2f} km"
+        has_overlap = bool(option.get("incident_overlap", False))
+        if has_overlap and use_soft_penalties:
+            label += f" · ⚠ Zone incidentée (+{int((incident_penalty_factor - 1) * 100)}%)"
+            option["incident_warning"] = True
+        elif has_overlap:
+            label += " · ⚠ Incident signalé"
+            option["incident_warning"] = True
+        option["label"] = label
         option.pop("incident_overlap", None)
     return options[: int(k)]
 
@@ -529,16 +628,17 @@ def build_ai_payload(
         vehicle_id = int(tour.get("vehicle_id", index))
         route_ids = [int(route_id) for route_id in tour.get("route_ids", [])]
         segment_infos = []
+        heuristic = _make_haversine_heuristic(graph)
         for segment_idx in range(len(route_ids) - 1):
             from_id, to_id = route_ids[segment_idx], route_ids[segment_idx + 1]
             from_lat, from_lon = get_point_latlon(df, from_id)
             to_lat, to_lon = get_point_latlon(df, to_id)
-            route = nx.shortest_path(
-                graph,
-                ox.nearest_nodes(graph, from_lon, from_lat),
-                ox.nearest_nodes(graph, to_lon, to_lat),
-                weight="travel_time",
-            )
+            src = ox.nearest_nodes(graph, from_lon, from_lat)
+            dst = ox.nearest_nodes(graph, to_lon, to_lat)
+            try:
+                route = nx.astar_path(graph, src, dst, heuristic=heuristic, weight="travel_time")
+            except Exception:
+                route = nx.shortest_path(graph, src, dst, weight="travel_time")
             segment_infos.append(
                 {
                     "sleigh_id": vehicle_id,

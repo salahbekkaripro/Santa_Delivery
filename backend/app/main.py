@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+import asyncio
+import json
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.schemas import (
     AuthLoginRequest,
+    AuthOAuthSyncRequest,
     AuthRegisterRequest,
     ComparisonResponse,
     DebriefResponse,
@@ -20,6 +26,11 @@ from backend.app.schemas import (
     PlayerUpsertRequest,
     LeaderboardSaveRequest,
     ResetPasswordRequest,
+    SocialDirectMessageCreate,
+    SocialFriendRequestCreate,
+    SocialFriendRequestRespond,
+    SocialBlockRequest,
+    SocialConversationRemoveRequest,
     SolveMissionRequest,
     SolveMissionResponse,
     VersusInviteCreateRequest,
@@ -42,6 +53,56 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+_social_ws_connections: dict[str, set[WebSocket]] = {}
+_social_ws_lock = asyncio.Lock()
+
+
+async def _social_ws_register(player_id: str, websocket: WebSocket) -> None:
+    async with _social_ws_lock:
+        bucket = _social_ws_connections.get(player_id)
+        if bucket is None:
+            bucket = set()
+            _social_ws_connections[player_id] = bucket
+        bucket.add(websocket)
+
+
+async def _social_ws_unregister(player_id: str, websocket: WebSocket) -> None:
+    async with _social_ws_lock:
+        bucket = _social_ws_connections.get(player_id)
+        if not bucket:
+            return
+        bucket.discard(websocket)
+        if not bucket:
+            _social_ws_connections.pop(player_id, None)
+
+
+async def _social_ws_emit(player_id: str, event: str, payload: dict[str, Any] | None = None) -> None:
+    async with _social_ws_lock:
+        targets = list(_social_ws_connections.get(player_id, set()))
+    if not targets:
+        return
+    message = {
+        "type": "social_event",
+        "event": event,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+        "data": payload or {},
+    }
+    stale: list[WebSocket] = []
+    for socket in targets:
+        try:
+            await socket.send_json(message)
+        except Exception:
+            stale.append(socket)
+    if stale:
+        async with _social_ws_lock:
+            bucket = _social_ws_connections.get(player_id)
+            if bucket is not None:
+                for socket in stale:
+                    bucket.discard(socket)
+                if not bucket:
+                    _social_ws_connections.pop(player_id, None)
 
 
 @app.get("/")
@@ -83,6 +144,162 @@ def get_player(player_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/social/players")
+def search_social_players(player_id: str, q: str = "", limit: int = Query(default=12, ge=1, le=30)) -> dict:
+    try:
+        return services.search_social_players(player_id, query=q, limit=limit)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/social/friends")
+def list_social_friendships(player_id: str) -> dict:
+    try:
+        return services.list_social_friendships(player_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/social/friends/request")
+async def send_friend_request(payload: SocialFriendRequestCreate) -> dict:
+    try:
+        response = services.send_friend_request(payload.model_dump())
+        await _social_ws_emit(payload.player_id, "friend_request_outgoing", {"friend_player_id": payload.friend_player_id})
+        await _social_ws_emit(payload.friend_player_id, "friend_request_incoming", {"friend_player_id": payload.player_id})
+        return response
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/social/friends/respond")
+async def respond_friend_request(payload: SocialFriendRequestRespond) -> dict:
+    try:
+        response = services.respond_friend_request(payload.model_dump())
+        await _social_ws_emit(payload.player_id, "friend_request_responded", {"friend_player_id": payload.friend_player_id, "action": payload.action})
+        await _social_ws_emit(payload.friend_player_id, "friend_request_responded", {"friend_player_id": payload.player_id, "action": payload.action})
+        return response
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/social/friends/remove")
+async def remove_friendship(payload: SocialFriendRequestCreate) -> dict:
+    try:
+        response = services.remove_friendship(payload.model_dump())
+        await _social_ws_emit(payload.player_id, "friendship_removed", {"friend_player_id": payload.friend_player_id})
+        await _social_ws_emit(payload.friend_player_id, "friendship_removed", {"friend_player_id": payload.player_id})
+        return response
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/social/messages/conversations")
+def list_direct_conversations(player_id: str, limit: int = Query(default=30, ge=1, le=60)) -> dict:
+    try:
+        return services.list_direct_conversations(player_id, limit=limit)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/social/messages")
+def list_direct_messages(
+    player_id: str,
+    with_player_id: str,
+    limit: int = Query(default=60, ge=1, le=200),
+    before: str | None = None,
+) -> dict:
+    try:
+        return services.list_direct_messages(player_id, with_player_id, limit=limit, before=before)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/social/messages")
+async def send_direct_message(payload: SocialDirectMessageCreate) -> dict:
+    try:
+        response = services.send_direct_message(payload.model_dump())
+        await _social_ws_emit(payload.recipient_player_id, "direct_message_received", {"from_player_id": payload.player_id})
+        await _social_ws_emit(payload.player_id, "direct_message_sent", {"to_player_id": payload.recipient_player_id})
+        return response
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/social/messages/conversation/remove")
+async def remove_direct_conversation(payload: SocialConversationRemoveRequest) -> dict:
+    try:
+        response = services.remove_direct_conversation(payload.model_dump())
+        await _social_ws_emit(payload.player_id, "conversation_cleared", {"with_player_id": payload.with_player_id})
+        return response
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/social/messages/conversation/restore")
+async def restore_direct_conversation(payload: SocialConversationRemoveRequest) -> dict:
+    try:
+        response = services.restore_direct_conversation(payload.model_dump())
+        await _social_ws_emit(payload.player_id, "conversation_restored", {"with_player_id": payload.with_player_id})
+        return response
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/social/blocks")
+def list_blocked_players(player_id: str) -> dict:
+    try:
+        return services.list_blocked_players(player_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/social/blocks")
+async def block_player(payload: SocialBlockRequest) -> dict:
+    try:
+        response = services.block_player(payload.model_dump())
+        await _social_ws_emit(payload.player_id, "player_blocked", {"blocked_player_id": payload.blocked_player_id})
+        await _social_ws_emit(payload.blocked_player_id, "blocked_by_player", {"player_id": payload.player_id})
+        return response
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/social/blocks/remove")
+async def unblock_player(payload: SocialBlockRequest) -> dict:
+    try:
+        response = services.unblock_player(payload.model_dump())
+        await _social_ws_emit(payload.player_id, "player_unblocked", {"blocked_player_id": payload.blocked_player_id})
+        return response
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/auth/register", response_model=PlayerResponse)
 def register_player(payload: AuthRegisterRequest) -> dict:
     try:
@@ -95,6 +312,14 @@ def register_player(payload: AuthRegisterRequest) -> dict:
 def login_player(payload: AuthLoginRequest) -> dict:
     try:
         return services.login_player(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/oauth-sync", response_model=PlayerResponse)
+def oauth_sync_player(payload: AuthOAuthSyncRequest) -> dict:
+    try:
+        return services.oauth_sync_player(payload.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -293,6 +518,55 @@ def get_debrief(mission_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/missions/{mission_id}/graph/metrics")
+def get_graph_metrics(mission_id: str) -> dict:
+    try:
+        return services.get_graph_metrics(mission_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/missions/{mission_id}/graph/dijkstra-steps")
+def get_dijkstra_steps(mission_id: str, from_node: int, to_node: int) -> dict:
+    try:
+        return services.get_dijkstra_steps(mission_id, from_node, to_node)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=404 if isinstance(exc, FileNotFoundError) else 400,
+            detail=str(exc),
+        ) from exc
+
+
+@app.get("/api/missions/{mission_id}/graph/bidirectional-astar-steps")
+def get_bidirectional_astar_steps(mission_id: str, from_node: int, to_node: int) -> dict:
+    try:
+        return services.get_bidirectional_astar_steps(mission_id, from_node, to_node)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=404 if isinstance(exc, FileNotFoundError) else 400,
+            detail=str(exc),
+        ) from exc
+
+
+@app.get("/api/missions/{mission_id}/graph/bidirectional-dijkstra-steps")
+def get_bidirectional_dijkstra_steps(mission_id: str, from_node: int, to_node: int) -> dict:
+    try:
+        return services.get_bidirectional_dijkstra_steps(mission_id, from_node, to_node)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=404 if isinstance(exc, FileNotFoundError) else 400,
+            detail=str(exc),
+        ) from exc
+
+
+@app.get("/api/missions/{mission_id}/graph/floyd-warshall")
+def get_floyd_warshall(mission_id: str) -> dict:
+    try:
+        return services.get_floyd_warshall(mission_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/missions/{mission_id}/leaderboard")
 def save_leaderboard(mission_id: str, payload: LeaderboardSaveRequest) -> dict:
     try:
@@ -337,6 +611,22 @@ def join_versus_match(payload: VersusMatchJoinRequest) -> dict:
 def enter_versus_queue(payload: VersusQueueRequest) -> dict:
     try:
         return services.enter_versus_queue(payload.model_dump())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/versus/queue/status")
+def get_versus_queue_status(player_id: str, template_id: str = "paris_duel", winner_rule: str = "score_time") -> dict:
+    try:
+        return services.get_versus_queue_status(
+            {
+                "player_id": player_id,
+                "template_id": template_id,
+                "winner_rule": winner_rule,
+            }
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -437,3 +727,78 @@ def list_versus_leaderboard(limit: int = 20) -> dict:
 @app.get("/api/versus/stats")
 def list_versus_player_stats(limit: int = 20, max_matches: int = 500) -> dict:
     return services.list_versus_player_stats(limit=limit, max_matches=max_matches)
+
+
+@app.websocket("/ws/versus/{match_id}")
+async def versus_match_ws(
+    websocket: WebSocket,
+    match_id: str,
+    player_id: str = Query(...),
+    heartbeat_ms: int = Query(default=800, ge=250, le=5000),
+) -> None:
+    await websocket.accept()
+    last_digest = ""
+    interval_s = float(heartbeat_ms) / 1000.0
+
+    try:
+        while True:
+            try:
+                payload = services.get_versus_match_state(match_id, player_id)
+            except (FileNotFoundError, ValueError) as exc:
+                await websocket.send_json({"type": "error", "message": str(exc)})
+                await websocket.close(code=4404 if isinstance(exc, FileNotFoundError) else 4403)
+                return
+
+            message = {
+                "type": "versus_state",
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+                "data": payload,
+            }
+            digest = json.dumps(message, ensure_ascii=False, sort_keys=True)
+            if digest != last_digest:
+                await websocket.send_json(message)
+                last_digest = digest
+
+            try:
+                incoming = await asyncio.wait_for(websocket.receive_text(), timeout=interval_s)
+                if incoming.lower().strip() == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except asyncio.TimeoutError:
+                continue
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/ws/social/{player_id}")
+async def social_ws(
+    websocket: WebSocket,
+    player_id: str,
+    heartbeat_ms: int = Query(default=15000, ge=1000, le=60000),
+) -> None:
+    await websocket.accept()
+    try:
+        services.get_player(player_id)
+    except FileNotFoundError:
+        await websocket.send_json({"type": "error", "message": "Joueur introuvable"})
+        await websocket.close(code=4404)
+        return
+
+    await _social_ws_register(player_id, websocket)
+    interval_s = float(heartbeat_ms) / 1000.0
+    try:
+        while True:
+            try:
+                incoming = await asyncio.wait_for(websocket.receive_text(), timeout=interval_s)
+                if incoming.lower().strip() == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except asyncio.TimeoutError:
+                await websocket.send_json(
+                    {
+                        "type": "social_keepalive",
+                        "sent_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await _social_ws_unregister(player_id, websocket)

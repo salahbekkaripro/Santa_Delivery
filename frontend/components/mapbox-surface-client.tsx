@@ -16,8 +16,17 @@ type Props = {
   aiSegments?: RouteSegment[];
   returnSegments?: RouteSegment[];
   incidentSegments?: RouteSegment[];
-  previewOptions?: Array<{ geometry: [number, number][]; label?: string; dist_m?: number; time_s?: number }>;
+  previewOptions?: Array<{
+    geometry: [number, number][];
+    label?: string;
+    dist_m?: number;
+    time_s?: number;
+    is_feasible?: boolean;
+    feasibility_badges?: string[];
+    route_key?: string;
+  }>;
   selectedPreviewIndex?: number;
+  onPreviewRouteConfirm?: (optionIndex: number) => void;
   assignedClientIds?: number[];
   humanStopMetaByClient?: Record<number, { sleigh_id: number; stop_order: number; arrival_eta_s: number; arrival_clock: string }>;
   onClientSelect?: (clientId: number) => void;
@@ -42,6 +51,7 @@ export default function MapboxSurfaceClient({
   incidentSegments = [],
   previewOptions = [],
   selectedPreviewIndex = 0,
+  onPreviewRouteConfirm,
   assignedClientIds = [],
   humanStopMetaByClient = {},
   onClientSelect,
@@ -64,6 +74,7 @@ export default function MapboxSurfaceClient({
   const onMapClickRef = useRef(onMapClick);
   const onClientSelectRef = useRef(onClientSelect);
   const onAdjacentSelectRef = useRef(onAdjacentSelect);
+  const onPreviewRouteConfirmRef = useRef(onPreviewRouteConfirm);
 
   useEffect(() => {
     onMapClickRef.current = onMapClick;
@@ -74,6 +85,9 @@ export default function MapboxSurfaceClient({
   useEffect(() => {
     onAdjacentSelectRef.current = onAdjacentSelect;
   }, [onAdjacentSelect]);
+  useEffect(() => {
+    onPreviewRouteConfirmRef.current = onPreviewRouteConfirm;
+  }, [onPreviewRouteConfirm]);
 
   const [isLoaded, setIsLoaded] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -157,7 +171,38 @@ export default function MapboxSurfaceClient({
 
       m.addLayer({ id: "human-layer", type: "line", source: "human-routes", paint: { "line-color": "#9e2f3f", "line-width": 4, "line-dasharray": [2, 2] } });
       m.addLayer({ id: "ai-layer", type: "line", source: "ai-routes", paint: { "line-color": "#143c5a", "line-width": 5, "line-opacity": 0.8 } });
-      m.addLayer({ id: "preview-layer", type: "line", source: "previews", paint: { "line-color": "#b8892f", "line-width": 6 } });
+      m.addLayer({
+        id: "preview-layer",
+        type: "line",
+        source: "previews",
+        paint: {
+          "line-color": [
+            "case",
+            ["==", ["coalesce", ["get", "is_feasible"], true], false],
+            "#9e2f3f",
+            ["==", ["get", "selected"], true],
+            "#b8892f",
+            "#6b7280",
+          ],
+          "line-width": ["case", ["==", ["get", "selected"], true], 7, 4],
+          "line-opacity": [
+            "case",
+            ["==", ["get", "selected"], true],
+            0.92,
+            ["==", ["coalesce", ["get", "is_feasible"], true], false],
+            0.55,
+            0.35,
+          ],
+          "line-dasharray": [
+            "case",
+            ["==", ["get", "selected"], true],
+            ["literal", [1, 0]],
+            ["==", ["coalesce", ["get", "is_feasible"], true], false],
+            ["literal", [1, 2]],
+            ["literal", [2, 2]],
+          ],
+        },
+      });
       m.addLayer({ id: "incident-layer", type: "line", source: "incidents", paint: { "line-color": "#991b1b", "line-width": 5, "line-dasharray": [1, 2] } });
 
       m.addLayer({ id: "future-adjacent-layer", type: "line", source: "future-adjacents", paint: { "line-color": "#3b82f6", "line-width": 2, "line-dasharray": [2, 2], "line-opacity": 0.2 } });
@@ -207,6 +252,21 @@ export default function MapboxSurfaceClient({
         if (features.length === 0) {
           onMapClickRef.current?.(e.lngLat.lat, e.lngLat.lng);
         }
+      });
+      m.on("click", "preview-layer", (event) => {
+        const feature = event.features?.[0];
+        const optionIndexRaw = feature?.properties?.option_index;
+        const optionIndex = Number(optionIndexRaw);
+        if (!Number.isFinite(optionIndex)) {
+          return;
+        }
+        onPreviewRouteConfirmRef.current?.(optionIndex);
+      });
+      m.on("mouseenter", "preview-layer", () => {
+        m.getCanvas().style.cursor = "pointer";
+      });
+      m.on("mouseleave", "preview-layer", () => {
+        m.getCanvas().style.cursor = "";
       });
     });
 
@@ -288,10 +348,14 @@ export default function MapboxSurfaceClient({
         features: previewOptions.map((opt, idx) => ({
           type: 'Feature',
           geometry: { type: 'LineString', coordinates: toMapbox(opt.geometry) },
-          properties: { selected: idx === selectedPreviewIndex }
+          properties: {
+            selected: idx === selectedPreviewIndex,
+            option_index: idx,
+            is_feasible: opt.is_feasible !== false,
+            label: opt.label ?? `Option ${idx + 1}`,
+          }
         }))
       });
-      map.current.setPaintProperty('preview-layer', 'line-opacity', ['case', ['==', ['get', 'selected'], true], 1, 0.3]);
     }
   }, [
     humanSegments,
@@ -414,7 +478,7 @@ export default function MapboxSurfaceClient({
   useEffect(() => {
     if (!map.current || !isLoaded) return;
 
-    const updateSleigh = (id: string, icon: string, pos: [number, number] | null) => {
+    const updateSleigh = (id: string, icon: string, className: string, pos: [number, number] | null) => {
       const mid = `sleigh-${id}`;
       if (!pos) {
         sleighMarkers.current[mid]?.remove();
@@ -423,9 +487,7 @@ export default function MapboxSurfaceClient({
       }
       if (!sleighMarkers.current[mid]) {
         const el = document.createElement("div");
-        el.innerHTML = icon;
-        el.style.fontSize = "32px";
-        el.style.filter = "drop-shadow(0 2px 4px rgba(0,0,0,0.5))";
+        el.innerHTML = `<div class=\"map-sleigh-avatar ${className}\">${icon}</div>`;
         sleighMarkers.current[mid] = new mapboxgl.Marker(el).setLngLat(pos).addTo(map.current!);
       } else {
         sleighMarkers.current[mid].setLngLat(pos);
@@ -439,7 +501,7 @@ export default function MapboxSurfaceClient({
       Object.entries(humanSleighPaths).forEach(([id, segs]) => {
         const key = `sleigh-h-${id}`;
         activeSleighIds.add(key);
-        updateSleigh(`h-${id}`, "🎅", getPositionAtTime(segs, currentTime));
+        updateSleigh(`h-${id}`, "🛷", "map-sleigh-avatar-human", getPositionAtTime(segs, currentTime));
       });
     }
     // Pour chaque traineau IA
@@ -447,7 +509,7 @@ export default function MapboxSurfaceClient({
       Object.entries(aiSleighPaths).forEach(([id, segs]) => {
         const key = `sleigh-a-${id}`;
         activeSleighIds.add(key);
-        updateSleigh(`a-${id}`, "🤖", getPositionAtTime(segs, currentTime));
+        updateSleigh(`a-${id}`, "🤖", "map-sleigh-avatar-ai", getPositionAtTime(segs, currentTime));
       });
     }
 

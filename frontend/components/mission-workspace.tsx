@@ -1,9 +1,9 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   clearSleigh,
   evaluateAiLearning,
@@ -22,18 +22,19 @@ import {
   undoLastSegment,
   validateSegment
 } from "@/lib/api";
-import { MapSurface } from "@/components/map-surface";
+import type { GuidedOnboardingStep } from "@/components/guided-onboarding";
 import { usePlayer } from "@/components/player-provider";
 import { getAiProfilePreview } from "@/lib/ai-profiles";
+import { useVersusLiveState } from "@/lib/versus-live";
 import type {
   AdjacentNode,
   AiLearningEvaluationResponse,
   AiLearningRecommendation,
   HumanState,
+  MapInteractionState,
   RouteOption,
   RouteSegment
 } from "@/lib/types";
-
 
 function defaultHumanState(numVehicles = 3): HumanState {
   return {
@@ -53,38 +54,16 @@ function metricTime(seconds: number | undefined) {
   return `${minutes} min`;
 }
 
-function optionBadgeStyle(badge: string): CSSProperties {
-  if (badge === "Sûr") {
-    return {
-      background: "rgba(31, 143, 95, 0.14)",
-      color: "var(--success)",
-      border: "1px solid rgba(31, 143, 95, 0.22)"
-    };
-  }
-  if (
-    badge.startsWith("Surcharge")
-    || badge.startsWith("Retard")
-    || badge === "Déjà assigné"
-    || badge === "Axe incident"
-  ) {
-    return {
-      background: "rgba(158, 47, 63, 0.12)",
-      color: "#69222d",
-      border: "1px solid rgba(158, 47, 63, 0.22)"
-    };
-  }
-  return {
-    background: "rgba(217, 119, 6, 0.12)",
-    color: "var(--warning)",
-    border: "1px solid rgba(217, 119, 6, 0.24)"
-  };
+function routeOptionKey(option: RouteOption): string {
+  return `${option.route_nodes.join("->")}|${Math.round(Number(option.time_s ?? 0))}|${Math.round(Number(option.dist_m ?? 0))}`;
 }
 
-function optionFeasibilityClass(option: RouteOption): string {
-  if (option.is_feasible === false) return "is-infeasible";
-  const badges = option.feasibility_badges ?? ["Sûr"];
-  if (badges.every((b) => b === "Sûr")) return "is-feasible-good";
-  return "is-warning-opt";
+function infeasibleRouteMessage(option: RouteOption): string {
+  const badges = option.feasibility_badges ?? [];
+  if (badges.length === 0) {
+    return "Segment non faisable.";
+  }
+  return `Segment non faisable: ${badges.join(", ")}.`;
 }
 
 function weatherInfo(key: string): { icon: string; cls: string } {
@@ -114,8 +93,90 @@ type LiveStat = Record<string, unknown> & {
   return_segment?: RouteSegment;
 };
 
+type ValidateRoutePayload = {
+  option: RouteOption;
+  fromId: number;
+  toId: number;
+};
+
+const GuidedOnboarding = dynamic(
+  () => import("@/components/guided-onboarding").then((mod) => mod.GuidedOnboarding),
+  { ssr: false },
+);
+
+const MapSurface = dynamic(
+  () => import("@/components/map-surface").then((mod) => mod.MapSurface),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="panel-loading"
+        style={{ height: "100%", minHeight: 520, borderRadius: 22 }}
+        aria-label="Chargement de la carte"
+      />
+    ),
+  },
+);
+
+const MissionSidebar = dynamic(
+  () => import("@/components/mission-sidebar").then((mod) => mod.MissionSidebar),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="panel-loading" style={{ minHeight: 720, borderRadius: 22 }} aria-label="Chargement du panneau mission" />
+    ),
+  },
+);
+
+const MissionVehicleStats = dynamic(
+  () => import("@/components/mission-vehicle-stats").then((mod) => mod.MissionVehicleStats),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="panel-loading" style={{ minHeight: 280, borderRadius: 22 }} aria-label="Chargement des stats véhicules" />
+    ),
+  },
+);
+
+const MissionHeroDuel = dynamic(
+  () => import("@/components/mission-hero-duel").then((mod) => mod.MissionHeroDuel),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="panel-loading" style={{ minHeight: 360, borderRadius: 22 }} aria-label="Chargement de l'entête mission" />
+    ),
+  },
+);
+
 const ROUTE_OPTIONS_DEBOUNCE_MS = 180;
 const SHOW_FEASIBLE_ONLY_STORAGE_KEY = "mission.show_feasible_only";
+const VERSUS_MISSION_ONBOARDING_STEPS: GuidedOnboardingStep[] = [
+  {
+    targetId: "versus-mission-hero",
+    title: "Objectif de la mission versus",
+    description: "Ta progression indique combien de clients sont déjà assignés. Il faut atteindre 100% avant soumission.",
+  },
+  {
+    targetId: "versus-mission-map",
+    title: "Planifie la tournée sur la carte",
+    description: "Sélectionne des clients, choisis les segments faisables, puis valide pour construire ta route.",
+  },
+  {
+    targetId: "versus-mission-duel-panel",
+    title: "Panel de duel",
+    description: "Ce bloc te rappelle l'état de ta tentative dans le match live.",
+  },
+  {
+    targetId: "versus-mission-submit",
+    title: "Soumettre ma tentative",
+    description: "Envoie ta tentative une fois tous les clients assignés, puis retourne au lobby live.",
+  },
+  {
+    targetId: "versus-mission-back",
+    title: "Retour au match live",
+    description: "Reviens au lobby pour suivre l'état de l'adversaire et le résultat final.",
+  },
+];
 
 export function MissionWorkspace({ missionId }: { missionId: string }) {
   const router = useRouter();
@@ -142,27 +203,49 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const [learningRecommendation, setLearningRecommendation] = useState<AiLearningRecommendation | null>(null);
   const [learningEvaluation, setLearningEvaluation] = useState<AiLearningEvaluationResponse | null>(null);
   const [learningInfo, setLearningInfo] = useState<string | null>(null);
+  const [showVersusReminder, setShowVersusReminder] = useState(false);
+  const [dismissedReminderRemaining, setDismissedReminderRemaining] = useState<number | null>(null);
+  const [mapInteractionState, setMapInteractionState] = useState<MapInteractionState>({
+    click_to_confirm_enabled: true,
+  });
+  const confirmLockRef = useRef(false);
+
+  useEffect(() => {
+    if (!routeError) return;
+    const timer = setTimeout(() => setRouteError(null), 5000);
+    return () => clearTimeout(timer);
+  }, [routeError]);
 
   const missionQuery = useQuery({
     queryKey: ["mission", missionId],
     queryFn: () => getMission(missionId)
   });
   const missionData = missionQuery.data;
+  const versusLive = useVersusLiveState(versusMatchId, player?.id);
+  const liveVersusState = versusLive.liveState;
+  const setLiveVersusState = versusLive.setLiveState;
 
   const versusStateQuery = useQuery({
     queryKey: ["versus-inline", versusMatchId, player?.id],
     queryFn: () => getVersusMatchState(versusMatchId!, player!.id),
     enabled: Boolean(versusMatchId && player?.id),
-    refetchInterval: 1500,
   });
-  const versusSelfState = versusStateQuery.data?.participants.find((participant) => participant.is_self)?.state;
+  useEffect(() => {
+    if (!liveVersusState && versusStateQuery.data) {
+      setLiveVersusState(versusStateQuery.data);
+    }
+  }, [liveVersusState, setLiveVersusState, versusStateQuery.data]);
+  const versusState = liveVersusState ?? versusStateQuery.data;
+  const versusSelfState = versusState?.participants.find((participant) => participant.is_self)?.state;
+  const versusOpponent = versusState?.participants.find((participant) => !participant.is_self);
+  const versusSelf = versusState?.participants.find((participant) => participant.is_self);
+  const versusCountdown = versusState?.countdown_remaining_s;
   const versusLocked = versusSelfState === "submitted" || versusSelfState === "forfeit";
 
   const currentNodeId = useMemo(() => {
-    if (!missionData) return 0;
-    const routes = missionData.human_state?.routes_by_sleigh?.[String(activeSleigh)] ?? [];
+    const routes = humanState.routes_by_sleigh?.[String(activeSleigh)] ?? [];
     return routes.length > 0 ? routes[routes.length - 1] : 0;
-  }, [missionData, activeSleigh]);
+  }, [humanState, activeSleigh]);
 
   const adjacentQuery = useQuery({
     queryKey: ["adjacents", missionId, currentNodeId, speedMultiplier],
@@ -218,7 +301,19 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     }
   }, [showFeasibleOnly, showFeasibleOnlyHydrated]);
 
+  useEffect(() => {
+    setMapInteractionState((previous) => ({
+      ...previous,
+      click_to_confirm_enabled: !isFreeRouting,
+      confirming_route_key: undefined,
+    }));
+    confirmLockRef.current = false;
+  }, [isFreeRouting]);
+
   const mission = missionData;
+  const assignedClientsCount = humanState.assigned_clients.length;
+  const totalClientsCount = mission?.clients.length ?? 0;
+  const remainingClientsCount = Math.max(0, totalClientsCount - assignedClientsCount);
   const humanSegments = useMemo(() => flattenSegments(humanState.segments_by_sleigh), [humanState]);
   const activeRoute = humanState.routes_by_sleigh[String(activeSleigh)] ?? [];
   const activeSegments = humanState.segments_by_sleigh[String(activeSleigh)] ?? [];
@@ -269,25 +364,40 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const mutateRouteOptions = optionsMutation.mutate;
 
   const validateMutation = useMutation({
-    mutationFn: (option: RouteOption) =>
+    mutationFn: ({ option, fromId, toId }: ValidateRoutePayload) =>
       validateSegment(missionId, {
         sleigh_id: activeSleigh,
-        from_id: humanState.routes_by_sleigh[String(activeSleigh)]?.at(-1) ?? 0,
-        to_id: selectedClientId ?? 0,
+        from_id: fromId,
+        to_id: toId,
         selected_route: option,
         speed_multiplier: speedMultiplier,
         vehicle_capacity: vehicleCapacity,
         num_vehicles: numVehicles
       }),
     onSuccess: (nextState) => {
+      confirmLockRef.current = false;
       setHumanState(nextState);
       setSelectedClientId(null);
       setRouteOptions([]);
       setSelectedOptionIndex(0);
+      setMapInteractionState((previous) => ({
+        ...previous,
+        confirming_route_key: undefined,
+        last_action: "validated",
+      }));
+      setRouteError(null);
       queryClient.invalidateQueries({ queryKey: ["mission", missionId] });
       queryClient.invalidateQueries({ queryKey: ["adjacents"] });
     },
-    onError: (error: Error) => setRouteError(error.message)
+    onError: (error: Error) => {
+      confirmLockRef.current = false;
+      setMapInteractionState((previous) => ({
+        ...previous,
+        confirming_route_key: undefined,
+        last_action: "error",
+      }));
+      setRouteError(error.message);
+    }
   });
 
   const solveMutation = useMutation({
@@ -353,9 +463,21 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
       setRouteError(null);
       setSelectedClientId(null);
       setRouteOptions([]);
+      setMapInteractionState((previous) => ({
+        ...previous,
+        confirming_route_key: undefined,
+        last_action: "undone",
+      }));
       queryClient.invalidateQueries({ queryKey: ["adjacents"] });
     },
-    onError: (error: Error) => setRouteError(error.message)
+    onError: (error: Error) => {
+      setMapInteractionState((previous) => ({
+        ...previous,
+        confirming_route_key: undefined,
+        last_action: "error",
+      }));
+      setRouteError(error.message);
+    }
   });
 
   const clearMutation = useMutation({
@@ -435,15 +557,25 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   }
 
   function handleAdjacentNodeSelect(node: AdjacentNode) {
-    if (versusLocked) return;
+    if (versusLocked || validateMutation.isPending || confirmLockRef.current || mapInteractionState.confirming_route_key) return;
     setSelectedClientId(node.node_id);
+    const routeKey = `${currentNodeId}->${node.node_id}|${Math.round(Number(node.time_s ?? 0))}|${Math.round(Number(node.dist_m ?? 0))}`;
+    confirmLockRef.current = true;
+    setMapInteractionState((previous) => ({
+      ...previous,
+      confirming_route_key: routeKey,
+    }));
     validateMutation.mutate({
-      route_nodes: [currentNodeId, node.node_id],
-      geometry: node.geometry,
-      dist_m: node.dist_m,
-      base_time_s: node.time_s,
-      time_s: node.time_s,
-      label: node.label
+      fromId: currentNodeId,
+      toId: node.node_id,
+      option: {
+        route_nodes: [currentNodeId, node.node_id],
+        geometry: node.geometry,
+        dist_m: node.dist_m,
+        base_time_s: node.time_s,
+        time_s: node.time_s,
+        label: node.label,
+      }
     });
   }
 
@@ -454,6 +586,37 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     setSelectedOptionIndex(0);
     setRouteError(null);
     setSelectedClientId(clientId);
+  }
+
+  function handlePreviewRouteConfirm(optionIndex: number) {
+    if (versusLocked || isFreeRouting) return;
+    const option = displayedRouteOptions[optionIndex];
+    if (!option) return;
+    if (selectedClientId === null) return;
+    setSelectedOptionIndex(optionIndex);
+    if (validateMutation.isPending || confirmLockRef.current || mapInteractionState.confirming_route_key) {
+      return;
+    }
+    if (option.is_feasible === false) {
+      setMapInteractionState((previous) => ({
+        ...previous,
+        last_action: "error",
+      }));
+      setRouteError(infeasibleRouteMessage(option));
+      return;
+    }
+    const routeKey = routeOptionKey(option);
+    confirmLockRef.current = true;
+    setMapInteractionState((previous) => ({
+      ...previous,
+      confirming_route_key: routeKey,
+    }));
+    setRouteError(null);
+    validateMutation.mutate({
+      option,
+      fromId: currentFromId,
+      toId: selectedClientId,
+    });
   }
 
   const routeOptionsPayload = useMemo<RouteOptionsPayload | null>(() => {
@@ -484,7 +647,12 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
         router.push(`/versus/match/${versusMatchId}`);
       }
     },
-    onError: (error: Error) => setRouteError(error.message),
+    onError: (error: Error) => {
+      setRouteError(error.message);
+      if (versusMatchId && !versusLocked && remainingClientsCount > 0) {
+        setShowVersusReminder(true);
+      }
+    },
   });
 
   useEffect(() => {
@@ -499,6 +667,18 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     }, ROUTE_OPTIONS_DEBOUNCE_MS);
     return () => window.clearTimeout(timeoutId);
   }, [routeOptionsPayload, mutateRouteOptions]);
+
+  useEffect(() => {
+    if (!versusMatchId || versusLocked || remainingClientsCount <= 0) {
+      setShowVersusReminder(false);
+      setDismissedReminderRemaining(null);
+      return;
+    }
+    if (dismissedReminderRemaining !== null && dismissedReminderRemaining === remainingClientsCount) {
+      return;
+    }
+    setShowVersusReminder(true);
+  }, [versusMatchId, versusLocked, remainingClientsCount, dismissedReminderRemaining]);
 
   if (missionQuery.isLoading) {
     return (
@@ -539,453 +719,136 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const aiProfilePreview = getAiProfilePreview(mission.mission.ai_profile);
   const aiProfileLocked = Boolean(mission.mission.ai_profile);
   const secondaryObjectives = mission.mission.secondary_objectives ?? [];
-  const selectedRouteOption = displayedRouteOptions[selectedOptionIndex];
-  const selectedRouteIsFeasible = selectedRouteOption ? selectedRouteOption.is_feasible !== false : false;
   const weather = weatherInfo(String(mission.weather?.desc ?? mission.mission.weather_key));
-  const progressPct = mission.clients.length > 0 ? (humanState.assigned_clients.length / mission.clients.length) * 100 : 0;
+  const progressPct = mission.clients.length > 0 ? (assignedClientsCount / mission.clients.length) * 100 : 0;
+  const selfProgress = versusSelf?.progress;
+  const opponentProgress = versusOpponent?.progress;
+  const selfProgressPct = selfProgress?.progress_pct ?? 0;
+  const opponentProgressPct = opponentProgress?.progress_pct ?? 0;
 
   return (
     <div className="page-shell">
       <div className="page-stack">
 
-        {/* HERO */}
-        <section className="hero">
-          <h1>{mission.mission.zone}</h1>
-          <div className="hero-badges">
-            <span className={`hero-badge ${weather.cls}`}>
-              {weather.icon} {String(mission.weather?.desc ?? mission.mission.weather_key)}
-            </span>
-            <span className="hero-badge">
-              {mission.mission.level ? `Niveau ${mission.mission.level}` : "Sandbox"}
-            </span>
-            <span className="hero-badge">
-              IA {aiProfilePreview.label} · +{aiProfilePreview.difficultyBonus} score
-            </span>
-            <span className="hero-badge">
-              {mission.clients.length} clients · {mission.mission.budget} €
-            </span>
-            {overloadedSleighs.length > 0 && (
-              <span className="hero-badge incident-badge">
-                ⚠️ Surcharge #{overloadedSleighs.join(", #")}
-              </span>
-            )}
-          </div>
-          <div className="hero-progress">
-            <div className="hero-progress-fill" style={{ width: `${progressPct}%` }} />
-          </div>
-          <p className="hero-progress-label">
-            {humanState.assigned_clients.length} / {mission.clients.length} clients assignés
-          </p>
-        </section>
-
-        {/* METRICS */}
-        <div className="grid-4">
-          <div className="metric-card">
-            <div className="metric-label">Temps estimé</div>
-            <div className="metric-value">{metricTime(totalHumanTimeS)}</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Distance</div>
-            <div className="metric-value">{(totalHumanDistM / 1000).toFixed(2)} km</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Clients assignés</div>
-            <div className="metric-value">{humanState.assigned_clients.length} / {mission.clients.length}</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Budget restant</div>
-            <div className="metric-value">{mission.mission.budget} €</div>
-          </div>
-        </div>
-
-        {mission.incidents && mission.incidents.count > 0 && (
-          <div className="error-box">
-            ⚠️ Incidents actifs : {mission.incidents.count} axe(s) bloqué(s) — visible sur la carte.
-          </div>
-        )}
-
-        {versusMatchId && (
-          <section className="panel stack">
-            <div className="panel-head">
-              <strong>⚔️ Duel Versus</strong>
-              <span className="tag">Match {versusMatchId}</span>
-            </div>
-            <span className="muted">
-              État duel: {versusSelfState ?? "inconnu"} · Soumission valide requise: tous les clients assignés.
-            </span>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button
-                className="primary-button"
-                onClick={() => versusSubmitMutation.mutate()}
-                disabled={!player || !versusMatchId || versusSubmitMutation.isPending || versusLocked}
-              >
-                {versusSubmitMutation.isPending ? "Soumission..." : versusLocked ? "Tentative soumise" : "Soumettre ma tentative"}
-              </button>
-              <Link className="secondary-button" href={`/versus/match/${versusMatchId}`}>
-                Retour au match live
-              </Link>
-            </div>
-          </section>
-        )}
+        <MissionHeroDuel
+          missionZone={mission.mission.zone}
+          weatherLabel={String(mission.weather?.desc ?? mission.mission.weather_key)}
+          weatherIcon={weather.icon}
+          weatherCls={weather.cls}
+          missionLevel={mission.mission.level}
+          aiLabel={aiProfilePreview.label}
+          aiDifficultyBonus={aiProfilePreview.difficultyBonus}
+          clientCount={mission.clients.length}
+          budget={mission.mission.budget}
+          overloadedSleighs={overloadedSleighs}
+          assignedClientsCount={humanState.assigned_clients.length}
+          totalClientsCount={mission.clients.length}
+          progressPct={progressPct}
+          estimatedTimeLabel={metricTime(totalHumanTimeS)}
+          estimatedDistanceKm={totalHumanDistM / 1000}
+          incidentsCount={mission.incidents?.count ?? 0}
+          versusMatchId={versusMatchId}
+          versusSelfState={versusSelfState}
+          versusConnection={versusLive.connection}
+          versusCountdown={versusCountdown}
+          selfAssignedClients={selfProgress?.assigned_clients ?? assignedClientsCount}
+          selfTotalClients={selfProgress?.total_clients ?? totalClientsCount}
+          selfProgressPct={selfProgressPct}
+          hasOpponent={Boolean(versusOpponent)}
+          opponentDisplayName={versusOpponent?.display_name}
+          opponentAssignedClients={opponentProgress?.assigned_clients ?? 0}
+          opponentTotalClients={opponentProgress?.total_clients ?? totalClientsCount}
+          opponentProgressPct={opponentProgressPct}
+          submitPending={versusSubmitMutation.isPending}
+          versusLocked={versusLocked}
+          canSubmit={Boolean(player && versusMatchId)}
+          remainingClientsCount={remainingClientsCount}
+          showVersusReminder={showVersusReminder}
+          onSubmitAttempt={() => versusSubmitMutation.mutate()}
+          onDismissReminder={() => {
+            setShowVersusReminder(false);
+            setDismissedReminderRemaining(remainingClientsCount);
+          }}
+        />
 
         <div className="mission-layout">
           {/* SIDEBAR */}
-          <aside className="panel stack">
-
-            {/* SECTION : CONFIGURATION */}
-            <div>
-              <span className="sidebar-section-title">Configuration</span>
-            </div>
-            <label className="field">
-              <span>Traîneaux</span>
-              <input type="number" min={1} max={10} value={numVehicles} onChange={(e) => setNumVehicles(Number(e.target.value))} />
-            </label>
-            <label className="field">
-              <span>Capacité (kg)</span>
-              <input type="number" min={50} max={500} value={vehicleCapacity} onChange={(e) => setVehicleCapacity(Number(e.target.value))} />
-            </label>
-            <label className="field">
-              <span>Vitesse</span>
-              <select value={speedMultiplier} onChange={(e) => setSpeedMultiplier(Number(e.target.value))}>
-                <option value={0.7}>🐢 Prudent</option>
-                <option value={1}>🚗 Normal</option>
-                <option value={1.5}>🚀 Turbo</option>
-              </select>
-            </label>
-
-            <div className="field">
-              <span>Traîneau actif</span>
-              <div className="sleigh-tab-group">
-                {Array.from({ length: numVehicles }, (_, i) => (
-                  <button
-                    key={i}
-                    className={`sleigh-tab ${activeSleigh === i ? "is-active" : ""}`}
-                    onClick={() => setActiveSleigh(i)}
-                    disabled={versusLocked}
-                  >
-                    🎅 #{i + 1}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <label className="field">
-              <span>Objectif IA</span>
-              <select
-                value={aiProfileLocked ? aiProfilePreview.optimizationTarget : optimizationTarget}
-                disabled={aiProfileLocked}
-                onChange={(e) => setOptimizationTarget(e.target.value as "time" | "distance")}
-              >
-                <option value="time">⚡ Express (Temps)</option>
-                <option value="distance">🌱 Écolo (Distance)</option>
-              </select>
-            </label>
-
-            {/* SECTION : PROFIL IA */}
-            <div className={`sidebar-section ai-profile-card ${aiProfilePreview.accentClass}`}>
-              <span className="sidebar-section-title">Profil IA</span>
-              <div className="ai-profile-head">
-                <div>
-                  <strong>IA {aiProfilePreview.label}</strong>
-                  <span className="muted">{aiProfilePreview.signature}</span>
-                </div>
-                <span className="tag">+{aiProfilePreview.difficultyBonus} score</span>
-              </div>
-              <p className="muted">{aiProfilePreview.description}</p>
-              <div className="ai-profile-meta">
-                <span>Cible : {aiProfilePreview.optimizationTarget === "time" ? "temps" : "distance"}</span>
-                <span className="muted">{aiProfileLocked ? "Verrouillé" : "Libre"}</span>
-              </div>
-            </div>
-
-            {secondaryObjectives.length > 0 && (
-              <div className="sidebar-section">
-                <span className="sidebar-section-title">Objectifs secondaires</span>
-                <div className="objective-list">
-                  {secondaryObjectives.map((obj) => (
-                    <div key={`${obj.code}-${obj.label}`} className="objective-chip">
-                      <span className="objective-dot" />
-                      <span>{obj.label}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* SECTION : MODE DE SÉLECTION */}
-            <div className="sidebar-section">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span className="sidebar-section-title">Mode de sélection</span>
-                <button
-                  className={`tag ${isFreeRouting ? "is-selected" : ""}`}
-                  style={{ cursor: "pointer", background: isFreeRouting ? "var(--accent)" : "rgba(0,0,0,0.05)", color: isFreeRouting ? "white" : "var(--text)" }}
-                  onClick={() => {
-                    if (versusLocked) return;
-                    setIsFreeRouting(!isFreeRouting);
-                    setSelectedClientId(null);
-                    setRouteOptions([]);
-                  }}
-                  disabled={versusLocked}
-                >
-                  {isFreeRouting ? "🗺️ Tracé Libre" : "📍 Sélection"}
-                </button>
-              </div>
-              <span className="muted" style={{ fontSize: "0.83rem" }}>
-                {isFreeRouting
-                  ? "Clique n'importe où sur la carte pour tracer ta route segment par segment."
-                  : "Clique un client sur la carte pour voir les options de chemins."}
-              </span>
-              {!isFreeRouting && (
-                <button
-                  className={`tag ${showFeasibleOnly ? "is-selected" : ""}`}
-                  style={{
-                    cursor: "pointer",
-                    width: "fit-content",
-                    background: showFeasibleOnly ? "rgba(31, 143, 95, 0.16)" : "rgba(23, 50, 77, 0.08)",
-                    color: showFeasibleOnly ? "var(--success)" : "var(--accent-2)",
-                    border: showFeasibleOnly ? "1px solid rgba(31, 143, 95, 0.32)" : "1px solid var(--border)"
-                  }}
-                  onClick={() => {
-                    if (versusLocked) return;
-                    setShowFeasibleOnly((previous) => !previous);
-                    setSelectedOptionIndex(0);
-                  }}
-                  disabled={versusLocked}
-                >
-                  {showFeasibleOnly ? "Faisables uniquement: ON" : "Faisables uniquement: OFF"}
-                </button>
-              )}
-              <button className="secondary-button" onClick={() => suggestMutation.mutate()} disabled={suggestMutation.isPending || versusLocked}>
-                {suggestMutation.isPending ? "Calcul..." : "💡 Suggérer le prochain stop"}
-              </button>
-              {suggestions.length > 0 && (
-                <div className="stack" style={{ gap: "6px" }}>
-                  {suggestions.map((s) => (
-                    <button
-                      key={s.client_id}
-                      className={`tag ${!s.is_feasible ? "error-box" : ""}`}
-                      style={{ cursor: "pointer", border: "1px solid var(--border)", width: "100%", justifyContent: "space-between" }}
-                      onClick={() => handleClientSelect(s.client_id)}
-                      disabled={!s.is_feasible || versusLocked}
-                    >
-                      <span>{s.nom_client}</span>
-                      <span className="muted">{s.arrival_clock}</span>
-                    </button>
-                  ))}
-                  <button className="secondary-button" style={{ fontSize: "0.78rem", padding: "6px" }} onClick={() => setSuggestions([])}>
-                    Effacer suggestions
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* SECTION : ROUTE COURANTE & ETA */}
-            <div className="sidebar-section">
-              <span className="sidebar-section-title">Route courante — Traîneau #{activeSleigh + 1}</span>
-              <span className="muted" style={{ fontSize: "0.83rem", lineHeight: 1.5 }}>
-                {activeRoute.length > 0
-                  ? activeRoute.map((id) => mission.clients.find((c) => c.id === id)?.nom_client ?? `#${id}`).join(" → ")
-                  : "Aucun stop sur ce traîneau"}
-              </span>
-              {activeSegments.length > 0 && (
-                <div className="stack" style={{ gap: "6px" }}>
-                  {activeSegments.map((seg) => {
-                    const client = mission.clients.find((c) => c.id === seg.to_id);
-                    if (!client) return null;
-                    return (
-                      <span key={`${seg.from_id}-${seg.to_id}`} className="muted" style={{ fontSize: "0.82rem" }}>
-                        Stop {seg.segment_idx} · {client.nom_client} · {seg.arrival_clock ?? "--:--"} · {metricTime(seg.arrival_eta_s)}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Erreurs */}
-            {routeError && <div className="error-box">{routeError}</div>}
-
-            {/* SECTION : OPTIONS DE ROUTE */}
-            {selectedClientId ? (
-              <div className="sidebar-section">
-                <span className="sidebar-section-title">
-                  Options — Client #{selectedClientId}
-                </span>
-                {(isRouteOptionsDebouncing || optionsMutation.isPending) && (
-                  <span className="muted" style={{ fontSize: "0.83rem" }}>
-                    {isRouteOptionsDebouncing ? "Recalcul…" : "Calcul des options…"}
-                  </span>
-                )}
-                {showFeasibleOnly && routeOptions.length > 0 && displayedRouteOptions.length === 0 && (
-                  <div className="error-box">Aucune option faisable pour ce client avec les paramètres actuels.</div>
-                )}
-                {displayedRouteOptions.map((option, index) => (
-                  <button
-                    key={`${option.route_nodes.join("-")}-${index}`}
-                    className={`option-card ${selectedOptionIndex === index ? "is-selected" : ""} ${optionFeasibilityClass(option)}`}
-                    onClick={() => setSelectedOptionIndex(index)}
-                  >
-                    <strong>{option.label}</strong>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
-                      {(option.feasibility_badges ?? ["Sûr"]).map((badge) => (
-                        <span key={`${option.label}-${badge}`} className="tag" style={optionBadgeStyle(badge)}>
-                          {badge}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="muted" style={{ fontSize: "0.82rem", marginTop: 6 }}>
-                      {option.route_nodes.length} nœuds · Arrivée {option.projected_arrival_clock ?? "--:--"} · {Number(option.projected_load_kg ?? 0).toFixed(0)} kg
-                    </div>
-                    {Number(option.projected_overload_kg ?? 0) > 0 && (
-                      <div style={{ color: "#69222d", fontSize: "0.82rem" }}>
-                        Dépassement : +{Number(option.projected_overload_kg ?? 0).toFixed(0)} kg
-                      </div>
-                    )}
-                  </button>
-                ))}
-                {displayedRouteOptions.length > 0 && (
-                  <>
-                    {selectedRouteOption && !selectedRouteIsFeasible && (
-                      <div className="error-box">
-                        Option non faisable : {(selectedRouteOption.feasibility_badges ?? ["Risque"]).join(", ")}.
-                      </div>
-                    )}
-                    <button
-                      className="primary-button"
-                    onClick={() => { if (!selectedRouteOption || !selectedRouteIsFeasible) return; validateMutation.mutate(selectedRouteOption); }}
-                      disabled={validateMutation.isPending || !selectedRouteOption || !selectedRouteIsFeasible || versusLocked}
-                    >
-                      {validateMutation.isPending ? "Validation…" : "✓ Valider ce segment"}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      onClick={() => { setSelectedClientId(null); setRouteOptions([]); setSelectedOptionIndex(0); setRouteError(null); }}
-                    >
-                      Annuler ce choix
-                    </button>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="sidebar-section">
-                <span className="muted" style={{ fontSize: "0.83rem" }}>Aucun client sélectionné — clique un client sur la carte.</span>
-              </div>
-            )}
-
-            {/* SECTION : ACTIONS */}
-            <div className="sidebar-section">
-              <span className="sidebar-section-title">Actions</span>
-              <button className="secondary-button" onClick={() => undoMutation.mutate()} disabled={undoMutation.isPending || versusLocked}>
-                {undoMutation.isPending ? "Annulation…" : "↩ Annuler dernier segment"}
-              </button>
-              <button className="secondary-button" onClick={() => clearMutation.mutate()} disabled={clearMutation.isPending || versusLocked}>
-                {clearMutation.isPending ? "Vidage…" : "🗑 Vider ce traîneau"}
-              </button>
-              <button className="secondary-button" onClick={() => resetMutation.mutate()} disabled={resetMutation.isPending || versusLocked}>
-                {resetMutation.isPending ? "Reset…" : "↺ Réinitialiser tout"}
-              </button>
-            </div>
-
-            {/* SOLVE ZONE */}
-            <div className="solve-zone">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-                <div>
-                  <strong style={{ color: "var(--accent-2)" }}>Lancer l&apos;IA</strong>
-                  <p className="muted" style={{ fontSize: "0.8rem", margin: "4px 0 0" }}>
-                    {aiProfileLocked
-                      ? `Profil ${aiProfilePreview.label} imposé · ${aiProfilePreview.signature}`
-                      : aiProfilePreview.optimizationTarget === "time"
-                        ? "L'IA cherchera à finir le plus vite possible."
-                        : "L'IA parcourra le moins de km possible."}
-                  </p>
-                </div>
-                <span className="tag">+{aiProfilePreview.difficultyBonus}</span>
-              </div>
-              <label
-                className="tag"
-                style={{
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  width: "fit-content",
-                  border: "1px solid var(--border)",
-                  background: useLearnedAi ? "rgba(23, 50, 77, 0.10)" : "rgba(0, 0, 0, 0.04)"
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={useLearnedAi}
-                  onChange={(event) => setUseLearnedAi(event.target.checked)}
-                  style={{ accentColor: "var(--accent-2)" }}
-                  disabled={versusLocked}
-                />
-                IA apprenante (profil auto)
-              </label>
-              {useLearnedAi && (
-                <div className="stack" style={{ gap: 8 }}>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button
-                      className="secondary-button"
-                      onClick={() => trainLearningMutation.mutate()}
-                      disabled={trainLearningMutation.isPending || versusLocked}
-                    >
-                      {trainLearningMutation.isPending ? "Entraînement..." : "🧠 Entraîner le modèle"}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      onClick={() => recommendationMutation.mutate()}
-                      disabled={recommendationMutation.isPending || versusLocked}
-                    >
-                      {recommendationMutation.isPending ? "Calcul..." : "📊 Recommander un profil"}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      onClick={() => evaluateLearningMutation.mutate()}
-                      disabled={evaluateLearningMutation.isPending || versusLocked}
-                    >
-                      {evaluateLearningMutation.isPending ? "Évaluation..." : "🧪 Évaluer le modèle"}
-                    </button>
-                  </div>
-                  {learningInfo && (
-                    <span className="muted" style={{ fontSize: "0.8rem" }}>
-                      {learningInfo}
-                    </span>
-                  )}
-                  {learningEvaluation && (
-                    <>
-                      <span className="muted" style={{ fontSize: "0.8rem" }}>
-                        Split: {splitStrategyLabel(learningEvaluation.split_strategy)} · Holdout: {learningEvaluation.sample_count_holdout} · Match sample: {(learningEvaluation.sample_match_rate * 100).toFixed(0)}%
-                      </span>
-                      <span className="muted" style={{ fontSize: "0.8rem" }}>
-                        Top-1 contexte: {(learningEvaluation.context_top1_accuracy * 100).toFixed(0)}% · Regret: {learningEvaluation.avg_context_regret.toFixed(1)}
-                      </span>
-                    </>
-                  )}
-                  {learningRecommendation && (
-                    <span className="muted" style={{ fontSize: "0.8rem" }}>
-                      Top 3: {learningRecommendation.top_candidates.map((candidate) => candidate.label).join(" · ")}
-                    </span>
-                  )}
-                </div>
-              )}
-              <button className="primary-button" onClick={() => solveMutation.mutate()} disabled={solveMutation.isPending || versusLocked}>
-                {solveMutation.isPending
-                  ? "Optimisation en cours…"
-                  : useLearnedAi
-                    ? "🤖 Lancer IA apprenante"
-                    : "🤖 Lancer la solution IA"}
-              </button>
-              {mission.results_available && (
-                <Link className="secondary-button" href={`/mission/${missionId}/results`}>
-                  Voir les derniers résultats
-                </Link>
-              )}
-            </div>
-          </aside>
+          <MissionSidebar
+            missionId={missionId}
+            mission={mission}
+            numVehicles={numVehicles}
+            vehicleCapacity={vehicleCapacity}
+            speedMultiplier={speedMultiplier}
+            activeSleigh={activeSleigh}
+            versusLocked={versusLocked}
+            aiProfileLocked={aiProfileLocked}
+            aiProfilePreview={aiProfilePreview}
+            optimizationTarget={optimizationTarget}
+            secondaryObjectives={secondaryObjectives}
+            isFreeRouting={isFreeRouting}
+            showFeasibleOnly={showFeasibleOnly}
+            suggestPending={suggestMutation.isPending}
+            suggestions={suggestions}
+            activeRoute={activeRoute}
+            activeSegments={activeSegments}
+            routeError={routeError}
+            selectedClientId={selectedClientId}
+            isRouteOptionsDebouncing={isRouteOptionsDebouncing}
+            optionsPending={optionsMutation.isPending}
+            routeOptions={routeOptions}
+            displayedRouteOptions={displayedRouteOptions}
+            selectedOptionIndex={selectedOptionIndex}
+            useLearnedAi={useLearnedAi}
+            learningInfo={learningInfo}
+            learningEvaluation={learningEvaluation}
+            learningRecommendation={learningRecommendation}
+            clearPending={clearMutation.isPending}
+            resetPending={resetMutation.isPending}
+            trainPending={trainLearningMutation.isPending}
+            recommendationPending={recommendationMutation.isPending}
+            evaluatePending={evaluateLearningMutation.isPending}
+            solvePending={solveMutation.isPending}
+            resultsAvailable={mission.results_available}
+            onNumVehiclesChange={setNumVehicles}
+            onVehicleCapacityChange={setVehicleCapacity}
+            onSpeedMultiplierChange={setSpeedMultiplier}
+            onActiveSleighChange={setActiveSleigh}
+            onOptimizationTargetChange={setOptimizationTarget}
+            onToggleFreeRouting={() => {
+              if (versusLocked) return;
+              setIsFreeRouting(!isFreeRouting);
+              setSelectedClientId(null);
+              setRouteOptions([]);
+            }}
+            onToggleShowFeasibleOnly={() => {
+              if (versusLocked) return;
+              setShowFeasibleOnly((previous) => !previous);
+              setSelectedOptionIndex(0);
+            }}
+            onSuggest={() => suggestMutation.mutate()}
+            onSelectSuggestion={handleClientSelect}
+            onClearSuggestions={() => setSuggestions([])}
+            onSelectOption={setSelectedOptionIndex}
+            onCancelClientChoice={() => {
+              setSelectedClientId(null);
+              setRouteOptions([]);
+              setSelectedOptionIndex(0);
+              setRouteError(null);
+            }}
+            onClearSleigh={() => clearMutation.mutate()}
+            onResetAll={() => {
+              if (!window.confirm("Réinitialiser toutes les routes ? Cette action est irréversible.")) return;
+              resetMutation.mutate();
+            }}
+            onUseLearnedAiChange={setUseLearnedAi}
+            onTrainModel={() => trainLearningMutation.mutate()}
+            onRecommendProfile={() => recommendationMutation.mutate()}
+            onEvaluateModel={() => evaluateLearningMutation.mutate()}
+            onSolve={() => solveMutation.mutate()}
+          />
 
           {/* CARTE */}
-          <section className="panel map-card">
+          <section className="panel map-card" data-onboarding-id="versus-mission-map">
             <div className="legend" style={{ marginBottom: 14 }}>
               <span className="legend-chip">
                 <span className="line-dot is-dashed" style={{ color: "#9e2f3f" }} />
@@ -1018,9 +881,18 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
                 geometry: o.geometry,
                 label: o.label,
                 dist_m: o.dist_m,
-                time_s: o.time_s
+                time_s: o.time_s,
+                is_feasible: o.is_feasible,
+                feasibility_badges: o.feasibility_badges,
+                route_key: routeOptionKey(o),
               }))}
               selectedPreviewIndex={selectedOptionIndex}
+              onPreviewRouteConfirm={handlePreviewRouteConfirm}
+              onUndoLastSegment={() => undoMutation.mutate()}
+              undoPending={undoMutation.isPending}
+              undoDisabled={undoMutation.isPending || versusLocked}
+              overlayMessage={routeError}
+              interactionState={mapInteractionState}
               assignedClientIds={humanState.assigned_clients}
               humanStopMetaByClient={stopMetaByClient}
               onClientSelect={handleClientSelect}
@@ -1034,50 +906,23 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
           </section>
         </div>
 
-        {/* VEHICLE STATS */}
-        <section className="grid-3">
-          {Array.from({ length: numVehicles }, (_, index) => {
-            const stats = liveStats[String(index)] ?? {};
-            const routeNames = (humanState.routes_by_sleigh[String(index)] ?? [])
-              .map((id) => mission.clients.find((c) => c.id === id)?.nom_client ?? `#${id}`)
-              .join(" → ");
-            const isActive = index === activeSleigh;
-            const loadPct = Math.min((Number(stats.load_kg ?? 0) / vehicleCapacity) * 100, 100);
-            const isOverloaded = Number(stats.over_kg ?? 0) > 0;
+        <MissionVehicleStats
+          numVehicles={numVehicles}
+          activeSleigh={activeSleigh}
+          vehicleCapacity={vehicleCapacity}
+          routesBySleigh={humanState.routes_by_sleigh}
+          liveStats={liveStats}
+          clients={mission.clients}
+          onActiveSleighChange={setActiveSleigh}
+        />
 
-            return (
-              <div
-                key={index}
-                className={`panel stack vehicle-card ${isActive ? "is-active" : ""}`}
-                style={{ cursor: "pointer" }}
-                onClick={() => setActiveSleigh(index)}
-              >
-                <div className="vehicle-card-header">
-                  <strong>🎅 Traîneau #{index + 1}</strong>
-                  {isActive && <span className="vehicle-active-badge">ACTIF</span>}
-                  {isOverloaded && <span className="vehicle-active-badge" style={{ background: "rgba(158, 47, 63,0.15)", color: "var(--accent)", borderColor: "rgba(158, 47, 63,0.3)" }}>⚠️ Surcharge</span>}
-                </div>
-                <div className="capacity-bar-container" title={`Charge : ${Number(stats.load_kg ?? 0).toFixed(0)} / ${vehicleCapacity} kg`}>
-                  <div
-                    className={`capacity-bar-fill ${isOverloaded ? "is-overloaded" : ""}`}
-                    style={{ width: `${loadPct}%` }}
-                  />
-                </div>
-                <div className="vehicle-grid-stats">
-                  <span className="vehicle-stat"><strong>Stops</strong> {humanState.routes_by_sleigh[String(index)]?.length ?? 0}</span>
-                  <span className="vehicle-stat"><strong>Charge</strong> {Number(stats.load_kg ?? 0).toFixed(0)} kg</span>
-                  <span className="vehicle-stat"><strong>Temps</strong> {metricTime(Number(stats.time_s ?? 0))}</span>
-                  <span className="vehicle-stat"><strong>Distance</strong> {(Number(stats.dist_m ?? 0) / 1000).toFixed(2)} km</span>
-                  <span className="vehicle-stat" style={{ gridColumn: "1 / -1" }}>
-                    <strong>Retour</strong> {metricTime(Number(stats.return_time_s ?? 0))}
-                    {stats.return_arrival_clock ? ` · ${String(stats.return_arrival_clock)}` : ""}
-                  </span>
-                </div>
-                {routeNames && <span className="muted" style={{ fontSize: "0.78rem", lineHeight: 1.45 }}>{routeNames}</span>}
-              </div>
-            );
-          })}
-        </section>
+        {versusMatchId && (
+          <GuidedOnboarding
+            storageKey="operation-noel-onboarding-versus-mission-v1"
+            tutorialLabel="Mission versus"
+            steps={VERSUS_MISSION_ONBOARDING_STEPS}
+          />
+        )}
       </div>
     </div>
   );

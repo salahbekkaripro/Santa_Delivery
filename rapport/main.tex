@@ -1,0 +1,720 @@
+\documentclass[a4paper, 12pt, twoside]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage{ae,aecompl}
+\usepackage[top=2.5cm, bottom=2cm,
+            left=3cm, right=2.5cm,
+            headheight=15pt]{geometry}
+\usepackage{graphicx}
+\usepackage{eso-pic}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\input{pagedegarde}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  stringstyle=\color{red!60!black},
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  language=Python
+}
+
+\title{Operation No\"{e}l --- Simulation et Optimisation de Tourn\'{e}es Urbaines}
+
+\datedebut{janvier 2026}
+\datefin{mai 2026}
+
+\membrea{Bekkari Salah}
+\membreb{}
+
+\begin{document}
+\pagedegarde
+
+\section*{Remerciements}
+Nous remercions les enseignants de la Licence MIAGE de l'Universit\'{e} Paris Nanterre pour leur encadrement dans le cadre du cours \textit{Graphes et Open Data}, ainsi que les \'{e}quipes d\'{e}veloppant les biblioth\`{e}ques OSMnx, NetworkX et Google OR-Tools, dont les outils open-source ont \'{e}t\'{e} au c\oe ur de ce projet.
+
+\newpage
+\tableofcontents
+\newpage
+
+% =====================================================================
+\section{Introduction}
+% =====================================================================
+
+\textbf{Operation No\"{e}l} est un jeu de simulation de logistique urbaine bas\'{e} sur des donn\'{e}es g\'{e}ographiques r\'{e}elles. Le joueur incarne un gestionnaire de tra\^{\i}neaux de livraison qui doit planifier les tourn\'{e}es de livraisons de cadeaux dans des quartiers de grandes villes fran\c{c}aises, en s'appuyant sur des cartes issues d'OpenStreetMap.
+
+L'objectif du projet est double~: d'une part, mettre en \oe uvre concr\`{e}tement les algorithmes de graphes \'{e}tudi\'{e}s en cours (Dijkstra, A*, recherche bidirectionnelle, am\'{e}liorations locales), et d'autre part, les confronter \`{a} un solveur d'optimisation industriel (Google OR-Tools) r\'{e}solvant le probl\`{e}me de tourn\'{e}es de v\'{e}hicules avec fen\^{e}tres de temps (\textit{VRPTW -- Vehicle Routing Problem with Time Windows}).
+
+Le joueur trace manuellement les routes et voit sa solution compar\'{e}e \`{a} celle d'une intelligence artificielle. Des modes multijoueurs, un syst\`{e}me de classement et des conditions dynamiques (m\'{e}t\'{e}o, incidents) enrichissent l'exp\'{e}rience.
+
+Ce rapport d\'{e}crit l'architecture du projet, les algorithmes impl\'{e}ment\'{e}s, les am\'{e}liorations apport\'{e}es au cours du d\'{e}veloppement, ainsi que les perspectives d'\'{e}volution.
+
+% =====================================================================
+\section{Environnement de travail}
+% =====================================================================
+
+Le projet repose sur une architecture full-stack avec un backend Python et un frontend web. Le tableau \ref{tab:techstack} r\'{e}sume les technologies utilis\'{e}es.
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Composant} & \textbf{Technologie} \\
+\hline
+Langage backend & Python 3.11 \\
+\hline
+Framework API & FastAPI \\
+\hline
+Base de donn\'{e}es & SQLite \\
+\hline
+Graphes routiers & OSMnx + NetworkX \\
+\hline
+Solveur d'optimisation & Google OR-Tools (pywrapcp) \\
+\hline
+Langage frontend & TypeScript / Next.js 14 \\
+\hline
+Cartographie & Leaflet.js / Mapbox \\
+\hline
+Styl\'{e}isation & Tailwind CSS \\
+\hline
+\end{tabular}
+\end{center}
+\caption{Pile technologique du projet}
+\label{tab:techstack}
+\end{table}
+
+L'ensemble du code source est organis\'{e} en modules~: \texttt{backend/app/} pour l'API et les services m\'{e}tier, \texttt{scripts/} pour les moteurs algorithmiques, \texttt{final\_scripts/} pour le solveur OR-Tools, \texttt{frontend/} pour l'interface, et \texttt{tests/} pour la suite de tests.
+
+% =====================================================================
+\section{Description du projet et objectifs}
+% =====================================================================
+
+\subsection{Le probl\`{e}me VRPTW}
+
+Le c\oe ur algorithmique du projet est la r\'{e}solution du \textbf{Vehicle Routing Problem with Time Windows (VRPTW)}. Ce probl\`{e}me g\'{e}n\'{e}ralise le probl\`{e}me du voyageur de commerce (TSP) \`{a} plusieurs v\'{e}hicules et ajoute des contraintes de fen\^{e}tres de temps~:
+
+\begin{itemize}
+  \item $n$ clients \`{a} livrer, chacun avec une fen\^{e}tre $[a_i, b_i]$ (heure d'arriv\'{e}e acceptable)
+  \item $k$ tra\^{\i}neaux partant et revenant au d\'{e}p\^{o}t
+  \item Chaque tra\^{\i}neau a une capacit\'{e} maximale de charge (en kg)
+  \item \textbf{Objectif}~: minimiser le temps total ou la distance parcourue
+\end{itemize}
+
+Les distances et temps de trajet sont calcul\'{e}s \`{a} partir du r\'{e}seau routier r\'{e}el d'OpenStreetMap, ajust\'{e}s par un facteur m\'{e}t\'{e}orologique (pluie, neige, orage) et un multiplicateur de vitesse.
+
+\subsection{Modes de jeu}
+
+Le projet propose trois modes~:
+
+\begin{itemize}
+  \item \textbf{Mission solo}~: le joueur planifie ses tourn\'{e}es manuellement. Sa solution est ensuite compar\'{e}e \`{a} celle de l'IA (OR-Tools) dans un d\'{e}briefing d\'{e}taill\'{e}.
+  \item \textbf{Mode Versus}~: deux joueurs r\'{e}solvent la m\^{e}me mission en temps r\'{e}el et sont class\'{e}s selon leur score.
+  \item \textbf{Cartes personnalis\'{e}es}~: cr\'{e}ation de missions avec param\`{e}tres libres (zone, m\'{e}t\'{e}o, profil IA).
+\end{itemize}
+
+\subsection{Syst\`{e}me de scoring}
+
+Le score final sur 100 points est calcul\'{e} selon la formule~:
+
+\[
+\text{score} = 0{,}60 \cdot \Delta t_{\%} + 0{,}25 \cdot S_{\text{CO}_2} + 0{,}15 \cdot B_{\%}
++ B_{\text{difficulté}} + B_{\text{incident}} + B_{\text{humain}} + B_{\text{météo}}
+\]
+
+o\`{u} $\Delta t_{\%}$ est le pourcentage de temps \'{e}conomis\'{e}, $S_{\text{CO}_2}$ le score \'{e}cologique et $B_{\%}$ le budget restant. Les rangs vont de D ($<$30) \`{a} S ($>$85).
+
+% =====================================================================
+\section{Biblioth\`{e}ques, Outils et technologies}
+% =====================================================================
+
+\subsection{OSMnx et NetworkX}
+
+OSMnx~\cite{osmnx} t\'{e}l\'{e}charge et manipule des graphes routiers depuis OpenStreetMap. Chaque \textbf{n\oe ud} est une intersection r\'{e}elle (latitude, longitude). Chaque \textbf{arc} est un segment de route avec les attributs \texttt{length} (m\`{e}tres), \texttt{travel\_time} (secondes) et \texttt{geometry} (s\'{e}quence de points). NetworkX repr\'{e}sente ces graphes sous forme de \texttt{DiGraph} orient\'{e}.
+
+\subsection{Google OR-Tools}
+
+OR-Tools~\cite{ortools} est un solveur open-source de Google pour les probl\`{e}mes d'optimisation combinatoire. Nous utilisons son module VRP (\texttt{pywrapcp}) avec les strat\'{e}gies de solution initiale \texttt{PATH\_CHEAPEST\_ARC}, \texttt{PARALLEL\_CHEAPEST\_INSERTION} et \texttt{SAVINGS}, et les m\'{e}taheuristiques \texttt{GUIDED\_LOCAL\_SEARCH}, \texttt{SIMULATED\_ANNEALING} et \texttt{TABU\_SEARCH}.
+
+\subsection{FastAPI}
+
+FastAPI~\cite{fastapi} est le framework Python de l'API REST. Il g\'{e}n\`{e}re automatiquement la documentation OpenAPI et valide les entr\'{e}es via Pydantic. Les routes couvrent la gestion des missions, le routage joueur, la r\'{e}solution IA, les classements et les fonctions sociales.
+
+% =====================================================================
+\section{Travail r\'{e}alis\'{e}}
+% =====================================================================
+
+\subsection{Construction du graphe routier}
+
+Le graphe est t\'{e}l\'{e}charg\'{e} depuis OpenStreetMap via OSMnx, r\'{e}duit \`{a} sa plus grande composante fortement connexe, puis sauvegard\'{e} au format \texttt{.graphml}. Les vitesses par type de route sont inf\'{e}r\'{e}es et les temps de parcours calcul\'{e}s. Les matrices de temps ($n \times n$) sont pr\'{e}-calcul\'{e}es via OSRM ou Dijkstra local, sauvegard\'{e}es en \texttt{.npy} pour OR-Tools.
+
+\begin{lstlisting}[caption={Chargement et pr\'{e}paration du graphe OSM}, label=lst:graph]
+graph = ox.graph_from_place("5e arrondissement, Paris, France")
+graph = ox.truncate.largest_component(graph)
+graph = ox.add_edge_speeds(graph)
+graph = ox.add_edge_travel_times(graph)
+ox.save_graphml(graph, filepath="paris5.graphml")
+\end{lstlisting}
+
+\subsection{Algorithme de Dijkstra}
+
+L'algorithme de Dijkstra~\cite{dijkstra} est utilis\'{e} comme \textit{fallback} de routage et en mode p\'{e}dagogique. La fonction \texttt{dijkstra\_steps()} ex\'{e}cute l'algorithme pas-\`{a}-pas et retourne chaque n\oe ud finalis\'{e} avec ses coordonn\'{e}es, permettant une visualisation anim\'{e}e de l'exploration du graphe.
+
+\textbf{Principe}~: file de priorit\'{e} (tas min). \`{A} chaque \'{e}tape, on extrait le n\oe ud de distance minimale et on relaxe ses voisins. L'algorithme s'arr\^{e}te quand le n\oe ud destination est finalis\'{e}. \textbf{Complexit\'{e}}~: $O((V + E) \log V)$.
+
+\subsection{Algorithme A* avec heuristique Haversine}
+
+A*~\cite{astar} am\'{e}liore Dijkstra en guidant la recherche gr\^{a}ce \`{a} une heuristique $f(n) = g(n) + h(n)$ o\`{u} $g(n)$ est le co\^{u}t r\'{e}el depuis la source et $h(n)$ une estimation du co\^{u}t restant.
+
+Nous utilisons la \textbf{distance Haversine} comme heuristique~:
+
+\[
+h(n, t) = \frac{d_{\text{haversine}}(n, t)}{13{,}89 \text{ m/s}}
+\]
+
+Cette heuristique est \textbf{admissible} (distance \`{a} vol d'oiseau $\leq$ distance routière) et \textbf{consistante} sur les graphes routiers OSM, ce qui garantit l'optimalit\'{e} de A*. Pour chaque trajet joueur, jusqu'\`{a} 6 options sont propos\'{e}es~: la plus rapide (A*), la plus courte (Dijkstra), et des alternatives par $k$-plus-courts-chemins.
+
+\subsection{Dijkstra Bidirectionnel}
+
+\subsubsection{Principe}
+
+Plut\^{o}t que d'explorer depuis la source uniquement, on lance \textbf{deux fronti\`{e}res simultan\'{e}es}~:
+\begin{itemize}
+  \item \textbf{Fronti\`{e}re avant}~: depuis la source, sur les arcs r\'{e}els
+  \item \textbf{Fronti\`{e}re arri\`{e}re}~: depuis la destination, sur les arcs invers\'{e}s (\texttt{in\_edges})
+\end{itemize}
+
+Chaque it\'{e}ration d\'{e}veloppe la fronti\`{e}re dont le sommet du tas est le plus petit. On maintient $\mu = \min_{v} (g_f(v) + g_b(v))$. La terminaison est d\'{e}clench\'{e}e quand~:
+
+\[
+\text{top}_{f} + \text{top}_{b} \geq \mu
+\]
+
+\subsubsection{Gain pratique}
+
+Dans un graphe euclidien, Dijkstra explore $\pi r^2$ n\oe uds. Le Dijkstra bidirectionnel explore deux demi-disques~:
+
+\[
+2 \times \pi \left(\frac{r}{2}\right)^2 = \frac{\pi r^2}{2}
+\]
+
+Soit th\'{e}oriquement 2$\times$ moins de n\oe uds. Les r\'{e}sultats sur le graphe de test sont pr\'{e}sent\'{e}s dans le tableau \ref{tab:dijkstra}.
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Algorithme} & \textbf{N\oe uds explor\'{e}s} & \textbf{Co\^{u}t} \\
+\hline
+Dijkstra classique & 9 & 16{,}0 \\
+\hline
+Dijkstra bidirectionnel & 8 & 16{,}0 \\
+\hline
+\end{tabular}
+\end{center}
+\caption{Comparaison Dijkstra classique vs. bidirectionnel (10 n\oe uds)}
+\label{tab:dijkstra}
+\end{table}
+
+\subsection{A* Bidirectionnel}
+
+\subsubsection{Principe}
+
+On combine la recherche bidirectionnelle avec l'heuristique Haversine dans les deux directions~:
+\begin{itemize}
+  \item \textbf{Avant}~: $f_f(n) = g_f(n) + h(n, \text{dest})$
+  \item \textbf{Arri\`{e}re}~: $f_b(n) = g_b(n) + h(n, \text{source})$ (sur les arcs invers\'{e}s)
+\end{itemize}
+
+\subsubsection{Terminaison correcte}
+
+La terminaison correcte pour A* bidirectionnel avec heuristique consistante diff\`{e}re du Dijkstra bidirectionnel. Une premi\`{e}re impl\'{e}mentation utilisait $\min(\text{top}_f, \text{top}_b) \geq \mu$, ce qui arr\^{e}tait trop t\^{o}t. La condition correcte est~:
+
+\[
+\text{top}_{f} \geq \mu \quad \textbf{ET} \quad \text{top}_{b} \geq \mu
+\]
+
+\textit{Justification}~: si la f-valeur minimale de chaque file d\'{e}passe $\mu$, alors tout chemin passant par un n\oe ud ouvert de l'une ou l'autre fronti\`{e}re co\^{u}te au moins $\mu$ (par admissibilit\'{e} de $h$). Tout chemin optimal s-t passe n\'{e}cessairement par un tel n\oe ud ouvert ou par un n\oe ud d\'{e}j\`{a} clos dont la contribution \`{a} $\mu$ a \'{e}t\'{e} enregistr\'{e}e.
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Algorithme} & \textbf{N\oe uds explor\'{e}s} & \textbf{Co\^{u}t} \\
+\hline
+Dijkstra classique & 9 & 16{,}0 \\
+\hline
+Dijkstra bidirectionnel & 8 & 16{,}0 \\
+\hline
+A* bidirectionnel & 17 & 16{,}0 \\
+\hline
+\end{tabular}
+\end{center}
+\caption{Comparaison des algorithmes sur graphe de test (h $\approx$ 0)}
+\label{tab:astar}
+\end{table}
+
+\textit{Note sur le tableau \ref{tab:astar}}~: sur ce graphe de test les n\oe uds sont tr\`{e}s proches (0,0001$^\circ$), donc $h \approx 0$ et A* se comporte comme Dijkstra. Sur de vrais graphes OSM, A* explore significativement moins de n\oe uds.
+
+\subsection{Solveur OR-Tools et profils IA}
+
+\subsubsection{Mod\'{e}lisation VRPTW}
+
+La r\'{e}solution IA utilise OR-Tools avec~: une matrice de temps $T[i][j]$ comme co\^{u}t de transition, une dimension \texttt{Time} pour les fen\^{e}tres de livraison, une dimension \texttt{Capacity} par tra\^{\i}neau, et des p\'{e}nalit\'{e}s de non-visite pour les cas infaisables.
+
+\subsubsection{Profils IA}
+
+Six profils combinent diff\'{e}rentes strat\'{e}gies, comme indiqu\'{e} dans le tableau \ref{tab:profiles}.
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Profil} & \textbf{Cible} & \textbf{M\'{e}taheuristique} & \textbf{Bonus pts} \\
+\hline
+Express & Temps & GLS & +4 \\
+\hline
+\'{E}colo & Distance & SA & +5 \\
+\hline
+Prudent & Temps & GLS & +6 \\
+\hline
+Opportuniste & Temps & Tabu & +6 \\
+\hline
+Agressive & Temps & GLS & +7 \\
+\hline
+Championne & Temps & GLS (30s) & +8 \\
+\hline
+\end{tabular}
+\end{center}
+\caption{Profils IA disponibles}
+\label{tab:profiles}
+\end{table}
+
+\subsubsection{Mod\`{e}le d'apprentissage}
+
+Un mod\`{e}le d'apprentissage (version 2.0) recommande automatiquement le profil optimal selon le contexte de la mission~: hash de (nombre de clients, zone, m\'{e}t\'{e}o, incidents, budget). Il utilise une distribution de probabilit\'{e}s sur les 6 profils avec lissage de Laplace ($\alpha = 3{,}0$), entra\^{\i}n\'{e} sur jusqu'\`{a} 1000 missions r\'{e}solues.
+
+\subsection{Warm-start OR-Tools}
+
+\subsubsection{Motivation}
+
+Par d\'{e}faut, OR-Tools construit sa solution initiale \textit{ex nihilo}, consommant une partie du temps de recherche. Si le joueur a d\'{e}j\`{a} affect\'{e} des clients \`{a} ses tra\^{\i}neaux, cette affectation constitue une solution partielle que le solveur peut raffiner directement.
+
+\subsubsection{Impl\'{e}mentation}
+
+La solution humaine est pass\'{e}e via \texttt{ReadAssignmentFromRoutes()}~:
+
+\begin{lstlisting}[caption={Warm-start OR-Tools depuis la solution humaine}, label=lst:warmstart]
+id_to_idx = {int(df.iloc[i]['id']): i for i in range(num_locations)}
+routes_list = [
+    [id_to_idx[c] for c in initial_routes.get(str(v), []) if c in id_to_idx]
+    for v in range(num_vehicles)
+]
+init_assignment = routing.ReadAssignmentFromRoutes(routes_list, True)
+if init_assignment:
+    solution = routing.SolveFromAssignmentWithParameters(
+        init_assignment, search_parameters)
+\end{lstlisting}
+
+Si l'affectation est invalide, OR-Tools effectue un d\'{e}marrage \`{a} froid automatiquement. Ce m\'{e}canisme est particuli\`{e}rement b\'{e}n\'{e}fique pour les profils \`{a} court d\'{e}lai de r\'{e}solution (\textit{Express}, \textit{Agressive}) o\`{u} OR-Tools peut explorer plus de voisinages dans le temps imparti.
+
+\subsection{P\'{e}nalit\'{e}s douces sur les incidents}
+
+\subsubsection{Comportement ant\'{e}rieur}
+
+Lorsqu'un incident \'{e}tait signal\'{e} sur des arcs du graphe, ces arcs \'{e}taient \textbf{supprim\'{e}s}. Cette approche \'{e}tait trop restrictive~: si tous les chemins passaient par la zone accid\'{e}nt\'{e}e, le joueur ne recevait aucune option de route.
+
+\subsubsection{Nouvelle approche}
+
+La fonction \texttt{\_apply\_incident\_penalties()} remplace la suppression par un \textbf{multiplicateur} sur \texttt{travel\_time} et \texttt{length}~:
+
+\[
+t'_{u,v} = t_{u,v} \times \text{penalty\_factor} \quad (\text{d\'{e}faut}~: 1{,}5)
+\]
+
+Les routes restent disponibles mais avec un avertissement \texttt{"Zone incident\'{e}e (+50\%)"} et un co\^{u}t ajust\'{e}. Le tableau \ref{tab:incidents} compare les deux approches.
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Crit\`{e}re} & \textbf{Hard blocking} & \textbf{P\'{e}nalit\'{e} douce} \\
+\hline
+Options disponibles & Peut \^{e}tre 0 & Toujours $k$ \\
+\hline
+R\'{e}alisme & Moyen & \'{E}lev\'{e} \\
+\hline
+Info joueur & Aucune & Co\^{u}t ajust\'{e} \\
+\hline
+\end{tabular}
+\end{center}
+\caption{Hard blocking vs. p\'{e}nalit\'{e}s douces sur les incidents}
+\label{tab:incidents}
+\end{table}
+
+\subsection{Am\'{e}liorations locales de la solution humaine}
+
+Deux algorithmes d'am\'{e}lioration locale sont appliqu\'{e}s \`{a} la solution humaine apr\`{e}s validation~:
+
+\begin{itemize}
+  \item \textbf{2-opt intra-route}~: pour chaque paire $(i, j)$ d'arcs non-adjacents d'une tourn\'{e}e, on inverse le segment $[i..j]$ si le co\^{u}t diminue. L'algorithme converge car le co\^{u}t est strictement d\'{e}croissant \`{a} chaque it\'{e}ration. Complexit\'{e}~: $O(n^2)$ par it\'{e}ration de convergence.
+  \item \textbf{Or-opt inter-routes}~: on d\'{e}place des segments de 1, 2 ou 3 clients d'une tourn\'{e}e vers une autre, \'{e}quilibrant la charge entre les tra\^{\i}neaux.
+  \item \textbf{Plus Proche Voisin}~: construction gloutonne TSP mono-v\'{e}hicule utilis\'{e}e comme r\'{e}f\'{e}rence de comparaison.
+\end{itemize}
+
+\subsection{Post-traitement 3-opt + or-opt + 2-opt* de la solution OR-Tools}
+
+\subsubsection{Motivation}
+
+OR-Tools s'arr\^{e}te d\`{e}s que la limite de temps est atteinte, sans garantir l'\'{e}limination de tous les croisements. Trois algorithmes compos\'{e}s affinent la solution sans co\^{u}t suppl\'{e}mentaire de solveur.
+
+\subsubsection{3-opt intra-route}
+
+Le 2-opt retire 2 arcs et choisit parmi 2 reconnexions. Le \textbf{3-opt} retire 3 arcs et choisit parmi 8 reconnexions possibles. Pour un triplet $(i, j, k)$, les segments $A$, $B$, $C$, $D$ peuvent \^{e}tre recombinés~:
+
+\[
+A + B + C + D \;\rightarrow\; A + C + B + D \;\text{(transposition invisible au 2-opt)}
+\]
+
+La transposition $B \leftrightarrow C$ est le cas typique non-accessible au 2-opt. L'impl\'{e}mentation part d'un point 2-opt optimal (pour garantir $\text{3-opt} \leq \text{2-opt}$) puis applique les passes 3-opt jusqu'\`{a} convergence. Complexit\'{e}~: $O(n^3)$ par passe.
+
+\subsubsection{Impl\'{e}mentation}
+
+Le post-traitement est appel\'{e} dans \texttt{solve\_vrp()} imm\'{e}diatement apr\`{e}s la recherche OR-Tools, avec la m\^{e}me matrice de temps $T$ (m\'{e}t\'{e}o et incidents inclus)~:
+
+\begin{lstlisting}[caption={Post-traitement ILS (double-bridge + pipeline 3-opt/or-opt/2-opt*)}, label=lst:postproc]
+ils = ro_improvements.iterated_local_search(
+    routes, matrix_time, depot_id=0, n_iterations=8,
+    capacity=vehicle_capacity, demands=node_demands)
+improved = {sid: d["optimized_route"]
+            for sid, d in ils["sleighs"].items()}
+# Resultat : total_improvement_pct, improvements_accepted/iterations_run
+\end{lstlisting}
+
+\subsubsection{Or-opt et 2-opt* inter-routes avec capacit\'{e}}
+
+L'or-opt d\'{e}place des blocs de 1--3 clients entre v\'{e}hicules. Le \textbf{2-opt*} \'{e}change les suffixes de deux routes~: pour des coupures en position $i$ (route A) et $j$ (route B), on obtient~:
+
+\[
+\text{new\_A} = A_{[0..i]} + B_{[j+1..]}, \quad \text{new\_B} = B_{[0..j]} + A_{[i+1..]}
+\]
+
+Les deux op\'{e}rations rejettent tout mouvement qui ferait d\'{e}passer la capacit\'{e} $Q$ du v\'{e}hicule destinataire~:
+
+\[
+\sum_{c \in \text{new\_route}} \text{demande}(c) \leq Q
+\]
+
+Les trois algorithmes sont compos\'{e}s dans l'ordre (3-opt $\to$ or-opt $\to$ 2-opt*) pour \'{e}viter les optima locaux imbriqués.
+
+\subsection{Recherche locale it\'{e}r\'{e}e (ILS) avec perturbation double-bridge}
+
+\subsubsection{Motivation}
+
+Les op\'{e}rateurs 2-opt, 3-opt et 2-opt* convergent tous vers un \textbf{optimum local}. Une fois atteint, aucun de ces mouvements ne peut am\'{e}liorer la solution~: ils restent pig\'{e}s dans le bassin d'attraction du premier minimum rencontr\'{e}. Pour s'\'{e}chapper, il faut une \textbf{perturbation} qui cr\'{e}e un voisin inaccessible par ces op\'{e}rateurs.
+
+\subsubsection{Perturbation double-bridge (4-opt non-s\'{e}quentiel)}
+
+La perturbation \textbf{double-bridge} coupe une route en quatre segments $A$, $B$, $C$, $D$ à trois positions aléatoires $i < j < k$, puis les reconnecte dans l'ordre~:
+
+\[
+A + B + C + D \;\;\longrightarrow\;\; A + C + B + D
+\]
+
+Ce type de reconnexion est \textbf{impossible à annuler} par une s\'{e}quence finie de mouvements 2-opt ou 3-opt, car il constitue un 4-opt non-s\'{e}quentiel. Il force donc une exploration d'un basin d'attraction diff\'{e}rent, garantissant une vraie diversification.
+
+\begin{lstlisting}[caption={Double-bridge : 4-opt non-sequentiel}, label=lst:dbridge]
+def _double_bridge_single(route):
+    n = len(route)
+    if n < 4:
+        return route[:]
+    i, j, k = sorted(random.sample(range(1, n), 3))
+    A, B, C, D = route[:i], route[i:j], route[j:k], route[k:]
+    return A + C + B + D
+\end{lstlisting}
+
+\subsubsection{Algorithme ILS}
+
+L'ILS alterne perturbation et recherche locale, en acceptant uniquement les am\'{e}liorations (\textit{greedy acceptance})~:
+
+\begin{enumerate}
+  \item \textbf{Recherche locale initiale}~: appliquer le pipeline 3-opt $\to$ or-opt $\to$ 2-opt* jusqu'\`{a} convergence.
+  \item \textbf{Boucle de perturbation} ($n = 8$ it\'{e}rations)~:
+    \begin{enumerate}
+      \item Choisir la route la plus co\^{u}teuse (longueur $\geq 4$) comme cible.
+      \item Appliquer double-bridge pour obtenir un candidat perturb\'{e}.
+      \item Re-lancer le pipeline de recherche locale sur le candidat.
+      \item Accepter si $\text{co\^{u}t candidat} < \text{co\^{u}t best} - 1$~s.
+    \end{enumerate}
+  \item Retourner la meilleure solution trouv\'{e}e.
+\end{enumerate}
+
+Le crit\`{e}re d'acceptation strict (pas de d\'{e}gradation tol\'{e}r\'{e}e) garantit la monotonicité~: la solution retournée est toujours meilleure ou \'{e}gale à la solution OR-Tools d'origine.
+
+\subsubsection{Impact sur le score}
+
+Le temps recalcul\'{e} en temps pur (sans attentes aux fen\^{e}tres de temps) r\'{e}duit \texttt{total\_time\_s}, ce qui am\'{e}liore $\Delta t_{\%}$ et le score final.
+
+\subsection{Floyd-Warshall : tous-pairs chemins les plus courts}
+
+\subsubsection{Principe}
+
+Dijkstra calcule les plus courts chemins depuis \textbf{une seule source} en $O((V+E)\log V)$. \textbf{Floyd-Warshall} calcule simultanément \textbf{tous} les plus courts chemins en $O(n^3)$, adapté aux graphes petits ou denses.
+
+L'id\'{e}e centrale est la \textbf{relaxation par nœud interm\'{e}diaire}~: pour chaque $k \in \{0, \ldots, n-1\}$, on tente de raccourcir tous les chemins $i \to j$ via $k$~:
+
+\[
+d[i][j] \leftarrow \min\bigl(d[i][j],\; d[i][k] + d[k][j]\bigr)
+\]
+
+Apr\`{e}s $n$ it\'{e}rations, $d[i][j]$ contient le plus court chemin entre tout couple $(i, j)$.
+
+\subsubsection{Application et comparaison avec Dijkstra}
+
+Appliqu\'{e} \`{a} la matrice des temps de trajet entre points de livraison, Floyd-Warshall d\'{e}tecte si passer par un autre point de livraison comme relais intermédiaire serait plus rapide que le chemin routier direct OSRM.
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Propri\'{e}t\'{e}} & \textbf{Dijkstra} & \textbf{Floyd-Warshall} \\
+\hline
+Complexit\'{e} & $O((V+E)\log V)$ par source & $O(n^3)$ \\
+\hline
+Chemins calcul\'{e}s & Source unique & Tous les couples \\
+\hline
+Graphes adapt\'{e}s & Grands, creux & Petits, denses \\
+\hline
+Poids n\'{e}gatifs & Non & Oui (sans cycle) \\
+\hline
+Reconstruction & Pr\'{e}d\'{e}cesseurs & Matrice \texttt{next\_hop} \\
+\hline
+\end{tabular}
+\end{center}
+\caption{Dijkstra vs. Floyd-Warshall}
+\label{tab:fw}
+\end{table}
+
+L'endpoint \texttt{GET /api/missions/\{id\}/graph/floyd-warshall} retourne la matrice améliorée, la matrice \texttt{next\_hop} pour la reconstruction, et les statistiques (paires améliorées, gain maximal).
+
+\subsection{Tests de non-régression}
+
+Un fichier \texttt{tests/test\_score.py} contient 21 tests unitaires couvrant~:
+
+\begin{itemize}
+  \item \textbf{Floyd-Warshall}~: triangle (raccourci via interm\'{e}diaire), sym\'{e}trie, diagonale nulle.
+  \item \textbf{3-opt}~: route crois\'{e}e am\'{e}lior\'{e}e, conservation des clients, cas trivial.
+  \item \textbf{2-opt*}~: d\'{e}s\'{e}quilibre corrig\'{e}, contrainte de capacit\'{e} respect\'{e}e, tous les clients pr\'{e}sents.
+  \item \textbf{Double-bridge}~: clients pr\'{e}serv\'{e}s, ordre modifi\'{e} sur 100 tirages, route courte inchang\'{e}e.
+  \item \textbf{ILS}~: jamais d\'{e}grade la solution d'origine, pr\'{e}serve tous les clients, respecte la capacit\'{e}, am\'{e}liore un zigzag d\'{e}lib\'{e}r\'{e}.
+  \item \textbf{Score}~: cas de r\'{e}f\'{e}rence (28\,\% \'{e}conomie $\to$ score $\in [64, 69]$), score parfait = 100, z\'{e}ro \'{e}conomie = 0, jamais n\'{e}gatif, plafonn\'{e} \`{a} 100.
+\end{itemize}
+
+Ces tests assurent qu'un futur changement de la formule de score ou d'un algorithme provoque un \'{e}chec explicite plut\^{o}t qu'une r\'{e}gression silencieuse en production.
+
+\subsection{Limite de temps adaptative du solveur}
+
+\subsubsection{Probl\`{e}me}
+
+Chaque profil IA avait un \texttt{solver\_time\_limit\_s} fixe (10--30 s). Ce param\`{e}tre est sous-optimal~: une mission \`{a} 8 clients est r\'{e}solue en moins de 5 secondes, gaspillant le reste du budget. Inversement, une mission \`{a} 60 clients b\'{e}n\'{e}ficierait de plus de temps de recherche.
+
+\subsubsection{Solution}
+
+Une loi de puissance scale la limite de temps en fonction du nombre de clients $n$~:
+
+\[
+t_{\text{adapt\'{e}}} = \text{clip}\!\left(t_{\text{base}} \cdot \sqrt{\frac{n}{20}},\; 8\text{ s},\; 45\text{ s}\right)
+\]
+
+Le point de r\'{e}f\'{e}rence est $n = 20$ (aucun changement). La racine carr\'{e}e est choisie car la complexit\'{e} du VRPTW cro\^{\i}t polynomialement mais pas lin\'{e}airement. Le tableau \ref{tab:adaptive} illustre l'effet sur le profil Championne ($t_{\text{base}} = 30$~s)~:
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{|c|c|c|c|}
+\hline
+\textbf{Clients} & \textbf{Facteur} $\sqrt{n/20}$ & \textbf{Limite adapt\'{e}e} & \textbf{Effet} \\
+\hline
+8 & 0,63 & 19 s & Lib\`{e}re 11 s \\
+\hline
+20 & 1,00 & 30 s & Inchang\'{e} \\
+\hline
+30 & 1,22 & 37 s & +7 s \\
+\hline
+50 & 1,58 & 45 s & +15 s (plafonn\'{e}) \\
+\hline
+\end{tabular}
+\end{center}
+\caption{Limite de temps adaptative pour le profil Championne ($t_{\text{base}} = 30$~s)}
+\label{tab:adaptive}
+\end{table}
+
+\subsection{Portfolio l\'{e}ger pour la r\'{e}solution de base}
+
+\subsubsection{Principe}
+
+L'endpoint \texttt{solve\_mission\_learned} utilisait un portfolio complet (4 candidats, tuner neuronal). L'endpoint \texttt{solve\_mission} (basique) ex\'{e}cutait un seul candidat. Un portfolio l\'{e}ger a \'{e}t\'{e} ajout\'{e}~: 2 presets sont sond\'{e}s rapidement ($\approx$50\,\% du budget de temps), le meilleur est retenu pour la r\'{e}solution finale.
+
+\subsubsection{Impl\'{e}mentation}
+
+\begin{lstlisting}[caption={Portfolio l\'{e}ger dans solve\_mission}, label=lst:portfolio]
+if use_portfolio and ai_strategy_override is None:
+    candidates = _build_ro_portfolio_candidates(ai_strategy)[:2]
+    portfolio_probe = _run_ro_portfolio_probe(
+        paths, mission, weather, incident_matrix_path, candidates
+    )
+    selected = portfolio_probe.get("selected_strategy")
+    if selected:
+        ai_strategy, _ = _adapt_ai_strategy_budget(
+            selected, mission, phase="final")
+\end{lstlisting}
+
+Le portfolio est court-circuit\'{e} si \texttt{ai\_strategy\_override} est fourni (appel interne depuis \texttt{solve\_mission\_learned} qui a son propre portfolio complet). Le surco\^{u}t total est de 10--15 s pour 2 sondes, largement compens\'{e} par la meilleure s\'{e}lection de strat\'{e}gie.
+
+% =====================================================================
+\section{Difficult\'{e}s rencontr\'{e}es}
+% =====================================================================
+
+\subsection{Terminaison correcte du A* bidirectionnel}
+
+La principale difficult\'{e} algorithmique a \'{e}t\'{e} de d\'{e}terminer la bonne condition de terminaison du A* bidirectionnel. Une premi\`{e}re impl\'{e}mentation utilisait $\min(\text{top}_f, \text{top}_b) \geq \mu$, qui s'est av\'{e}r\'{e}e incorrecte~: l'algorithme s'arr\^{e}tait pr\'{e}matur\'{e}ment et retournait un chemin sous-optimal (co\^{u}t 32 au lieu de 16 sur le graphe de test). Le d\'{e}bogage a r\'{e}v\'{e}l\'{e} que la condition correcte est $\text{top}_f \geq \mu$ \textbf{ET} $\text{top}_b \geq \mu$.
+
+\subsection{Admissibilit\'{e} de l'heuristique sur les graphes de test}
+
+Lors des tests unitaires, les graphes artificiels utilisaient des poids de 5--20 secondes pour des n\oe uds s\'{e}par\'{e}s de 0,01$^\circ$ ($\approx$1~km). L'heuristique haversine donnait alors $h \approx 250$~s, ce qui \'{e}tait \textbf{non-admissible} et rendait A* incorrect. La solution a \'{e}t\'{e} de rapprocher les n\oe uds \`{a} 0,0001$^\circ$ (11~m) afin que $h \approx 0{,}8$~s $\ll$ poids des arcs.
+
+\subsection{Warm-start et mapping d'indices OR-Tools}
+
+OR-Tools op\`{e}re sur des matrices pr\'{e}-calcul\'{e}es (indices 0..$n$), tandis que les donn\'{e}es joueur r\'{e}f\'{e}rencent des identifiants clients (\texttt{id} du CSV). Il a fallu construire un mapping \texttt{id\_to\_idx} pour convertir les routes humaines en indices OR-Tools valides avant de les passer en warm-start.
+
+\subsection{Coh\'{e}rence des caches avec les p\'{e}nalit\'{e}s douces}
+
+L'introduction d'un deuxi\`{e}me type de graphe modifi\'{e} (p\'{e}nalis\'{e} vs. \'{e}pur\'{e}) a n\'{e}cessit\'{e} un deuxi\`{e}me cache LRU ind\'{e}pendant, car les cl\'{e}s incluent maintenant le \texttt{penalty\_factor} en plus de la signature des arcs. Sans cette s\'{e}paration, le cache aurait pu retourner un graphe incorrect.
+
+% =====================================================================
+\section{Bilan}
+% =====================================================================
+
+\subsection{Conclusion}
+
+Ce projet a permis de mettre en \oe uvre concr\`{e}tement les algorithmes de graphes du cours~: Dijkstra, A*, recherche bidirectionnelle, am\'{e}liorations locales (2-opt, Or-opt), et m\'{e}triques structurelles. Ces algorithmes op\`{e}rent sur de vrais graphes routiers issus d'OpenStreetMap, ce qui leur conf\`{e}re une dimension op\'{e}rationnelle rarement pr\'{e}sente dans les exercices acad\'{e}miques.
+
+La comparaison avec Google OR-Tools illustre l'\'{e}cart entre les heuristiques constructives (A*, Plus Proche Voisin) et un solveur industriel avec recherche locale avanc\'{e}e. Huit am\'{e}liorations ont \'{e}t\'{e} impl\'{e}ment\'{e}es~: Dijkstra bidirectionnel, A* bidirectionnel, warm-start OR-Tools, p\'{e}nalit\'{e}s douces sur les incidents, post-traitement 3-opt + or-opt + 2-opt* capacit\'{e}-aware avec ILS double-bridge, Floyd-Warshall tous-pairs, limite de temps adaptative, et portfolio l\'{e}ger. Ces modifications illustrent qu'un pipeline d'optimisation est un syst\`{e}me \`{a} plusieurs niveaux~: chaque couche (graphe, solveur, post-traitement, s\'{e}lection de strat\'{e}gie) offre des leviers ind\'{e}pendants et compos\'{e}s pour am\'{e}liorer la qualit\'{e} finale.
+
+\subsection{Perspectives}
+
+\begin{itemize}
+  \item \textbf{Algorithme MM (Meet in the Middle)}~\cite{mm}~: utiliser des priorit\'{e}s $p = \max(f, 2g)$ pour une terminaison th\'{e}oriquement garantie d\`{e}s $\min(p_f, p_b) \geq C^*$.
+  \item \textbf{Reinforcement Learning multi-agent}~: remplacer les profils IA fixes par des agents apprenants (PPO, QMIX) o\`{u} chaque tra\^{\i}neau optimise coop\'{e}rativement sa tourn\'{e}e.
+  \item \textbf{Ranker neural}~: remplacer la heuristique gloutonne de \texttt{suggest\_next\_stops()} par un mod\`{e}le entra\^{\i}n\'{e} sur les choix humains pass\'{e}s.
+  \item \textbf{M\'{e}t\'{e}o en temps r\'{e}el}~: int\'{e}grer l'API Open-Meteo pour mettre \`{a} jour les matrices de temps en cours de partie.
+  \item \textbf{Migration PostgreSQL}~: la base SQLite actuelle devrait \^{e}tre migr\'{e}e pour un d\'{e}ploiement \`{a} plus grande \'{e}chelle ($>$1000 missions concurrentes).
+\end{itemize}
+
+\newpage
+\section{Bibliographie}
+\renewcommand{\bibname}{}
+\renewcommand{\refname}{}
+\begin{thebibliography}{9}
+  \bibitem[DIJ59]{dijkstra}
+    E.W. Dijkstra, \textit{A note on two problems in connexion with graphs}, Numerische Mathematik, vol. 1, pp. 269--271, 1959.
+
+  \bibitem[HNR68]{astar}
+    P.E. Hart, N.J. Nilsson, B. Raphael, \textit{A Formal Basis for the Heuristic Determination of Minimum Cost Paths}, IEEE Transactions on Systems Science and Cybernetics, vol. 4, no. 2, pp. 100--107, 1968.
+
+  \bibitem[ORT]{ortools}
+    Google, \textit{OR-Tools: Open source software for combinatorial optimization}, 2009.
+
+  \bibitem[BOE17]{osmnx}
+    G.H. Boeing, \textit{OSMnx: New Methods for Acquiring, Constructing, Analyzing, and Visualizing Complex Street Networks}, Computers, Environment and Urban Systems, vol. 65, pp. 126--139, 2017.
+
+  \bibitem[HF16]{mm}
+    R.C. Holte, A. Felner, G. Sharon, N. Sturtevant, \textit{Bidirectional Search That Is Guaranteed to Find Optimal Solutions}, AAAI, 2016.
+
+  \bibitem[TV02]{toth}
+    P. Toth, D. Vigo, \textit{The Vehicle Routing Problem}, SIAM, 2002.
+\end{thebibliography}
+
+\newpage
+\section{Webographie}
+\begin{thebibliography}{6}
+  \bibitem[OSM]{osm} \url{https://www.openstreetmap.org} --- Donn\'{e}es cartographiques libres
+  \bibitem[OSNX]{osmnxweb} \url{https://osmnx.readthedocs.io} --- Documentation OSMnx
+  \bibitem[NX]{nx} \url{https://networkx.org} --- Documentation NetworkX
+  \bibitem[ORT2]{ortweb} \url{https://developers.google.com/optimization/routing} --- Guide OR-Tools VRP
+  \bibitem[FA]{fastapiweb} \url{https://fastapi.tiangolo.com} --- Documentation FastAPI
+  \bibitem[NJ]{nextjs} \url{https://nextjs.org} --- Documentation Next.js
+\end{thebibliography}
+
+\newpage
+\section{Annexes}
+\appendix
+\makeatletter
+\def\@seccntformat#1{Annexe~\csname the#1\endcsname:\quad}
+\makeatother
+
+\section{Cahier des charges}
+
+\subsection*{Fonctionnalit\'{e}s principales}
+\begin{enumerate}
+  \item G\'{e}n\'{e}ration de missions VRPTW sur des zones r\'{e}elles (Paris, Lyon, Bordeaux\ldots)
+  \item Routage interactif~: le joueur choisit ses it\'{e}n\'{e}raires parmi plusieurs options calcul\'{e}es par A* et Dijkstra
+  \item R\'{e}solution IA via OR-Tools avec 6 profils configurables et apprentissage automatique
+  \item D\'{e}briefing~: score, temps, CO2, comparaison humain/IA, recommandations
+  \item Mode Versus~: matchmaking, invitations priv\'{e}es, classements ELO
+  \item Syst\`{e}me social~: amis, messages, classements globaux
+\end{enumerate}
+
+\subsection*{Contraintes techniques}
+\begin{itemize}
+  \item API REST document\'{e}e (FastAPI / OpenAPI)
+  \item Temps de r\'{e}ponse $<$ 2 secondes pour le routage interactif
+  \item Solveur OR-Tools~: limite de temps configurable (10--30 s)
+  \item Caches LRU pour graphes, options de routes, et graphes d'incidents
+\end{itemize}
+
+\section{Exemple d'ex\'{e}cution}
+
+\subsection*{Cr\'{e}ation et r\'{e}solution d'une mission}
+\begin{lstlisting}[language=bash, caption={Cr\'{e}ation d'une mission via l'API REST}]
+POST /api/missions
+{
+  "zone": "5eme_arrondissement_paris",
+  "num_clients": 10,
+  "num_vehicles": 3,
+  "vehicle_capacity": 200,
+  "weather_key": "Snow",
+  "ai_profile": "Championne",
+  "random_incidents": true
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=bash, caption={Appels aux endpoints p\'{e}dagogiques de graphes}]
+# Dijkstra classique (pas-a-pas)
+GET /api/missions/{id}/graph/dijkstra-steps?from_node=42&to_node=1337
+
+# Dijkstra bidirectionnel
+GET /api/missions/{id}/graph/bidirectional-dijkstra-steps?from_node=42&to_node=1337
+
+# A* bidirectionnel
+GET /api/missions/{id}/graph/bidirectional-astar-steps?from_node=42&to_node=1337
+\end{lstlisting}
+
+\section{Manuel utilisateur}
+
+\begin{enumerate}
+  \item \textbf{Lancer le backend}~: \texttt{uvicorn backend.app.main:app --reload --port 8000}
+  \item \textbf{Lancer le frontend}~: \texttt{cd frontend \&\& npm run dev}
+  \item \textbf{Jouer une mission}~: choisir une zone et un profil IA, tracer les routes sur la carte, valider, consulter le d\'{e}briefing
+  \item \textbf{Mode Versus}~: inviter un ami ou rejoindre la file d'attente depuis la page \textit{Versus}
+\end{enumerate}
+
+\end{document}

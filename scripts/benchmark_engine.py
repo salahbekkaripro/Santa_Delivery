@@ -21,10 +21,11 @@ def calculate_benchmark(
     dist_matrix_path=DIST_MATRIX,
     optimized_json_path=OPTIMIZED_JSON,
     benchmark_file=BENCHMARK_FILE,
+    time_scale_factor=1.0,
 ):
     # 1. Chargement
     df = pd.read_csv(data_path)
-    time_matrix = np.load(time_matrix_path)
+    time_matrix = np.load(time_matrix_path) * float(time_scale_factor)
     dist_matrix = np.load(dist_matrix_path)
     
     with open(optimized_json_path, 'r') as f:
@@ -33,20 +34,17 @@ def calculate_benchmark(
     num_points = len(df)
     
     # 2. Calcul Naïf
-    # On livre dans l'ordre 1..N, on ignore la capacité pour le calcul pur
-    # Répartition : P1 prend les index 1-16, P2 17-32, P3 le reste.
+    # On livre dans l'ordre 1..N, on ignore la capacité pour le calcul pur.
+    # Répartition équilibrée et exhaustive entre les véhicules.
     naive_tours = []
-    chunk = (num_points - 1) // num_vehicles
+    client_indices = list(range(1, num_points))
+    split_clients = np.array_split(client_indices, max(1, int(num_vehicles)))
     
     total_naive_time = 0
     total_naive_dist = 0
     
-    for v in range(num_vehicles):
-        start_idx = 1 + v * chunk
-        end_idx = min(1 + (v + 1) * chunk, num_points)
-        
-        # Route: 0 -> points -> 0
-        route_indices = [0] + list(range(start_idx, end_idx)) + [0]
+    for v, assigned_clients in enumerate(split_clients):
+        route_indices = [0] + assigned_clients.astype(int).tolist() + [0]
         v_time = 0
         v_dist = 0
         for i in range(len(route_indices) - 1):
@@ -57,21 +55,33 @@ def calculate_benchmark(
         total_naive_dist += v_dist
         naive_tours.append({"vehicle_id": v, "route_ids": [int(df.iloc[i]['id']) for i in route_indices]})
 
-    # 3. Calcul Optimisé (Récupéré du JSON)
-    total_opt_time = opt_data.get('total_time_s', 0)
-    # Calcul de la distance optimisée réelle (on somme les distances sur la matrice dist)
+    # 3. Calcul Optimisé (recalculé sur les mêmes matrices pour comparaison homogène)
+    id_to_idx = {int(row['id']): i for i, row in df.iterrows()}
+    total_opt_time = 0
     total_opt_dist = 0
-    for tour in opt_data['tours']:
-        r_ids = tour['route_ids']
-        # Mapping ID -> Index CSV
-        id_to_idx = {int(row['id']): i for i, row in df.iterrows()}
+    for tour in opt_data.get('tours', []):
+        r_ids = [int(route_id) for route_id in tour.get('route_ids', [])]
+        if len(r_ids) < 2:
+            continue
         for i in range(len(r_ids) - 1):
-            total_opt_dist += dist_matrix[id_to_idx[r_ids[i]]][id_to_idx[r_ids[i+1]]]
+            from_idx = id_to_idx.get(r_ids[i])
+            to_idx = id_to_idx.get(r_ids[i + 1])
+            if from_idx is None or to_idx is None:
+                continue
+            total_opt_time += time_matrix[from_idx][to_idx]
+            total_opt_dist += dist_matrix[from_idx][to_idx]
+    if total_opt_time <= 0 and opt_data.get('total_time_s') is not None:
+        total_opt_time = float(opt_data.get('total_time_s', 0))
 
     # 4. Économies
+    # total_opt_time vient de CumulVar OR-Tools (temps cumulé incluant attentes
+    # aux fenêtres de temps). Pour comparer équitablement avec le naïf (temps
+    # de trajet pur), on borne time_saved_pct à [-100, 100] pour éviter des
+    # scores aberrants quand les fenêtres de temps gonflent le cumul OR-Tools.
     time_saved_sec = total_naive_time - total_opt_time
     time_saved_pct = (time_saved_sec / total_naive_time) * 100 if total_naive_time > 0 else 0
-    
+    time_saved_pct = max(-100.0, min(100.0, time_saved_pct))
+
     co2_saved_kg = ((total_naive_dist - total_opt_dist) / 1000.0) * 0.120 # 120g/km
     
     benchmark = {

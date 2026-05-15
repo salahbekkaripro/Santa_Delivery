@@ -4,11 +4,41 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
+import { GuidedOnboarding, type GuidedOnboardingStep } from "@/components/guided-onboarding";
 import { VersusMapBuilder, VersusMapBuilderHandle } from "@/components/versus-map-builder";
 import { usePlayer } from "@/components/player-provider";
+import { TeleprinterText } from "@/components/teleprinter-text";
 import { createVersusMatch, getVersusTemplates, joinVersusMatch } from "@/lib/api";
 import type { VersusMapSource, VersusMissionConfig, VersusWinnerRule } from "@/lib/types";
 import { DEFAULT_CUSTOM_MISSION_CONFIG, WINNER_RULE_OPTIONS } from "@/lib/versus";
+
+const PRIVATE_ONBOARDING_STEPS: GuidedOnboardingStep[] = [
+  {
+    targetId: "private-overview",
+    title: "Configurer un duel privé",
+    description: "Ici tu prépares un match en code privé puis tu invites l'adversaire à rejoindre.",
+  },
+  {
+    targetId: "private-config",
+    title: "Choisis template ou map custom",
+    description: "Template pour aller vite, custom pour une démo guidée avec zone/météo/rayon/colis.",
+  },
+  {
+    targetId: "private-rule",
+    title: "Définis la règle de victoire",
+    description: "Le gagnant est calculé selon cette règle commune pour les deux joueurs.",
+  },
+  {
+    targetId: "private-create",
+    title: "Crée la room",
+    description: "Après création, partage le code puis passe au lobby live pour valider les statuts Ready.",
+  },
+  {
+    targetId: "private-join",
+    title: "Ou rejoins un code existant",
+    description: "Si tu as déjà reçu un code, colle-le ici pour entrer directement dans le match.",
+  },
+];
 
 export default function VersusPrivatePage() {
   const router = useRouter();
@@ -19,7 +49,6 @@ export default function VersusPrivatePage() {
   const [winnerRule, setWinnerRule] = useState<VersusWinnerRule>("score_time");
   const [customConfig, setCustomConfig] = useState<VersusMissionConfig>(DEFAULT_CUSTOM_MISSION_CONFIG);
   const [joinCode, setJoinCode] = useState("");
-  const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [customCreateGate, setCustomCreateGate] = useState({
     isAddressLoading: false,
@@ -59,7 +88,9 @@ export default function VersusPrivatePage() {
     },
     onSuccess: (match) => {
       setError(null);
-      setFeedback(`Partie créée. Code: ${match.join_code ?? "--"}`);
+      if (match.join_code) {
+        navigator.clipboard.writeText(match.join_code).catch(() => {});
+      }
       router.push(`/versus/match/${match.match_id}`);
     },
     onError: (err: Error) => setError(err.message),
@@ -73,7 +104,6 @@ export default function VersusPrivatePage() {
       }),
     onSuccess: (match) => {
       setError(null);
-      setFeedback("Partie rejointe.");
       router.push(`/versus/match/${match.match_id}`);
     },
     onError: (err: Error) => setError(err.message),
@@ -83,7 +113,15 @@ export default function VersusPrivatePage() {
     createMutation.isPending || (mapSource === "custom" && !customCreateGate.canCreate);
 
   if (!isReady) {
-    return <div className="page-shell"><div className="page-stack"><div className="panel">Chargement...</div></div></div>;
+    return (
+      <div className="page-shell">
+        <div className="page-stack">
+          <div className="panel-loading" style={{ height: 110 }} />
+          <div className="panel-loading" style={{ height: 200 }} />
+          <div className="panel-loading" style={{ height: 120 }} />
+        </div>
+      </div>
+    );
   }
 
   if (!player) {
@@ -102,12 +140,12 @@ export default function VersusPrivatePage() {
   return (
     <div className="page-shell">
       <div className="page-stack">
-        <section className="hero">
+        <section className="hero" data-onboarding-id="private-overview">
           <h1>Versus · Code privé</h1>
-          <p>Étape 2/3: configure la partie (template ou map custom) puis crée ou rejoins une room.</p>
+          <TeleprinterText text="Étape 2/3: configure la partie (template ou map custom) puis crée ou rejoins une room." />
         </section>
 
-        <section className="panel stack">
+        <section className="panel stack" data-onboarding-id="private-config">
           <strong>Configuration host</strong>
           <VersusMapBuilder
             ref={mapBuilderRef}
@@ -121,7 +159,7 @@ export default function VersusPrivatePage() {
             onCustomGateStateChange={setCustomCreateGate}
           />
 
-          <label className="field">
+          <label className="field" data-onboarding-id="private-rule">
             <span>Règle de victoire</span>
             <select value={winnerRule} onChange={(event) => setWinnerRule(event.target.value as VersusWinnerRule)}>
               {WINNER_RULE_OPTIONS.map((option) => (
@@ -133,7 +171,12 @@ export default function VersusPrivatePage() {
           </label>
           <span className="muted">{selectedRuleDescription}</span>
 
-          <button className="primary-button" onClick={() => createMutation.mutate()} disabled={isCreateDisabled}>
+          <button
+            className="primary-button"
+            onClick={() => createMutation.mutate()}
+            disabled={isCreateDisabled}
+            data-onboarding-id="private-create"
+          >
             {createMutation.isPending ? "Création..." : "Créer la partie"}
           </button>
           {mapSource === "custom" && customCreateGate.isAddressEmpty && (
@@ -144,7 +187,7 @@ export default function VersusPrivatePage() {
           )}
         </section>
 
-        <section className="panel stack">
+        <section className="panel stack" data-onboarding-id="private-join">
           <strong>Rejoindre une room</strong>
           <label className="field">
             <span>Code</span>
@@ -164,15 +207,19 @@ export default function VersusPrivatePage() {
           </button>
         </section>
 
-        {(feedback || error) && (
-          <section className={error ? "error-box" : "panel"}>
-            {error ?? feedback}
-          </section>
+        {error && (
+          <section className="error-box">{error}</section>
         )}
 
         <section className="panel stack">
           <Link className="secondary-button" href="/versus">← Retour choix mode</Link>
         </section>
+
+        <GuidedOnboarding
+          storageKey="operation-noel-onboarding-versus-private-v1"
+          tutorialLabel="Versus privé"
+          steps={PRIVATE_ONBOARDING_STEPS}
+        />
       </div>
     </div>
   );

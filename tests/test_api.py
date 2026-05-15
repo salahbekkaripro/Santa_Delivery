@@ -205,6 +205,67 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Mission introuvable")
 
+    @patch("backend.app.services.search_social_players", return_value={"players": [{"player_id": "p2", "display_name": "Bravo"}]})
+    def test_search_social_players_success(self, search_social_players_mock):
+        response = self.client.get("/api/social/players?player_id=p1&q=br&limit=10")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["players"][0]["player_id"], "p2")
+        search_social_players_mock.assert_called_once_with("p1", query="br", limit=10)
+
+    @patch("backend.app.services.send_friend_request", return_value={"status": "pending"})
+    def test_send_friend_request_success(self, send_friend_request_mock):
+        response = self.client.post(
+            "/api/social/friends/request",
+            json={"player_id": "player001", "friend_player_id": "player002"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "pending")
+        send_friend_request_mock.assert_called_once()
+
+    @patch("backend.app.services.list_direct_messages", side_effect=ValueError("Vous devez être amis"))
+    def test_list_direct_messages_bad_request(self, _list_direct_messages_mock):
+        response = self.client.get("/api/social/messages?player_id=p1&with_player_id=p2")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Vous devez être amis")
+
+    @patch("backend.app.services.block_player", return_value={"status": "blocked"})
+    def test_block_player_success(self, block_player_mock):
+        response = self.client.post(
+            "/api/social/blocks",
+            json={"player_id": "player001", "blocked_player_id": "player002"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "blocked")
+        block_player_mock.assert_called_once()
+
+    @patch(
+        "backend.app.services.remove_direct_conversation",
+        return_value={"status": "cleared", "conversation_key": "player001::player002", "cleared_before_at": "2026-05-14T18:00:00+00:00"},
+    )
+    def test_remove_direct_conversation_success(self, remove_direct_conversation_mock):
+        response = self.client.post(
+            "/api/social/messages/conversation/remove",
+            json={"player_id": "player001", "with_player_id": "player002"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "cleared")
+        self.assertEqual(response.json()["conversation_key"], "player001::player002")
+        remove_direct_conversation_mock.assert_called_once()
+
+    @patch(
+        "backend.app.services.restore_direct_conversation",
+        return_value={"status": "restored", "conversation_key": "player001::player002", "restored": True},
+    )
+    def test_restore_direct_conversation_success(self, restore_direct_conversation_mock):
+        response = self.client.post(
+            "/api/social/messages/conversation/restore",
+            json={"player_id": "player001", "with_player_id": "player002"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "restored")
+        self.assertTrue(response.json()["restored"])
+        restore_direct_conversation_mock.assert_called_once()
+
     @patch("backend.app.services.list_missions", return_value={"missions": [{"mission_id": "mission123", "status": "created"}]})
     def test_list_missions_success(self, list_missions_mock):
         response = self.client.get("/api/missions?limit=10")
@@ -351,6 +412,40 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "queued")
         enter_versus_queue_mock.assert_called_once()
+
+    @patch(
+        "backend.app.services.get_versus_queue_status",
+        return_value={"status": "queued", "queue_entry": {"player_id": "player001"}},
+    )
+    def test_get_versus_queue_status_queued(self, get_versus_queue_status_mock):
+        response = self.client.get(
+            "/api/versus/queue/status?player_id=player001&template_id=paris_duel&winner_rule=score_time"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "queued")
+        get_versus_queue_status_mock.assert_called_once_with(
+            {
+                "player_id": "player001",
+                "template_id": "paris_duel",
+                "winner_rule": "score_time",
+            }
+        )
+
+    @patch(
+        "backend.app.services.get_versus_queue_status",
+        return_value={"status": "matched", "match": VERSUS_MATCH_RESPONSE},
+    )
+    def test_get_versus_queue_status_matched(self, _get_versus_queue_status_mock):
+        response = self.client.get("/api/versus/queue/status?player_id=player001")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "matched")
+        self.assertEqual(response.json()["match"]["match_id"], "match123")
+
+    @patch("backend.app.services.get_versus_queue_status", side_effect=ValueError("Template invalide"))
+    def test_get_versus_queue_status_bad_request(self, _get_versus_queue_status_mock):
+        response = self.client.get("/api/versus/queue/status?player_id=player001")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Template invalide")
 
     @patch("backend.app.services.submit_versus_attempt", side_effect=ValueError("Soumission invalide"))
     def test_submit_versus_attempt_bad_request(self, _submit_versus_attempt_mock):

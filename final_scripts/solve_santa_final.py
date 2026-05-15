@@ -27,6 +27,8 @@ FIRST_SOLUTION_STRATEGIES = {
     "path_cheapest_arc": routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
     "parallel_cheapest_insertion": routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
     "savings": routing_enums_pb2.FirstSolutionStrategy.SAVINGS,
+    "christofides": routing_enums_pb2.FirstSolutionStrategy.CHRISTOFIDES,
+    "global_cheapest_arc": routing_enums_pb2.FirstSolutionStrategy.GLOBAL_CHEAPEST_ARC,
 }
 
 LOCAL_SEARCH_METAHEURISTICS = {
@@ -54,6 +56,8 @@ def solve_vrp(
     max_route_time_s=14400,
     drop_penalty=1000000,
     global_span_cost=0,
+    initial_routes=None,
+    vehicle_fixed_cost=0,
 ):
     # 1. Chargement des données
     if not os.path.exists(data_path):
@@ -156,6 +160,11 @@ def solve_vrp(
     demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
     routing.AddDimensionWithVehicleCapacity(demand_callback_index, 0, [vehicle_capacity]*num_vehicles, True, 'Capacity')
 
+    # Coût fixe par véhicule utilisé — OR-Tools minimise naturellement la flotte
+    if vehicle_fixed_cost and int(vehicle_fixed_cost) > 0:
+        for v in range(num_vehicles):
+            routing.SetFixedCostOfVehicle(int(vehicle_fixed_cost), v)
+
     # Pénalités pour livraison totale
     penalty = int(drop_penalty)
     for i in range(1, num_locations):
@@ -174,19 +183,131 @@ def solve_vrp(
     search_parameters.time_limit.seconds = int(solver_time_limit_s)
 
     print("Recherche de la solution optimale...")
-    solution = routing.SolveWithParameters(search_parameters)
+
+    # Warm-start : si des routes humaines sont fournies, on les passe comme
+    # solution initiale. OR-Tools part d'un point déjà "bon" et explore mieux
+    # dans le temps imparti plutôt que de reconstruire depuis zéro.
+    solution = None
+    if initial_routes:
+        id_to_idx = {int(df.iloc[i]['id']): i for i in range(num_locations)}
+        routes_list = []
+        for v in range(num_vehicles):
+            client_ids = initial_routes.get(str(v), [])
+            route_indices = [id_to_idx[cid] for cid in client_ids if cid in id_to_idx]
+            routes_list.append(route_indices)
+        init_assignment = routing.ReadAssignmentFromRoutes(routes_list, True)
+        if init_assignment:
+            print(f"Warm-start : {sum(len(r) for r in routes_list)} clients pré-affectés depuis la solution humaine.")
+            solution = routing.SolveFromAssignmentWithParameters(init_assignment, search_parameters)
+        else:
+            print("Warm-start ignoré (assignation invalide), repli sur démarrage à froid.")
+
+    if solution is None:
+        solution = routing.SolveWithParameters(search_parameters)
 
     if solution:
-        return save_solution(df, manager, routing, solution, num_vehicles, weather_factor, weather_desc, output_path=output_path)
+        # Extraction des tournées brutes : {vehicle_id: [client_node_indices]}
+        tours_raw: dict[int, list[int]] = {}
+        for vehicle_id in range(num_vehicles):
+            index = routing.Start(vehicle_id)
+            clients: list[int] = []
+            while not routing.IsEnd(index):
+                node = manager.IndexToNode(index)
+                if node != 0:
+                    clients.append(node)
+                index = solution.Value(routing.NextVar(index))
+            tours_raw[vehicle_id] = clients
+
+        # Post-traitement local : 2-opt intra-route + or-opt inter-routes (capacité vérifiée)
+        node_demands = {i: float(df.iloc[i]["poids_colis"]) for i in range(num_locations)}
+        improved_tours = _postprocess_vrp_tours(
+            tours_raw, matrix_time,
+            demands=node_demands,
+            vehicle_capacity=float(vehicle_capacity),
+        )
+
+        return save_solution(
+            df, manager, routing, solution, num_vehicles,
+            weather_factor, weather_desc,
+            output_path=output_path,
+            matrix_time=matrix_time,
+            improved_tours=improved_tours,
+        )
     else:
         print("Aucune solution trouvée.")
         return None
 
-def save_solution(df, manager, routing, solution, num_vehicles, w_factor, w_desc, output_path=OUTPUT_PATH):
+
+def _postprocess_vrp_tours(
+    tours_raw: dict,
+    matrix_time: np.ndarray,
+    demands: dict | None = None,
+    vehicle_capacity: float | None = None,
+) -> dict:
+    """
+    Applique 2-opt intra-route puis or-opt inter-routes (avec garde capacité) aux tournées OR-Tools.
+
+    tours_raw        : {vehicle_id_int: [client_node_index, ...]}  — sans dépôt
+    demands          : {node_index: poids_kg} pour la vérification de capacité or-opt
+    vehicle_capacity : capacité max par véhicule (kg)
+    Retourne         : même structure avec routes améliorées.
+    Repli silencieux sur tours_raw en cas d'erreur.
+    """
+    try:
+        import sys as _sys
+        if BASE_DIR not in _sys.path:
+            _sys.path.insert(0, BASE_DIR)
+        from scripts import ro_improvements
+
+        routes = {str(v): list(c) for v, c in tours_raw.items() if c}
+        if not routes:
+            return tours_raw
+
+        # ── Phase 1 : ALNS (grands voisinages, exploration large) ────────────
+        alns = ro_improvements.adaptive_large_neighborhood_search(
+            routes, matrix_time, depot_id=0,
+            capacity=vehicle_capacity,
+            demands=demands,
+        )
+        alns_best = {sid: d["optimized_route"] for sid, d in alns["sleighs"].items()}
+        print(
+            f"ALNS : {alns['total_improvement_pct']}% gain "
+            f"({alns['improvements_accepted']} nouveaux best sur {alns['iterations_run']} iter) "
+            f"| opérateurs dominant : destroy={max(alns['operator_scores']['destroy'], key=alns['operator_scores']['destroy'].get)} "
+            f"repair={max(alns['operator_scores']['repair'], key=alns['operator_scores']['repair'].get)}"
+        )
+
+        # ── Phase 2 : ILS sur la meilleure solution ALNS (raffinement fin) ──
+        ils = ro_improvements.iterated_local_search(
+            alns_best, matrix_time, depot_id=0,
+            n_iterations=20,
+            capacity=vehicle_capacity,
+            demands=demands,
+        )
+        improved = {sid: d["optimized_route"] for sid, d in ils["sleighs"].items()}
+        print(
+            f"ILS : {ils['total_improvement_pct']}% gain supplémentaire "
+            f"({ils['improvements_accepted']}/{ils['iterations_run']} perturbations acceptées)"
+        )
+        return {int(k): v for k, v in improved.items()}
+    except Exception as exc:
+        print(f"⚠️ Post-traitement local ignoré : {exc}")
+        return tours_raw
+
+
+def save_solution(
+    df, manager, routing, solution, num_vehicles, w_factor, w_desc,
+    output_path=OUTPUT_PATH,
+    matrix_time: np.ndarray | None = None,
+    improved_tours: dict | None = None,
+):
     time_dimension = routing.GetDimensionOrDie('Time')
     total_time = 0
     total_weight = 0
     all_tours = []
+
+    # id → poids lookup pour recalcul des charges sur routes améliorées
+    id_to_weight = {int(df.iloc[i]['id']): float(df.iloc[i]['poids_colis']) for i in range(len(df))}
 
     for vehicle_id in range(num_vehicles):
         index = routing.Start(vehicle_id)
@@ -197,32 +318,46 @@ def save_solution(df, manager, routing, solution, num_vehicles, w_factor, w_desc
             route_load += float(df.iloc[node_index]['poids_colis'])
             tour_ids.append(int(df.iloc[node_index]['id']))
             index = solution.Value(routing.NextVar(index))
-        
-        # Le temps total pour ce véhicule est la valeur de CumulVar à la fin de la route
+
         route_time = solution.Value(time_dimension.CumulVar(index))
         tour_ids.append(int(df.iloc[manager.IndexToNode(index)]['id']))
-        
-        if len(tour_ids) > 2:
-            all_tours.append({
-                "vehicle_id": vehicle_id,
-                "route_ids": tour_ids,
-                "duration_s": int(route_time),
-                "weight_kg": float(route_load)
-            })
-            total_time += route_time
-            total_weight += route_load
+
+        if len(tour_ids) <= 2:
+            continue
+
+        # Remplace par la tournée post-traitée si disponible
+        if improved_tours and vehicle_id in improved_tours and improved_tours[vehicle_id] and matrix_time is not None:
+            clients = improved_tours[vehicle_id]
+            # Recompute travel time (pure transit, no waiting)
+            route_time = float(matrix_time[0][clients[0]])
+            for i in range(len(clients) - 1):
+                route_time += float(matrix_time[clients[i]][clients[i + 1]])
+            route_time += float(matrix_time[clients[-1]][0])
+            route_time = int(route_time)
+            # Rebuild route_ids [depot, c1, ..., cn, depot]
+            tour_ids = [0] + clients + [0]
+            route_load = sum(id_to_weight.get(c, 0.0) for c in clients)
+
+        all_tours.append({
+            "vehicle_id": vehicle_id,
+            "route_ids": tour_ids,
+            "duration_s": int(route_time),
+            "weight_kg": float(route_load),
+        })
+        total_time += route_time
+        total_weight += route_load
 
     dropped_ids = [int(x) for x in (set(df['id'].tolist()) - {nid for t in all_tours for nid in t['route_ids']})]
-    
+
     result = {
         "status": "Success",
         "weather": {"desc": w_desc, "factor": w_factor},
         "total_time_s": int(total_time),
         "total_weight_kg": round(float(total_weight), 1),
         "tours": all_tours,
-        "dropped_points": dropped_ids
+        "dropped_points": dropped_ids,
     }
-    
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(result, f, indent=4, cls=NpEncoder)
