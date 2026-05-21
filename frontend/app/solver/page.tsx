@@ -3,9 +3,9 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createMission, getGraphMetrics, getMission, simulateIncidentReplan, solveMission } from "@/lib/api";
+import { createMission, getGraphMetrics, getMission, getSolverDebug, simulateIncidentReplan, solveMission } from "@/lib/api";
 import { SearchAreaMap } from "@/components/search-area-map";
-import type { ClientPoint, GraphMetrics, IncidentReplanResponse, MissionResponse, RouteSegment, SolveResponse } from "@/lib/types";
+import type { ClientPoint, GraphMetrics, IncidentReplanResponse, MissionResponse, RouteSegment, SolveResponse, SolverDebugPayload } from "@/lib/types";
 
 const RouteMap = dynamic(() => import("@/components/solver-route-map"), { ssr: false });
 
@@ -66,11 +66,17 @@ function computeScore(
   const co2RefKg          = Math.max(1.0, numClients * 0.1);
   const co2Score          = Math.max(0, Math.min((savings.co2_saved_kg / co2RefKg) * 100, 100));
   const budgetRemainingPct = Math.max(0, Math.min(100, budget?.remaining_pct ?? 50));
+  const servedRatioRaw =
+    typeof solve.results.served_ratio === "number"
+      ? solve.results.served_ratio
+      : Math.max(0, Math.min(1, (numClients - (solve.results.dropped_points?.length ?? 0)) / Math.max(1, numClients)));
+  const coverageScorePct = Math.max(0, Math.min(100, servedRatioRaw * 100));
 
-  const timeContribution = 0.60 * timeScorePct;
-  const co2Contribution = 0.25 * co2Score;
-  const budgetContribution = 0.15 * budgetRemainingPct;
-  const baseScore = timeContribution + co2Contribution + budgetContribution;
+  const timeContribution = 0.45 * timeScorePct;
+  const co2Contribution = 0.20 * co2Score;
+  const budgetContribution = 0.10 * budgetRemainingPct;
+  const coverageContribution = 0.25 * coverageScorePct;
+  const baseScore = timeContribution + co2Contribution + budgetContribution + coverageContribution;
   const diffBonus      = PROFILES.find((p) => p.key === profile)?.difficultyBonus ?? 2;
   const incidentBonus  = randomIncidents ? 10 : 0;
   const weatherBonus   = Math.max(0, (weatherFactor - 1) * 8);
@@ -86,9 +92,11 @@ function computeScore(
       timeScorePct: Math.round(timeScorePct * 10) / 10,
       co2Score: Math.round(co2Score * 10) / 10,
       budgetRemainingPct: Math.round(budgetRemainingPct * 10) / 10,
+      coverageScorePct: Math.round(coverageScorePct * 10) / 10,
       timeContribution: Math.round(timeContribution * 10) / 10,
       co2Contribution: Math.round(co2Contribution * 10) / 10,
       budgetContribution: Math.round(budgetContribution * 10) / 10,
+      coverageContribution: Math.round(coverageContribution * 10) / 10,
       diffBonus,
       incidentBonus,
       weatherBonus: Math.round(weatherBonus * 10) / 10,
@@ -139,6 +147,7 @@ export default function SolverPage() {
   const [simulationSummary, setSimulationSummary] = useState<IncidentReplanResponse | null>(null);
   const [liveIncidentSegments, setLiveIncidentSegments] = useState<RouteSegment[]>([]);
   const [graphMetrics, setGraphMetrics] = useState<GraphMetrics | null>(null);
+  const [solverDebug, setSolverDebug] = useState<SolverDebugPayload | null>(null);
   const [mapRunId, setMapRunId] = useState(0);
   const [liveGainPct, setLiveGainPct] = useState(0);
   const liveGainPctRef = useRef(0);
@@ -161,6 +170,10 @@ export default function SolverPage() {
     random_incidents: false,
     departure_hour: null as number | null,
     with_elevation: false,
+    use_ademe_co2: false,
+    ademe_transport_id: 4,
+    limit_max_vehicles: false,
+    max_vehicles: 4,
   });
 
   const canAutocomplete = MAPBOX_TOKEN.trim().length > 0;
@@ -168,6 +181,8 @@ export default function SolverPage() {
   const requestedClients = Math.max(1, Math.round(Number(sandbox.num_clients) || 0));
   const requestedBudget = Math.max(0, Math.round(Number(sandbox.budget) || 0));
   const requestedSleighCost = Math.max(0, Math.round(Number(sandbox.sleigh_cost) || 0));
+  const requestedMaxVehicles = Math.max(1, Math.min(20, Math.round(Number(sandbox.max_vehicles) || 1)));
+  const effectiveMaxVehicles = sandbox.limit_max_vehicles ? requestedMaxVehicles : null;
   const exceedsClientsLimit = requestedClients > maxClientsAllowed;
   const hasAddressSelection = selectedAddress !== null;
   const mapCenter = selectedAddress ?? DEFAULT_ADDRESS;
@@ -267,6 +282,15 @@ export default function SolverPage() {
         random_incidents: sandbox.random_incidents,
         departure_hour: sandbox.departure_hour,
         with_elevation: sandbox.with_elevation,
+        use_ademe_co2: sandbox.use_ademe_co2,
+        ademe_transport_id: sandbox.use_ademe_co2 ? sandbox.ademe_transport_id : undefined,
+        transport_mode: "multimodal",
+        objective_weights: {
+          time: 0.55,
+          distance: 0.2,
+          co2: 0.15,
+          risk: 0.1,
+        },
         ai_profile: profile,
         level: null,
       });
@@ -277,14 +301,21 @@ export default function SolverPage() {
 
       const solveRes = await solveMission(missionId, {
         num_vehicles: Math.max(1, Math.ceil(requestedClients / 3)),
+        max_vehicles: effectiveMaxVehicles ?? undefined,
         vehicle_capacity: 200,
         speed_multiplier: 1.0,
-        optimization_target: profile === "ecolo" ? "distance" : "time",
+        optimization_target: "composite",
       });
       setLoadingSteps((prev) => tick(prev, 3));
       setLoadingSteps((prev) => tick(prev, 4));
 
       const missionDetail = await getMission(missionId);
+      try {
+        const debug = await getSolverDebug(missionId);
+        setSolverDebug(debug);
+      } catch {
+        setSolverDebug(null);
+      }
       try {
         const metrics = await getGraphMetrics(missionId);
         setGraphMetrics(metrics);
@@ -316,6 +347,7 @@ export default function SolverPage() {
     setSimulationBusy(false);
     setLiveIncidentSegments([]);
     setGraphMetrics(null);
+    setSolverDebug(null);
     setMapRunId(0);
   }
 
@@ -325,9 +357,10 @@ export default function SolverPage() {
       strategy?: "guided" | "random";
       seed?: number;
       num_vehicles?: number;
+      max_vehicles?: number;
       vehicle_capacity?: number;
       speed_multiplier?: number;
-      optimization_target?: "time" | "distance";
+      optimization_target?: "time" | "distance" | "composite";
       manual_segments?: Array<{
         from_id: number;
         to_id: number;
@@ -357,6 +390,7 @@ export default function SolverPage() {
       const response = await simulateIncidentReplan(missionId, {
         ...payload,
         num_vehicles: payload.num_vehicles ?? strategy?.num_vehicles ?? Math.max(1, Math.ceil(result.mission.clients.length / 3)),
+        max_vehicles: payload.max_vehicles ?? effectiveMaxVehicles ?? strategy?.max_vehicles_cap ?? undefined,
         vehicle_capacity: payload.vehicle_capacity ?? strategy?.vehicle_capacity ?? 200,
         speed_multiplier: payload.speed_multiplier ?? strategy?.speed_multiplier ?? 1.0,
         optimization_target: payload.optimization_target ?? strategy?.optimization_target ?? "time",
@@ -370,6 +404,12 @@ export default function SolverPage() {
       };
       setLiveIncidentSegments(response.incidents.segments ?? []);
       setResult({ mission: nextMission, solve: response.after });
+      try {
+        const debug = await getSolverDebug(missionId);
+        setSolverDebug(debug);
+      } catch {
+        setSolverDebug(null);
+      }
       setSimulationSummary(response);
       setMapRunId((prev) => prev + 1);
       await new Promise((resolve) => window.setTimeout(resolve, 260));
@@ -427,6 +467,8 @@ export default function SolverPage() {
     return Math.max(0, greedyDist - aiDist);
   }, [result]);
   const dropped = result?.solve.results.dropped_points ?? [];
+  const sleighSearch = solverDebug?.strategy?.sleigh_search;
+  const selectedSleighCount = Number(result?.solve.results.ai_strategy?.num_vehicles ?? activeTours.length);
   const duplicateAssignments = useMemo(() => {
     if (!result) return [] as Array<{ clientId: number; tours: number[]; clientName: string }>;
     const depotId = intOrZero(result.mission.depot.id);
@@ -817,7 +859,52 @@ export default function SolverPage() {
                 />
                 &nbsp;🏔️ Relief SRTM (pentes ajustent les temps)
               </label>
+              <label className="tag" style={{ width: "fit-content" }}>
+                <input
+                  type="checkbox"
+                  checked={sandbox.use_ademe_co2}
+                  onChange={(e) => setSandbox((p) => ({ ...p, use_ademe_co2: e.target.checked }))}
+                />
+                &nbsp;♻️ CO₂ ADEME Impact CO2
+              </label>
+              <label className="tag" style={{ width: "fit-content" }}>
+                <input
+                  type="checkbox"
+                  checked={sandbox.limit_max_vehicles}
+                  onChange={(e) => setSandbox((p) => ({ ...p, limit_max_vehicles: e.target.checked }))}
+                />
+                &nbsp;🛷 Limiter le nombre max de traîneaux
+              </label>
             </div>
+            {sandbox.use_ademe_co2 && (
+              <label className="field">
+                <span>Profil CO₂ ADEME</span>
+                <select
+                  value={sandbox.ademe_transport_id}
+                  onChange={(e) => setSandbox((p) => ({ ...p, ademe_transport_id: Number(e.target.value) }))}
+                >
+                  <option value="4">Voiture thermique (id 4)</option>
+                  <option value="5">Voiture électrique (id 5)</option>
+                  <option value="7">Vélo mécanique (id 7)</option>
+                </select>
+              </label>
+            )}
+            {sandbox.limit_max_vehicles && (
+              <label className="field">
+                <span>Max traîneaux autorisés</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  step={1}
+                  value={sandbox.max_vehicles}
+                  onChange={(e) => setSandbox((p) => ({ ...p, max_vehicles: Number(e.target.value) }))}
+                />
+                <small className="muted">
+                  Le solveur ne dépassera pas ce plafond, même si plus de traîneaux livreraient davantage.
+                </small>
+              </label>
+            )}
 
             {/* Aperçu carte */}
             <SearchAreaMap centerLat={mapCenter.lat} centerLon={mapCenter.lon} radiusKm={sandbox.search_radius_km} />
@@ -950,10 +1037,11 @@ export default function SolverPage() {
 
                 {/* Détail du score */}
                 <div style={{ width: "100%", maxWidth: 480, display: "flex", flexDirection: "column", gap: 8 }}>
-                  {[
-                    { label: "Temps économisé (max 60 pts)", value: scoreData.breakdown.timeContribution, max: 60, color: "#1a6fb5" },
-                    { label: "CO₂ économisé (max 25 pts)", value: scoreData.breakdown.co2Contribution, max: 25, color: "#1f7a56" },
-                    { label: "Budget restant (max 15 pts)", value: scoreData.breakdown.budgetContribution, max: 15, color: "#b8892f" },
+                {[
+                    { label: "Temps économisé (max 45 pts)", value: scoreData.breakdown.timeContribution, max: 45, color: "#1a6fb5" },
+                    { label: "CO₂ économisé (max 20 pts)", value: scoreData.breakdown.co2Contribution, max: 20, color: "#1f7a56" },
+                    { label: "Budget restant (max 10 pts)", value: scoreData.breakdown.budgetContribution, max: 10, color: "#b8892f" },
+                    { label: "Couverture colis (max 25 pts)", value: scoreData.breakdown.coverageContribution, max: 25, color: "#9e2f3f" },
                   ].map(({ label, value, max, color }) => (
                     <div key={label} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <span style={{ fontSize: "0.78rem", color: "var(--muted)", minWidth: 170, textAlign: "right" }}>{label}</span>
@@ -999,6 +1087,76 @@ export default function SolverPage() {
                 </div>
               ))}
             </div>
+
+            <section className="panel stack" style={{ gap: 8 }}>
+              <strong>Sélection auto des traîneaux</strong>
+              <span className="muted" style={{ fontSize: "0.84rem" }}>
+                k retenu: <strong>{selectedSleighCount}</strong>
+                {sleighSearch?.selected_k !== undefined ? ` · (probe: ${sleighSearch.selected_k})` : ""}
+              </span>
+              {sleighSearch?.enabled ? (
+                <>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {sleighSearch.max_vehicles_cap !== undefined && sleighSearch.max_vehicles_cap !== null ? (
+                      <span className="tag">Cap max: {sleighSearch.max_vehicles_cap}</span>
+                    ) : null}
+                    {sleighSearch.k_min !== undefined && sleighSearch.k_max !== undefined ? (
+                      <span className="tag">Plage: k={sleighSearch.k_min}..{sleighSearch.k_max}</span>
+                    ) : null}
+                    {sleighSearch.k_min_capacity !== undefined ? (
+                      <span className="tag">k mini capacité: {sleighSearch.k_min_capacity}</span>
+                    ) : null}
+                    {(sleighSearch.candidates ?? []).length > 0 ? (
+                      <span className="tag">Candidats: {(sleighSearch.candidates ?? []).join(", ")}</span>
+                    ) : null}
+                    {(sleighSearch.rounds ?? []).length > 0 ? (
+                      <span className="tag">Rounds (s): {(sleighSearch.rounds ?? []).join(" → ")}</span>
+                    ) : null}
+                  </div>
+                  {(sleighSearch.probe_results ?? []).length > 0 ? (
+                    <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
+                      {(sleighSearch.probe_results ?? []).map((probeRow, idx) => (
+                        <div
+                          key={`probe-${idx}-${probeRow.k}-${probeRow.round}`}
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            background: probeRow.status === "ok" ? "rgba(31,122,86,0.08)" : "rgba(158,47,63,0.08)",
+                            border: "1px solid rgba(18,50,71,0.08)",
+                          }}
+                        >
+                          <span className="tag">k={probeRow.k}</span>
+                          <span className="tag">round {probeRow.round}</span>
+                          <span className="tag">budget {probeRow.time_limit_s}s</span>
+                          {probeRow.status === "ok" ? (
+                            <>
+                              {probeRow.score !== undefined ? <span className="tag">score {probeRow.score.toFixed(2)}</span> : null}
+                              {probeRow.dropped_count !== undefined ? <span className="tag">drop {probeRow.dropped_count}</span> : null}
+                            </>
+                          ) : (
+                            <span className="tag" style={{ color: "var(--accent)" }}>
+                              fail{probeRow.error ? ` · ${probeRow.error}` : ""}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="muted" style={{ fontSize: "0.82rem" }}>
+                      Aucun détail de probe disponible (repli sur stratégie standard).
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="muted" style={{ fontSize: "0.82rem" }}>
+                  Recherche de k désactivée.
+                </span>
+              )}
+            </section>
 
             {duplicateAssignments.length > 0 ? (
               <section className="panel stack" style={{ gap: 8 }}>
@@ -1214,6 +1372,7 @@ export default function SolverPage() {
                 <li>Téléchargement du graphe routier OSM via <code>osmnx</code> autour de <em>{selectedAddress?.label}</em></li>
                 <li>Génération aléatoire de {requestedClients} points dans un rayon de {sandbox.search_radius_km.toFixed(1)} km</li>
                 {sandbox.with_elevation && <li>Altitudes SRTM récupérées via <strong>OpenTopoData</strong> — poids des arêtes ajustés selon la pente</li>}
+                {sandbox.use_ademe_co2 && <li>CO₂ par arc recalculé via <strong>ADEME Impact CO2 API</strong> (profil transport sélectionné)</li>}
                 <li>Calcul de la matrice de coût n×n par <strong>A* bidirectionnel avec heuristique haversine</strong></li>
                 <li>Résolution <strong>VRPTW</strong> par <strong>OR-Tools</strong> — {activeTours.length} traîneau{activeTours.length > 1 ? "x" : ""} sur {Math.ceil(requestedClients / 3)} autorisé{Math.ceil(requestedClients / 3) > 1 ? "s" : ""}</li>
                 <li>Post-traitement <strong>ALNS + ILS + 2-opt + or-opt</strong> pour affiner la solution</li>

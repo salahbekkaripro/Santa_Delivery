@@ -530,6 +530,14 @@ def get_debrief(mission_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/missions/{mission_id}/solver-debug")
+def get_solver_debug(mission_id: str) -> dict:
+    try:
+        return services.get_solver_debug(mission_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/missions/{mission_id}/graph/metrics")
 def get_graph_metrics(mission_id: str) -> dict:
     try:

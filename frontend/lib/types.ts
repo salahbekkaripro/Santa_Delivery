@@ -7,6 +7,7 @@ export type MissionConfig = {
   search_radius_km?: number;
   max_clients?: number;
   max_clients_allowed?: number;
+  max_vehicles?: number;
   num_clients: number;
   budget: number;
   sleigh_cost: number;
@@ -18,6 +19,15 @@ export type MissionConfig = {
   generation_message?: string;
   departure_hour?: number | null;
   with_elevation?: boolean;
+  use_ademe_co2?: boolean;
+  ademe_transport_id?: number;
+  transport_mode?: "drive" | "bike" | "walk" | "multimodal";
+  objective_weights?: {
+    time?: number;
+    distance?: number;
+    co2?: number;
+    risk?: number;
+  };
 };
 
 export type PlayerProfile = {
@@ -95,7 +105,7 @@ export type AIStrategy = {
   label: string;
   signature?: string;
   description: string;
-  optimization_target: "time" | "distance";
+  optimization_target: "time" | "distance" | "composite";
   difficulty_bonus?: number;
   num_vehicles: number;
   vehicle_capacity: number;
@@ -107,8 +117,31 @@ export type AIStrategy = {
   max_route_time_s: number;
   drop_penalty: number;
   global_span_cost: number;
+  max_vehicles_cap?: number;
   profile_origin?: "learned" | "preset";
   learning?: AiLearningRecommendation;
+  sleigh_search?: {
+    enabled: boolean;
+    status?: string;
+    selected_k?: number;
+    k_min?: number;
+    k_min_capacity?: number;
+    k_max?: number;
+    max_vehicles_cap?: number;
+    candidates?: number[];
+    rounds?: number[];
+    probe_results?: Array<{
+      k: number;
+      round: number;
+      time_limit_s: number;
+      status: "ok" | "failed";
+      score?: number;
+      total_time_s?: number | null;
+      total_dist_m?: number;
+      dropped_count?: number;
+      error?: string;
+    }>;
+  };
 };
 
 export type AiLearningCandidate = {
@@ -323,6 +356,9 @@ export type SolveResponse = {
   results: {
     total_time_s: number;
     total_weight_kg: number;
+    served_points_count?: number;
+    total_clients_count?: number;
+    served_ratio?: number;
     tours: Array<{ vehicle_id: number; route_ids: number[]; duration_s: number; weight_kg: number }>;
     dropped_points: number[];
     ai_strategy?: AIStrategy;
@@ -380,7 +416,7 @@ export type DebriefPayload = {
   mission: MissionConfig;
   results: { total_time_s: number; total_weight_kg: number; ai_strategy?: AIStrategy };
   benchmark: {
-    savings: { time_saved_min: number; time_saved_pct: number; co2_saved_kg: number };
+    savings: { time_saved_min: number; time_saved_pct: number; co2_saved_kg: number; score?: number };
     optimized: { total_dist_m: number; total_time_s: number };
     budget?: { remaining: number; remaining_pct: number };
   };
@@ -391,6 +427,14 @@ export type DebriefPayload = {
     human_beat_ai: boolean;
     breakdown?: {
       base_score: number;
+      time_score_pct?: number;
+      co2_score_pct?: number;
+      budget_remaining_pct?: number;
+      coverage_score_pct?: number;
+      time_contribution?: number;
+      co2_contribution?: number;
+      budget_contribution?: number;
+      coverage_contribution?: number;
       ai_profile_bonus: number;
       incident_bonus: number;
       human_bonus: number;
@@ -453,6 +497,63 @@ export type GraphMetrics = {
   largest_scc_pct: number;
   avg_clustering: number;
   top_betweenness_nodes: { node: number; score: number; lat: number; lon: number }[];
+};
+
+export type SolverDebugPayload = {
+  mission_id: string;
+  has_results: boolean;
+  mission_context: {
+    num_clients: number;
+    weather_key: string;
+    random_incidents: boolean;
+  };
+  incidents: {
+    count: number;
+    segments_count: number;
+    incident_matrix_available: boolean;
+    thresholds: {
+      min_incidents: number;
+      min_clients: number;
+    };
+    should_boost_now: boolean;
+  };
+  strategy: {
+    profile?: string;
+    label?: string;
+    optimization_target?: "time" | "distance" | "composite" | string;
+    num_vehicles?: number;
+    max_vehicles_cap?: number;
+    solver_time_limit_s?: number;
+    time_slack_s?: number;
+    max_route_time_s?: number;
+    incident_tuning?: Record<string, unknown>;
+    sleigh_search?: {
+      enabled: boolean;
+      status?: string;
+      selected_k?: number;
+      k_min?: number;
+      k_min_capacity?: number;
+      k_max?: number;
+      max_vehicles_cap?: number;
+      candidates?: number[];
+      rounds?: number[];
+      probe_results?: Array<{
+        k: number;
+        round: number;
+        time_limit_s: number;
+        status: "ok" | "failed";
+        score?: number;
+        total_time_s?: number | null;
+        total_dist_m?: number;
+        dropped_count?: number;
+        error?: string;
+      }>;
+    };
+  };
+  score_snapshot: {
+    solver_score?: number | null;
+    time_saved_pct?: number | null;
+  };
 };
 
 export type DijkstraStep = {
@@ -574,6 +675,7 @@ export type VersusMissionConfig = {
   center_lon?: number | null;
   search_radius_km?: number | null;
   max_clients?: number | null;
+  max_vehicles?: number | null;
   num_clients: number;
   budget: number;
   sleigh_cost: number;
@@ -596,6 +698,7 @@ export type VersusMissionSummary = {
   random_incidents?: boolean;
   budget?: number;
   sleigh_cost?: number;
+  max_vehicles?: number | null;
   search_radius_km?: number | null;
   center_lat?: number | null;
   center_lon?: number | null;

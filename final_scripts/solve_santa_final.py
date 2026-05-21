@@ -3,6 +3,7 @@ import numpy as np
 import json
 import os
 import random
+from pathlib import Path
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 
@@ -10,6 +11,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
 DATA_PATH = os.path.join(BASE_DIR, 'core_data', 'livraisons_5eme.csv')
 TIME_MATRIX_PATH = os.path.join(BASE_DIR, 'core_data', 'live_time_matrix.npy')
+DIST_MATRIX_PATH = os.path.join(BASE_DIR, 'core_data', 'matrix_5eme.npy')
+CO2_MATRIX_PATH = os.path.join(BASE_DIR, 'core_data', 'co2_matrix.npy')
+RISK_MATRIX_PATH = os.path.join(BASE_DIR, 'core_data', 'risk_matrix.npy')
+COMPOSITE_MATRIX_PATH = os.path.join(BASE_DIR, 'core_data', 'composite_cost_matrix.npy')
 WEATHER_FILE = os.path.join(BASE_DIR, 'core_data', 'weather_status.json')
 OUTPUT_PATH = os.path.join(BASE_DIR, 'production_output', 'resultats_finaux.json')
 
@@ -37,6 +42,110 @@ LOCAL_SEARCH_METAHEURISTICS = {
 }
 
 
+def _load_mode_matrices_from_profile(multimodal_profile_path: str | None) -> dict[str, dict[str, np.ndarray]]:
+    if not multimodal_profile_path:
+        return {}
+    profile_path = Path(multimodal_profile_path)
+    if not profile_path.exists():
+        return {}
+    try:
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    raw = payload.get("mode_matrix_files", {})
+    if not isinstance(raw, dict):
+        return {}
+    loaded: dict[str, dict[str, np.ndarray]] = {}
+    for mode, files in raw.items():
+        if not isinstance(files, dict):
+            continue
+        mode_loaded: dict[str, np.ndarray] = {}
+        for metric, matrix_path in files.items():
+            try:
+                p = Path(str(matrix_path))
+                if p.exists():
+                    mode_loaded[str(metric)] = np.load(p)
+            except Exception:
+                continue
+        if mode_loaded:
+            loaded[str(mode)] = mode_loaded
+    return loaded
+
+
+def _sanitize_postprocessed_tours(
+    tours_raw: dict[int, list[int]],
+    improved_tours: dict | None,
+    *,
+    num_locations: int,
+) -> dict[int, list[int]] | None:
+    """
+    Garantit les invariants VRP après post-traitement:
+    - client servi au plus une fois globalement
+    - aucun client hors domaine [1, num_locations-1]
+    - même couverture client que la solution OR-Tools brute
+    Si un invariant casse, on replie sur tours_raw (fiable, unique).
+    """
+    if not improved_tours:
+        return None
+
+    valid_clients = set(range(1, max(1, int(num_locations))))
+    raw_clients = {int(c) for route in tours_raw.values() for c in route if int(c) in valid_clients}
+
+    sanitized: dict[int, list[int]] = {}
+    seen: set[int] = set()
+    has_issue = False
+
+    for vehicle_id in sorted(tours_raw.keys()):
+        candidate_route = improved_tours.get(vehicle_id, tours_raw.get(vehicle_id, []))
+        normalized: list[int] = []
+        for client in candidate_route:
+            try:
+                cid = int(client)
+            except Exception:
+                has_issue = True
+                continue
+            if cid not in valid_clients:
+                has_issue = True
+                continue
+            if cid in seen:
+                has_issue = True
+                continue
+            seen.add(cid)
+            normalized.append(cid)
+        sanitized[vehicle_id] = normalized
+
+    if seen != raw_clients:
+        has_issue = True
+
+    if has_issue:
+        print("⚠️ Post-traitement invalide détecté (doublon/perte client). Repli sur solution OR-Tools brute.")
+        return {int(k): [int(c) for c in v] for k, v in tours_raw.items()}
+    return sanitized
+
+
+def _resolve_night_horizon_s(night_horizon_s) -> int | None:
+    try:
+        horizon = int(night_horizon_s)
+    except (TypeError, ValueError):
+        return None
+    if horizon <= 0:
+        return None
+    return horizon
+
+
+def _served_priority_drop_penalty(
+    *,
+    base_drop_penalty: int,
+    num_locations: int,
+    num_vehicles: int,
+    route_horizon_s: int,
+) -> int:
+    # Priorité: maximiser le nombre de clients servis.
+    # On garde une borne int64 raisonnable pour OR-Tools.
+    dynamic_floor = int(max(1, route_horizon_s) * max(2, num_locations) * max(1, num_vehicles))
+    return int(min(2_000_000_000, max(int(base_drop_penalty), dynamic_floor)))
+
+
 def solve_vrp(
     num_vehicles=3,
     vehicle_capacity=200,
@@ -45,10 +154,15 @@ def solve_vrp(
     incident_matrix_path=None,
     data_path=DATA_PATH,
     time_matrix_path=TIME_MATRIX_PATH,
-    dist_matrix_path=None,
+    dist_matrix_path=DIST_MATRIX_PATH,
+    co2_matrix_path=CO2_MATRIX_PATH,
+    risk_matrix_path=RISK_MATRIX_PATH,
+    composite_matrix_path=COMPOSITE_MATRIX_PATH,
     weather_file=WEATHER_FILE,
     output_path=OUTPUT_PATH,
     optimization_target="time",
+    transport_mode="drive",
+    objective_weights=None,
     solver_time_limit_s=20,
     first_solution_strategy="path_cheapest_arc",
     local_search_metaheuristic="guided_local_search",
@@ -58,7 +172,17 @@ def solve_vrp(
     global_span_cost=0,
     initial_routes=None,
     vehicle_fixed_cost=0,
+    vehicle_modes=None,
+    multimodal_profile_path=None,
+    random_seed=None,
+    night_horizon_s=None,
+    prioritize_served_points=False,
 ):
+    if random_seed is not None:
+        seed_value = int(random_seed) % (2**32)
+        random.seed(seed_value)
+        np.random.seed(seed_value)
+
     # 1. Chargement des données
     if not os.path.exists(data_path):
         print(f"Erreur : {data_path} introuvable.")
@@ -96,19 +220,85 @@ def solve_vrp(
         print("Erreur : Matrice OSRM (temps) manquante.")
         return None
 
-    matrix_dist = None
-    if optimization_target == "distance":
-        if dist_matrix_path and os.path.exists(dist_matrix_path):
-            matrix_dist = np.load(dist_matrix_path)
+    matrix_dist = np.load(dist_matrix_path) if (dist_matrix_path and os.path.exists(dist_matrix_path)) else None
+    matrix_co2 = np.load(co2_matrix_path) if (co2_matrix_path and os.path.exists(co2_matrix_path)) else None
+    matrix_risk = np.load(risk_matrix_path) if (risk_matrix_path and os.path.exists(risk_matrix_path)) else None
+    matrix_composite = np.load(composite_matrix_path) if (composite_matrix_path and os.path.exists(composite_matrix_path)) else None
+    mode_matrices = _load_mode_matrices_from_profile(multimodal_profile_path)
+    valid_mode_matrices: dict[str, dict[str, np.ndarray]] = {}
+    for mode, payload in mode_matrices.items():
+        mode_payload: dict[str, np.ndarray] = {}
+        for metric, matrix in payload.items():
+            if isinstance(matrix, np.ndarray) and matrix.shape == (num_locations, num_locations):
+                mode_payload[metric] = matrix
+        if mode_payload:
+            valid_mode_matrices[mode] = mode_payload
+    mode_matrices = valid_mode_matrices
+    if mode_matrices:
+        for mode_payload in mode_matrices.values():
+            if "time" in mode_payload:
+                mode_payload["time"] = np.array(mode_payload["time"], copy=True) * (weather_factor / speed_multiplier)
+            if weather_cond not in ["Clear", "Clouds", "Forcée"] and num_locations > 5 and "time" in mode_payload:
+                stormy_indices = random.sample(range(1, num_locations), max(1, num_locations // 5))
+                for idx in stormy_indices:
+                    mode_payload["time"][idx, :] *= 1.5
+                    mode_payload["time"][:, idx] *= 1.5
+
+    if optimization_target == "distance" and matrix_dist is None:
+        print("⚠️ Matrice de distance manquante, repli sur le temps.")
+        optimization_target = "time"
+    if optimization_target == "composite" and matrix_composite is None:
+        if matrix_dist is not None and matrix_co2 is not None and matrix_risk is not None:
+            weights = objective_weights if isinstance(objective_weights, dict) else {}
+            w_time = max(0.0, float(weights.get("time", 0.55)))
+            w_dist = max(0.0, float(weights.get("distance", 0.20)))
+            w_co2 = max(0.0, float(weights.get("co2", 0.15)))
+            w_risk = max(0.0, float(weights.get("risk", 0.10)))
+            total_w = max(1e-9, w_time + w_dist + w_co2 + w_risk)
+            w_time, w_dist, w_co2, w_risk = w_time / total_w, w_dist / total_w, w_co2 / total_w, w_risk / total_w
+
+            def _scaled(m):
+                arr = np.array(m, dtype=float)
+                positive = arr[np.isfinite(arr) & (arr > 0)]
+                scale = float(np.median(positive)) if positive.size else 1.0
+                if scale <= 1e-9:
+                    scale = 1.0
+                scaled = arr / scale
+                scaled[~np.isfinite(scaled)] = 1e9
+                return scaled
+
+            matrix_composite = (
+                w_time * _scaled(matrix_time)
+                + w_dist * _scaled(matrix_dist)
+                + w_co2 * _scaled(matrix_co2)
+                + w_risk * _scaled(matrix_risk)
+            )
+            np.fill_diagonal(matrix_composite, 0.0)
         else:
-            print("⚠️ Matrice de distance manquante, repli sur le temps.")
+            print("⚠️ Matrice composite indisponible, repli sur le temps.")
             optimization_target = "time"
 
     # 4. Configuration Flotte
     print(
         f"Configuration : {num_vehicles} traîneaux | Capacité : {vehicle_capacity}kg | "
-        f"Cible : {optimization_target} | Stratégie : {first_solution_strategy} + {local_search_metaheuristic}"
+        f"Cible : {optimization_target} | Mode : {transport_mode} | "
+        f"Stratégie : {first_solution_strategy} + {local_search_metaheuristic}"
     )
+
+    available_modes = sorted(mode_matrices.keys())
+    if isinstance(vehicle_modes, list) and vehicle_modes:
+        normalized_vehicle_modes = [str(mode).strip().lower() for mode in vehicle_modes]
+    else:
+        fallback_mode = str(transport_mode).strip().lower()
+        if fallback_mode == "multimodal" and available_modes:
+            fallback_mode = "drive" if "drive" in available_modes else available_modes[0]
+        normalized_vehicle_modes = [fallback_mode] * int(num_vehicles)
+    if len(normalized_vehicle_modes) < int(num_vehicles):
+        normalized_vehicle_modes += [normalized_vehicle_modes[-1]] * (int(num_vehicles) - len(normalized_vehicle_modes))
+    normalized_vehicle_modes = normalized_vehicle_modes[: int(num_vehicles)]
+    if available_modes:
+        default_mode = "drive" if "drive" in available_modes else available_modes[0]
+        normalized_vehicle_modes = [mode if mode in available_modes else default_mode for mode in normalized_vehicle_modes]
 
     # 5. OR-Tools
     manager = pywrapcp.RoutingIndexManager(num_locations, num_vehicles, 0)
@@ -120,15 +310,51 @@ def solve_vrp(
     def dist_callback(from_index, to_index):
         return int(matrix_dist[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
 
-    transit_time_callback_index = routing.RegisterTransitCallback(time_callback)
+    def composite_callback(from_index, to_index):
+        return int(matrix_composite[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
 
-    if optimization_target == "distance":
-        transit_dist_callback_index = routing.RegisterTransitCallback(dist_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_dist_callback_index)
-    else:
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_time_callback_index)
+    def _matrix_for_mode(mode: str, metric: str, fallback: np.ndarray | None) -> np.ndarray | None:
+        if mode in mode_matrices and metric in mode_matrices[mode]:
+            return mode_matrices[mode][metric]
+        return fallback
 
-    routing.AddDimension(transit_time_callback_index, int(time_slack_s), int(max_route_time_s), False, 'Time')
+    transit_time_callback_indices: list[int] = []
+    cost_callback_indices: list[int] = []
+    for vehicle_id in range(num_vehicles):
+        mode = normalized_vehicle_modes[vehicle_id]
+        mode_time = _matrix_for_mode(mode, "time", matrix_time)
+        mode_dist = _matrix_for_mode(mode, "distance", matrix_dist)
+        mode_comp = _matrix_for_mode(mode, "composite", matrix_composite)
+
+        def _make_callback(matrix):
+            def _cb(from_index, to_index):
+                return int(matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)])
+            return _cb
+
+        time_cb_idx = routing.RegisterTransitCallback(_make_callback(mode_time))
+        transit_time_callback_indices.append(time_cb_idx)
+        if optimization_target == "distance" and mode_dist is not None:
+            cost_callback_indices.append(routing.RegisterTransitCallback(_make_callback(mode_dist)))
+        elif optimization_target == "composite" and mode_comp is not None:
+            cost_callback_indices.append(routing.RegisterTransitCallback(_make_callback(mode_comp)))
+        else:
+            cost_callback_indices.append(time_cb_idx)
+
+    for vehicle_id, cost_idx in enumerate(cost_callback_indices):
+        routing.SetArcCostEvaluatorOfVehicle(cost_idx, vehicle_id)
+
+    effective_night_horizon_s = _resolve_night_horizon_s(night_horizon_s)
+    effective_route_horizon_s = int(max_route_time_s)
+    if effective_night_horizon_s is not None:
+        effective_route_horizon_s = min(effective_route_horizon_s, int(effective_night_horizon_s))
+
+    routing.AddDimensionWithVehicleTransits(
+        transit_time_callback_indices,
+        int(time_slack_s),
+        int(effective_route_horizon_s),
+        False,
+        'Time'
+    )
     time_dimension = routing.GetDimensionOrDie('Time')
     if global_span_cost and int(global_span_cost) > 0:
         time_dimension.SetGlobalSpanCostCoefficient(int(global_span_cost))
@@ -137,10 +363,21 @@ def solve_vrp(
         print("Application des Time Windows (VRPTW)...")
         for i in range(num_locations):
             index = manager.NodeToIndex(i)
-            time_dimension.CumulVar(index).SetRange(int(df.iloc[i]['tw_start']), int(df.iloc[i]['tw_end']))
+            tw_start = int(df.iloc[i]['tw_start'])
+            tw_end = int(df.iloc[i]['tw_end'])
+            if effective_night_horizon_s is not None:
+                tw_end = min(tw_end, int(effective_night_horizon_s))
+                tw_start = max(0, min(tw_start, tw_end))
+            time_dimension.CumulVar(index).SetRange(tw_start, tw_end)
+        depot_tw_end = int(df.iloc[0]['tw_end']) if num_locations > 0 else int(effective_route_horizon_s)
+        if effective_night_horizon_s is not None:
+            depot_tw_end = min(depot_tw_end, int(effective_night_horizon_s))
+            for vehicle_id in range(num_vehicles):
+                start_index = routing.Start(vehicle_id)
+                time_dimension.CumulVar(start_index).SetRange(0, 0)
         for vehicle_id in range(num_vehicles):
             index = routing.End(vehicle_id)
-            time_dimension.CumulVar(index).SetRange(0, int(df.iloc[0]['tw_end']))
+            time_dimension.CumulVar(index).SetRange(0, depot_tw_end)
 
     demands = df['poids_colis'].astype(int).tolist()
 
@@ -155,6 +392,13 @@ def solve_vrp(
             routing.SetFixedCostOfVehicle(int(vehicle_fixed_cost), v)
 
     penalty = int(drop_penalty)
+    if prioritize_served_points:
+        penalty = _served_priority_drop_penalty(
+            base_drop_penalty=int(drop_penalty),
+            num_locations=int(num_locations),
+            num_vehicles=int(num_vehicles),
+            route_horizon_s=int(effective_route_horizon_s),
+        )
     for i in range(1, num_locations):
         routing.AddDisjunction([manager.NodeToIndex(i)], penalty)
 
@@ -204,10 +448,20 @@ def solve_vrp(
             tours_raw[vehicle_id] = clients
 
         node_demands = {i: float(df.iloc[i]["poids_colis"]) for i in range(num_locations)}
-        improved_tours = _postprocess_vrp_tours(
-            tours_raw, matrix_time,
-            demands=node_demands,
-            vehicle_capacity=float(vehicle_capacity),
+        use_postprocess = len(set(normalized_vehicle_modes)) <= 1
+        if use_postprocess:
+            postprocessed_tours = _postprocess_vrp_tours(
+                tours_raw, matrix_time,
+                demands=node_demands,
+                vehicle_capacity=float(vehicle_capacity),
+                seed=(int(random_seed) if random_seed is not None else 42),
+            )
+        else:
+            postprocessed_tours = tours_raw
+        improved_tours = _sanitize_postprocessed_tours(
+            tours_raw,
+            postprocessed_tours,
+            num_locations=num_locations,
         )
 
         return save_solution(
@@ -215,7 +469,15 @@ def solve_vrp(
             weather_factor, weather_desc,
             output_path=output_path,
             matrix_time=matrix_time,
+            mode_time_matrices={mode: payload.get("time") for mode, payload in mode_matrices.items()},
+            vehicle_modes=normalized_vehicle_modes,
             improved_tours=improved_tours,
+            optimization_target=optimization_target,
+            transport_mode=transport_mode,
+            objective_weights=objective_weights,
+            night_horizon_s=effective_night_horizon_s,
+            prioritize_served_points=bool(prioritize_served_points),
+            effective_drop_penalty=penalty,
         )
     else:
         print("Aucune solution trouvée.")
@@ -227,6 +489,7 @@ def _postprocess_vrp_tours(
     matrix_time: np.ndarray,
     demands: dict | None = None,
     vehicle_capacity: float | None = None,
+    seed: int = 42,
 ) -> dict:
     """
     Pipeline post-traitement : ALNS (grands voisinages) → ILS (raffinement fin).
@@ -250,6 +513,7 @@ def _postprocess_vrp_tours(
             routes, matrix_time, depot_id=0,
             capacity=vehicle_capacity,
             demands=demands,
+            seed=int(seed),
         )
         alns_best = {sid: d["optimized_route"] for sid, d in alns["sleighs"].items()}
         print(
@@ -265,6 +529,7 @@ def _postprocess_vrp_tours(
             n_iterations=20,
             capacity=vehicle_capacity,
             demands=demands,
+            seed=int(seed) + 1,
         )
         improved = {sid: d["optimized_route"] for sid, d in ils["sleighs"].items()}
         print(
@@ -281,7 +546,15 @@ def save_solution(
     df, manager, routing, solution, num_vehicles, w_factor, w_desc,
     output_path=OUTPUT_PATH,
     matrix_time: np.ndarray | None = None,
+    mode_time_matrices: dict[str, np.ndarray | None] | None = None,
+    vehicle_modes: list[str] | None = None,
     improved_tours: dict | None = None,
+    optimization_target: str = "time",
+    transport_mode: str = "drive",
+    objective_weights: dict | None = None,
+    night_horizon_s: int | None = None,
+    prioritize_served_points: bool = False,
+    effective_drop_penalty: int | None = None,
 ):
     time_dimension = routing.GetDimensionOrDie('Time')
     total_time = 0
@@ -291,6 +564,15 @@ def save_solution(
     id_to_weight = {int(df.iloc[i]['id']): float(df.iloc[i]['poids_colis']) for i in range(len(df))}
 
     for vehicle_id in range(num_vehicles):
+        vehicle_mode = None
+        if isinstance(vehicle_modes, list) and vehicle_id < len(vehicle_modes):
+            vehicle_mode = str(vehicle_modes[vehicle_id]).strip().lower()
+        vehicle_time_matrix = matrix_time
+        if vehicle_mode and isinstance(mode_time_matrices, dict):
+            maybe_mode_matrix = mode_time_matrices.get(vehicle_mode)
+            if maybe_mode_matrix is not None:
+                vehicle_time_matrix = maybe_mode_matrix
+
         index = routing.Start(vehicle_id)
         route_load = 0
         tour_ids = []
@@ -306,18 +588,19 @@ def save_solution(
         if len(tour_ids) <= 2:
             continue
 
-        if improved_tours and vehicle_id in improved_tours and improved_tours[vehicle_id] and matrix_time is not None:
+        if improved_tours and vehicle_id in improved_tours and improved_tours[vehicle_id] and vehicle_time_matrix is not None:
             clients = improved_tours[vehicle_id]
-            route_time = float(matrix_time[0][clients[0]])
+            route_time = float(vehicle_time_matrix[0][clients[0]])
             for i in range(len(clients) - 1):
-                route_time += float(matrix_time[clients[i]][clients[i + 1]])
-            route_time += float(matrix_time[clients[-1]][0])
+                route_time += float(vehicle_time_matrix[clients[i]][clients[i + 1]])
+            route_time += float(vehicle_time_matrix[clients[-1]][0])
             route_time = int(route_time)
             tour_ids = [0] + clients + [0]
             route_load = sum(id_to_weight.get(c, 0.0) for c in clients)
 
         all_tours.append({
             "vehicle_id": vehicle_id,
+            "mode": vehicle_mode if vehicle_mode else str(transport_mode),
             "route_ids": tour_ids,
             "duration_s": int(route_time),
             "weight_kg": float(route_load),
@@ -325,15 +608,100 @@ def save_solution(
         total_time += route_time
         total_weight += route_load
 
-    dropped_ids = [int(x) for x in (set(df['id'].tolist()) - {nid for t in all_tours for nid in t['route_ids']})]
+    # Invariant solveur: un client ne doit apparaître que dans un seul traîneau.
+    # On conserve la première affectation rencontrée (vehicle_id croissant),
+    # puis on purge les occurrences suivantes et on recalcule temps/charge.
+    seen_clients: set[int] = set()
+    id_to_idx = {int(df.iloc[i]["id"]): i for i in range(len(df))}
+    deduped_tours = []
+    dedup_applied = False
+    dedup_count = 0
+    total_time = 0
+    total_weight = 0
+    for tour in sorted(all_tours, key=lambda t: int(t.get("vehicle_id", 0))):
+        raw_clients = [int(cid) for cid in tour.get("route_ids", []) if int(cid) != 0]
+        kept_clients: list[int] = []
+        for cid in raw_clients:
+            if cid in seen_clients:
+                dedup_applied = True
+                dedup_count += 1
+                continue
+            seen_clients.add(cid)
+            kept_clients.append(cid)
+        if not kept_clients:
+            continue
+
+        new_route_ids = [0] + kept_clients + [0]
+        mode_name = str(tour.get("mode", transport_mode)).strip().lower()
+        tour_time_matrix = matrix_time
+        if isinstance(mode_time_matrices, dict) and mode_name in mode_time_matrices and mode_time_matrices[mode_name] is not None:
+            tour_time_matrix = mode_time_matrices[mode_name]
+        if tour_time_matrix is not None:
+            route_time = 0.0
+            row_route = [id_to_idx.get(cid) for cid in new_route_ids]
+            if any(idx is None for idx in row_route):
+                route_time = float(tour.get("duration_s", 0.0))
+            else:
+                rr = [int(idx) for idx in row_route]
+                for src, dst in zip(rr[:-1], rr[1:]):
+                    route_time += float(tour_time_matrix[src][dst])
+        else:
+            route_time = float(tour.get("duration_s", 0.0))
+        route_load = sum(id_to_weight.get(cid, 0.0) for cid in kept_clients)
+
+        deduped_tours.append({
+            "vehicle_id": int(tour.get("vehicle_id", 0)),
+            "mode": str(tour.get("mode", transport_mode)),
+            "route_ids": new_route_ids,
+            "duration_s": int(route_time),
+            "weight_kg": float(route_load),
+        })
+        total_time += route_time
+        total_weight += route_load
+    all_tours = deduped_tours
+    if dedup_applied:
+        print(f"⚠️ Déduplication de sécurité appliquée: {dedup_count} occurrence(s) client supprimée(s).")
+
+    served_client_ids = {
+        int(nid)
+        for t in all_tours
+        for nid in t["route_ids"]
+        if int(nid) != 0
+    }
+    all_client_ids = {int(x) for x in df["id"].tolist() if int(x) != 0}
+    dropped_ids = sorted(int(x) for x in (all_client_ids - served_client_ids))
+    served_points_count = int(len(served_client_ids))
+    total_clients_count = int(len(all_client_ids))
+    served_ratio = float(served_points_count) / float(max(1, total_clients_count))
 
     result = {
         "status": "Success",
         "weather": {"desc": w_desc, "factor": w_factor},
+        "objective": {
+            "target": optimization_target,
+            "transport_mode": transport_mode,
+            "vehicle_modes": vehicle_modes if isinstance(vehicle_modes, list) else None,
+            "weights": objective_weights if isinstance(objective_weights, dict) else {
+                "time": 0.55,
+                "distance": 0.20,
+                "co2": 0.15,
+                "risk": 0.10,
+            },
+            "night_horizon_s": int(night_horizon_s) if night_horizon_s is not None else None,
+            "prioritize_served_points": bool(prioritize_served_points),
+            "effective_drop_penalty": int(effective_drop_penalty) if effective_drop_penalty is not None else None,
+        },
         "total_time_s": int(total_time),
         "total_weight_kg": round(float(total_weight), 1),
+        "served_points_count": served_points_count,
+        "total_clients_count": total_clients_count,
+        "served_ratio": round(float(served_ratio), 4),
         "tours": all_tours,
         "dropped_points": dropped_ids,
+        "integrity": {
+            "client_dedup_applied": bool(dedup_applied),
+            "dedup_removed_count": int(dedup_count),
+        },
     }
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)

@@ -29,6 +29,9 @@ DEFAULT_DEPARTURE_TIME = "18:00"
 INCIDENT_GRAPH_CACHE_MAX = 32
 _incident_graph_cache: OrderedDict[tuple[int, int, str], Any] = OrderedDict()
 _incident_graph_cache_lock = Lock()
+ROUTE_CANDIDATES_CACHE_MAX = 2048
+_route_candidates_cache: OrderedDict[tuple[int, int, int, int, int], list[list[int]]] = OrderedDict()
+_route_candidates_cache_lock = Lock()
 
 
 @dataclass
@@ -318,7 +321,29 @@ def _make_haversine_heuristic(graph):
     return _h
 
 
+def _route_candidates_cache_get(cache_key: tuple[int, int, int, int, int]) -> list[list[int]] | None:
+    with _route_candidates_cache_lock:
+        cached = _route_candidates_cache.get(cache_key)
+        if cached is None:
+            return None
+        _route_candidates_cache.move_to_end(cache_key)
+        return [list(route) for route in cached]
+
+
+def _route_candidates_cache_set(cache_key: tuple[int, int, int, int, int], routes: list[list[int]]) -> None:
+    with _route_candidates_cache_lock:
+        _route_candidates_cache[cache_key] = [list(route) for route in routes]
+        _route_candidates_cache.move_to_end(cache_key)
+        while len(_route_candidates_cache) > ROUTE_CANDIDATES_CACHE_MAX:
+            _route_candidates_cache.popitem(last=False)
+
+
 def _collect_candidate_routes(graph, origin: int, dest: int, k_pool: int) -> list[list[int]]:
+    cache_key = (id(graph), int(graph.number_of_edges()), int(origin), int(dest), int(k_pool))
+    cached = _route_candidates_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     routes: list[list[int]] = []
     try:
         heuristic = _make_haversine_heuristic(graph)
@@ -354,9 +379,12 @@ def _collect_candidate_routes(graph, origin: int, dest: int, k_pool: int) -> lis
     except Exception:
         pass
     if routes:
+        _route_candidates_cache_set(cache_key, routes)
         return routes
     fallback = ox.routing.shortest_path(graph, origin, dest, weight="length")
-    return [fallback] if fallback else []
+    fallback_routes = [fallback] if fallback else []
+    _route_candidates_cache_set(cache_key, fallback_routes)
+    return fallback_routes
 
 
 def compute_route_options(

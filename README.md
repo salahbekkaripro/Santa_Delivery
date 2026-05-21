@@ -45,7 +45,15 @@ make dev
 
 # 3. Lancer les tests
 make test
+
+# 4. Verifier la reproductibilite du solveur
+make repro-check
 ```
+
+Le rapport est exporte dans `daily_reports/repro_solver_pipeline_summary.json` avec:
+- hash SHA256 des artefacts open data (graphe, matrices, meteo, incidents),
+- hash SHA256 des solutions OR-Tools sur 2 passes identiques,
+- taux de reproductibilite global.
 
 *Vous pouvez également utiliser **Docker Compose** pour un déploiement en une ligne : `make docker`.*
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import hashlib
 import hmac
+import math
+import os
 import random
 import secrets
 import shutil
@@ -222,6 +224,34 @@ SEARCH_MAX_RADIUS_KM = 30.0
 SEARCH_CLIENT_DENSITY_PER_KM2 = 2.0
 SEARCH_MIN_CLIENTS = 8
 SEARCH_MAX_CLIENTS = 200
+
+
+def _env_int(name: str, default: int, *, min_value: int | None = None, max_value: int | None = None) -> int:
+    raw = os.getenv(name)
+    try:
+        value = int(raw) if raw is not None else int(default)
+    except (TypeError, ValueError):
+        value = int(default)
+    if min_value is not None:
+        value = max(int(min_value), value)
+    if max_value is not None:
+        value = min(int(max_value), value)
+    return value
+
+
+INCIDENT_TUNING_MIN_INCIDENTS = _env_int("NOEL_INCIDENT_TUNING_MIN_INCIDENTS", 2, min_value=1, max_value=10)
+INCIDENT_TUNING_MIN_CLIENTS = _env_int("NOEL_INCIDENT_TUNING_MIN_CLIENTS", 20, min_value=1, max_value=500)
+SLEIGH_SEARCH_ENABLED = bool(_env_int("NOEL_SLEIGH_SEARCH_ENABLED", 1, min_value=0, max_value=1))
+SLEIGH_SEARCH_MAX_K = _env_int("NOEL_SLEIGH_SEARCH_MAX_K", 8, min_value=2, max_value=20)
+SLEIGH_SEARCH_MAX_CANDIDATES = _env_int("NOEL_SLEIGH_SEARCH_MAX_CANDIDATES", 4, min_value=2, max_value=8)
+SLEIGH_SEARCH_DIST_WEIGHT = float(os.getenv("NOEL_SLEIGH_SEARCH_DIST_WEIGHT", "0.015"))
+SLEIGH_SEARCH_DROP_WEIGHT = float(os.getenv("NOEL_SLEIGH_SEARCH_DROP_WEIGHT", "0.0015"))
+SLEIGH_SEARCH_FLEET_WEIGHT = float(os.getenv("NOEL_SLEIGH_SEARCH_FLEET_WEIGHT", "2.0"))
+MODE_MIX_SEARCH_ENABLED = bool(_env_int("NOEL_MODE_MIX_SEARCH_ENABLED", 1, min_value=0, max_value=1))
+MODE_MIX_SEARCH_MAX_CANDIDATES = _env_int("NOEL_MODE_MIX_SEARCH_MAX_CANDIDATES", 8, min_value=3, max_value=24)
+ONE_NIGHT_ENABLED = bool(_env_int("NOEL_ONE_NIGHT_ENABLED", 1, min_value=0, max_value=1))
+ONE_NIGHT_DURATION_S = _env_int("NOEL_ONE_NIGHT_DURATION_S", 28800, min_value=3600, max_value=43200)
+ONE_NIGHT_PRIORITIZE_SERVED = bool(_env_int("NOEL_ONE_NIGHT_PRIORITIZE_SERVED", 1, min_value=0, max_value=1))
 ROUTE_OPTIONS_CACHE_MAX = 512
 GRAPH_CACHE_MAX = 32
 _route_options_cache: OrderedDict[tuple, list[dict]] = OrderedDict()
@@ -653,7 +683,9 @@ def _normalize_ai_profile(value: str | None) -> str:
 def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
     if not mission.get("ai_profile"):
         import math as _math
-        optimization_target = str(payload.get("optimization_target", "time"))
+        optimization_target = str(payload.get("optimization_target", "time")).strip().lower()
+        if optimization_target not in {"time", "distance", "composite"}:
+            optimization_target = "time"
         _nc = max(1, int(mission.get("num_clients", int(payload.get("num_vehicles", 3)) * 3)))
         _max_v = min(_nc, max(1, _math.ceil(_nc / 3)))
         return {
@@ -662,7 +694,7 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
             "signature": "Mode libre",
             "description": "Réutilise les paramètres de mission sans biais de profil.",
             "difficulty_bonus": 0.0,
-            "optimization_target": "distance" if optimization_target == "distance" else "time",
+            "optimization_target": optimization_target,
             "num_vehicles": _max_v,
             "vehicle_fixed_cost": int(14400 * 0.15),
             "vehicle_capacity": max(1, int(payload.get("vehicle_capacity", 200))),
@@ -674,13 +706,21 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
             "max_route_time_s": 14400,
             "drop_penalty": 1_000_000,
             "global_span_cost": 100,
+            "transport_mode": str(mission.get("transport_mode", "drive")).strip().lower(),
+            "objective_weights": mission.get("objective_weights"),
         }
 
     profile_key = _normalize_ai_profile(mission.get("ai_profile"))
     preset = AI_PROFILE_PRESETS.get(profile_key, AI_PROFILE_PRESETS["express"])
     speed_multiplier = max(0.5, float(payload.get("speed_multiplier", 1.0)) * float(preset["speed_multiplier_factor"]))
     vehicle_capacity = max(1, int(payload.get("vehicle_capacity", 200)))
-    optimization_target = str(preset.get("optimization_target") or payload.get("optimization_target", "time"))
+    requested_target = str(payload.get("optimization_target", "")).strip().lower()
+    if requested_target == "composite":
+        optimization_target = "composite"
+    else:
+        optimization_target = str(preset.get("optimization_target") or payload.get("optimization_target", "time")).strip().lower()
+    if optimization_target not in {"time", "distance", "composite"}:
+        optimization_target = "time"
 
     # Missions à incidents: les profils prudents et champions prennent plus de marge pour rester stables.
     time_slack_s = int(preset["time_slack_s"])
@@ -711,7 +751,7 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
         "signature": str(preset["signature"]),
         "description": str(preset["description"]),
         "difficulty_bonus": float(preset["difficulty_bonus"]),
-        "optimization_target": "distance" if optimization_target == "distance" else "time",
+        "optimization_target": optimization_target,
         "num_vehicles": max_vehicles,
         "vehicle_fixed_cost": vehicle_fixed_cost,
         "vehicle_capacity": vehicle_capacity,
@@ -723,6 +763,8 @@ def resolve_ai_strategy(mission: dict, payload: dict) -> dict:
         "max_route_time_s": max_route_time_s,
         "drop_penalty": int(preset["drop_penalty"]),
         "global_span_cost": int(preset["global_span_cost"]),
+        "transport_mode": str(mission.get("transport_mode", "drive")).strip().lower(),
+        "objective_weights": mission.get("objective_weights"),
     }
 
 
@@ -858,25 +900,110 @@ def _compute_training_cost(mission: dict, results: dict, benchmark: dict | None 
     return max(0.0, float(composite_cost))
 
 
-def calculate_co2_savings(distance_km: float, relief_overhead_pct: float = 0.0) -> dict:
+def _load_mission_co2_context(paths: MissionPaths, mission: dict, dist_matrix: np.ndarray | None) -> dict:
+    profile_payload = _read_json(paths.core_data_dir / "multimodal_profile.json", {}) or {}
+    source_payload = profile_payload.get("co2_source", {}) if isinstance(profile_payload, dict) else {}
+    fallback_factor_g_per_km = _safe_float(source_payload.get("factor_g_per_km"))
+    if fallback_factor_g_per_km is None:
+        fallback_factor_g_per_km = _safe_float(source_payload.get("mode_factor_g_per_km"))
+    if fallback_factor_g_per_km is None:
+        fallback_factor_g_per_km = 120.0
+    fallback_factor_g_per_km = max(0.0, float(fallback_factor_g_per_km))
+
+    co2_matrix = None
+    co2_matrix_path = paths.core_data_dir / "co2_matrix.npy"
+    if co2_matrix_path.exists() and dist_matrix is not None:
+        try:
+            loaded = np.load(co2_matrix_path)
+            if loaded.shape == dist_matrix.shape:
+                co2_matrix = loaded
+        except Exception:
+            co2_matrix = None
+
+    return {
+        "co2_matrix": co2_matrix,
+        "fallback_factor_g_per_km": fallback_factor_g_per_km,
+        "source": source_payload if isinstance(source_payload, dict) else {},
+        "transport_mode": str(mission.get("transport_mode", "drive")).strip().lower(),
+    }
+
+
+def _co2_for_leg_g(
+    from_id: int,
+    to_id: int,
+    *,
+    id_to_idx: dict[int, int],
+    dist_matrix: np.ndarray | None,
+    co2_matrix: np.ndarray | None,
+    fallback_factor_g_per_km: float,
+) -> float:
+    from_idx = id_to_idx.get(int(from_id))
+    to_idx = id_to_idx.get(int(to_id))
+    if from_idx is None or to_idx is None:
+        return 0.0
+
+    if co2_matrix is not None:
+        value = float(co2_matrix[from_idx][to_idx])
+        if np.isfinite(value) and value < 1e8:
+            return max(0.0, value)
+
+    if dist_matrix is None:
+        return 0.0
+    dist_m = float(dist_matrix[from_idx][to_idx])
+    return max(0.0, dist_m) / 1000.0 * max(0.0, float(fallback_factor_g_per_km))
+
+
+def calculate_co2_savings(
+    distance_km: float,
+    relief_overhead_pct: float = 0.0,
+    *,
+    factor_g_per_km: float = 120.0,
+) -> dict:
     """
-    Calcule l'économie de CO2 basée sur la distance et le relief.
-    Modèle : 120g de CO2 par km (standard utilitaire léger).
-    Le relief augmente la consommation linéairement.
+    Calcule une estimation CO2 basée sur la distance.
+    Le facteur g/km peut provenir du modèle mission (ADEME/mode local).
     """
-    BASE_CO2_G_PER_KM = 120.0
-    distance_km = max(0.0, distance_km)
-    relief_factor = 1.0 + (max(0.0, relief_overhead_pct) / 100.0)
-    
-    co2_total_g = distance_km * BASE_CO2_G_PER_KM * relief_factor
-    
+    distance_km = max(0.0, float(distance_km))
+    relief_factor = 1.0 + (max(0.0, float(relief_overhead_pct)) / 100.0)
+    co2_total_g = distance_km * max(0.0, float(factor_g_per_km)) * relief_factor
     return {
         "co2_g": round(co2_total_g, 2),
         "co2_kg": round(co2_total_g / 1000.0, 3),
         "distance_km": round(distance_km, 2),
         "relief_factor": round(relief_factor, 3),
-        "trees_offset_equivalent": round(co2_total_g / 20.0, 2) # Approximation symbolique
+        "factor_g_per_km": round(float(factor_g_per_km), 4),
+        "trees_offset_equivalent": round(co2_total_g / 20.0, 2),
     }
+
+
+def _benchmark_co2_saved_kg(benchmark: dict) -> float:
+    if not isinstance(benchmark, dict):
+        return 0.0
+    savings_payload = benchmark.get("savings", {}) if isinstance(benchmark.get("savings", {}), dict) else {}
+    saved_kg = _safe_float(savings_payload.get("co2_saved_kg"))
+    naive_payload = benchmark.get("naive", {}) if isinstance(benchmark.get("naive", {}), dict) else {}
+    optimized_payload = benchmark.get("optimized", {}) if isinstance(benchmark.get("optimized", {}), dict) else {}
+    naive_total = _safe_float(naive_payload.get("total_co2_kg"))
+    optimized_total = _safe_float(optimized_payload.get("total_co2_kg"))
+    if naive_total is not None and optimized_total is not None:
+        return float(naive_total) - float(optimized_total)
+    return float(saved_kg or 0.0)
+
+
+def _resolve_served_ratio(results: dict, num_clients: int) -> float:
+    total_clients = max(1, int(num_clients))
+    served_points_count = _safe_float(results.get("served_points_count"))
+    if served_points_count is not None:
+        return max(0.0, min(1.0, float(served_points_count) / float(total_clients)))
+
+    served_ratio = _safe_float(results.get("served_ratio"))
+    if served_ratio is not None:
+        return max(0.0, min(1.0, float(served_ratio)))
+
+    dropped_points = results.get("dropped_points", [])
+    dropped_count = len(dropped_points) if isinstance(dropped_points, list) else 0
+    served_count = max(0, total_clients - int(dropped_count))
+    return max(0.0, min(1.0, float(served_count) / float(total_clients)))
 
 
 def _iter_solved_training_snapshots(limit: int = 500) -> list[dict]:
@@ -1092,7 +1219,7 @@ def _extract_ortools_policy(ai_strategy: dict) -> dict | None:
         "global_span_cost",
     )
     optimization_target = str(ai_strategy.get("optimization_target", "time"))
-    if optimization_target not in {"time", "distance"}:
+    if optimization_target not in {"time", "distance", "composite"}:
         optimization_target = "time"
 
     policy: dict[str, str | int] = {"optimization_target": optimization_target}
@@ -2005,12 +2132,20 @@ def create_mission(payload: dict) -> dict:
         graph_path=str(paths.graph_file),
         time_matrix_path=str(paths.time_matrix_file),
         dist_matrix_path=str(paths.dist_matrix_file),
+        co2_matrix_path=str(paths.core_data_dir / "co2_matrix.npy"),
+        risk_matrix_path=str(paths.core_data_dir / "risk_matrix.npy"),
+        composite_matrix_path=str(paths.core_data_dir / "composite_cost_matrix.npy"),
+        multimodal_profile_path=str(paths.core_data_dir / "multimodal_profile.json"),
         center_lat=payload.get("center_lat"),
         center_lon=payload.get("center_lon"),
         search_radius_km=radius_km,
         departure_hour=payload.get("departure_hour"),
         with_elevation=bool(payload.get("with_elevation", False)),
         elevation_path=str(paths.elevation_file),
+        transport_mode=payload.get("transport_mode", "drive"),
+        objective_weights=payload.get("objective_weights"),
+        use_ademe_co2=bool(payload.get("use_ademe_co2", False)),
+        ademe_transport_id=payload.get("ademe_transport_id"),
     )
     if not success:
         raise ValueError(message or "Generation de zone impossible")
@@ -2112,6 +2247,54 @@ def get_mission(mission_id: str) -> dict:
         status="solved" if mission_payload["results_available"] else "in_progress",
     )
     return mission_payload
+
+
+def get_solver_debug(mission_id: str) -> dict:
+    paths, mission, _ = load_mission_bundle(mission_id)
+    results = _read_json(paths.results_file, {})
+    benchmark = _read_json(paths.benchmark_file, {})
+    incidents_payload = _read_json(paths.incidents_file, {"count": 0, "segments": []}) or {"count": 0, "segments": []}
+    incident_segments = incidents_payload.get("segments", []) or []
+    incident_count = len(incident_segments)
+    strategy = results.get("ai_strategy", {}) if isinstance(results, dict) else {}
+    if not isinstance(strategy, dict):
+        strategy = {}
+
+    return {
+        "mission_id": mission_id,
+        "has_results": bool(results),
+        "mission_context": {
+            "num_clients": max(1, int(mission.get("num_clients", 1))),
+            "weather_key": str(mission.get("weather_key", "")),
+            "random_incidents": bool(mission.get("random_incidents", False)),
+        },
+        "incidents": {
+            "count": int(incidents_payload.get("count", incident_count)),
+            "segments_count": int(incident_count),
+            "incident_matrix_available": bool(paths.incident_matrix_file.exists()),
+            "thresholds": {
+                "min_incidents": INCIDENT_TUNING_MIN_INCIDENTS,
+                "min_clients": INCIDENT_TUNING_MIN_CLIENTS,
+            },
+            "should_boost_now": _should_boost_for_active_incidents(mission, incident_count),
+        },
+        "strategy": {
+            "profile": strategy.get("profile"),
+            "label": strategy.get("label"),
+            "optimization_target": strategy.get("optimization_target"),
+            "num_vehicles": strategy.get("num_vehicles"),
+            "max_vehicles_cap": strategy.get("max_vehicles_cap"),
+            "solver_time_limit_s": strategy.get("solver_time_limit_s"),
+            "time_slack_s": strategy.get("time_slack_s"),
+            "max_route_time_s": strategy.get("max_route_time_s"),
+            "incident_tuning": strategy.get("incident_tuning"),
+            "sleigh_search": strategy.get("sleigh_search"),
+        },
+        "score_snapshot": {
+            "solver_score": ((benchmark.get("savings") or {}).get("score") if isinstance(benchmark, dict) else None),
+            "time_saved_pct": ((benchmark.get("savings") or {}).get("time_saved_pct") if isinstance(benchmark, dict) else None),
+        },
+    }
 
 
 def get_human_route_options(
@@ -2507,6 +2690,94 @@ def _build_incident_matrix(paths: MissionPaths, mission: dict, *, force: bool = 
     return str(paths.incident_matrix_file)
 
 
+def _boost_strategy_for_active_incidents(ai_strategy: dict) -> dict:
+    tuned = dict(ai_strategy)
+    base_limit = max(8, int(tuned.get("solver_time_limit_s", 20)))
+    boosted_limit = min(60, max(base_limit, int(round(float(base_limit) * 1.25)) + 2))
+    tuned["solver_time_limit_s"] = boosted_limit
+
+    base_slack = max(600, int(tuned.get("time_slack_s", 3600)))
+    base_route_time = max(3600, int(tuned.get("max_route_time_s", 14400)))
+    tuned["time_slack_s"] = min(21600, int(round(float(base_slack) * 1.10)))
+    tuned["max_route_time_s"] = min(28800, int(round(float(base_route_time) * 1.08)))
+    tuned["incident_tuning"] = {
+        "enabled": True,
+        "base_limit_s": base_limit,
+        "solver_time_limit_s": boosted_limit,
+        "thresholds": {
+            "min_incidents": INCIDENT_TUNING_MIN_INCIDENTS,
+            "min_clients": INCIDENT_TUNING_MIN_CLIENTS,
+        },
+    }
+    return tuned
+
+
+def _should_boost_for_active_incidents(mission: dict, incident_count: int) -> bool:
+    if int(incident_count) <= 0:
+        return False
+    num_clients = max(1, int(mission.get("num_clients", 1)))
+    weather_key = str(mission.get("weather_key", "")).strip().lower()
+    severe_weather = weather_key in {"snow", "thunderstorm", "mist"}
+
+    # Heuristique pragmatique configurable:
+    # - au moins INCIDENT_TUNING_MIN_INCIDENTS incidents => boost
+    # - ou mission large (>= INCIDENT_TUNING_MIN_CLIENTS clients)
+    # - ou incident + météo sévère
+    return (
+        int(incident_count) >= INCIDENT_TUNING_MIN_INCIDENTS
+        or num_clients >= INCIDENT_TUNING_MIN_CLIENTS
+        or (severe_weather and int(incident_count) >= 1)
+    )
+
+
+def _drop_penalty_floor_for_served_points(*, num_clients: int, num_vehicles: int, night_horizon_s: int) -> int:
+    dynamic = int(max(1, int(night_horizon_s)) * max(2, int(num_clients) + 1) * max(1, int(num_vehicles)))
+    return int(min(2_000_000_000, max(1, dynamic)))
+
+
+def _normalize_max_vehicles_cap(raw_value, num_clients: int) -> int | None:
+    if raw_value is None:
+        return None
+    try:
+        cap = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    cap = max(1, min(20, cap))
+    return min(cap, max(1, int(num_clients)))
+
+
+def _apply_one_night_constraints(strategy: dict, mission: dict) -> tuple[dict, dict]:
+    tuned = dict(strategy)
+    if not ONE_NIGHT_ENABLED:
+        tuned["one_night"] = {
+            "enabled": False,
+            "reason": "disabled_by_env",
+        }
+        return tuned, {"enabled": False}
+
+    night_horizon_s = int(ONE_NIGHT_DURATION_S)
+    num_clients = max(1, int(mission.get("num_clients", 1)))
+    num_vehicles = max(1, int(tuned.get("num_vehicles", 1)))
+    base_drop_penalty = max(1, int(tuned.get("drop_penalty", 1_000_000)))
+    served_floor = _drop_penalty_floor_for_served_points(
+        num_clients=num_clients,
+        num_vehicles=num_vehicles,
+        night_horizon_s=night_horizon_s,
+    )
+    effective_drop_penalty = int(max(base_drop_penalty, served_floor)) if ONE_NIGHT_PRIORITIZE_SERVED else int(base_drop_penalty)
+
+    tuned["max_route_time_s"] = int(night_horizon_s)
+    tuned["drop_penalty"] = int(effective_drop_penalty)
+    tuned["one_night"] = {
+        "enabled": True,
+        "night_horizon_s": int(night_horizon_s),
+        "prioritize_served_points": bool(ONE_NIGHT_PRIORITIZE_SERVED),
+        "drop_penalty_floor": int(served_floor),
+        "effective_drop_penalty": int(effective_drop_penalty),
+    }
+    return tuned, tuned["one_night"]
+
+
 def _solve_vrp_from_strategy(
     paths: MissionPaths,
     mission: dict,
@@ -2517,29 +2788,57 @@ def _solve_vrp_from_strategy(
     output_path: str | Path | None = None,
     human_routes: dict | None = None,
 ) -> dict:
+    mission_id = str(mission.get("mission_id", paths.root_dir.name))
+    effective_strategy, one_night_meta = _apply_one_night_constraints(ai_strategy, mission)
+    seed_basis = "|".join(
+        [
+            mission_id,
+            str(effective_strategy.get("first_solution_strategy", "")),
+            str(effective_strategy.get("local_search_metaheuristic", "")),
+            str(effective_strategy.get("optimization_target", "")),
+            str(effective_strategy.get("num_vehicles", "")),
+            str(effective_strategy.get("vehicle_capacity", "")),
+            str(effective_strategy.get("solver_time_limit_s", "")),
+        ]
+    )
+    random_seed = int(hashlib.sha256(seed_basis.encode("utf-8")).hexdigest()[:8], 16)
     target_output_path = str(output_path or paths.results_file)
-    return solve_vrp(
-        num_vehicles=int(ai_strategy["num_vehicles"]),
-        vehicle_capacity=int(ai_strategy["vehicle_capacity"]),
-        speed_multiplier=float(ai_strategy["speed_multiplier"]),
+    multimodal_profile_path = str(paths.core_data_dir / "multimodal_profile.json")
+    solved = solve_vrp(
+        num_vehicles=int(effective_strategy["num_vehicles"]),
+        vehicle_capacity=int(effective_strategy["vehicle_capacity"]),
+        speed_multiplier=float(effective_strategy["speed_multiplier"]),
         forced_weather=weather,
         incident_matrix_path=incident_matrix_path,
         data_path=str(paths.data_file),
         time_matrix_path=str(paths.time_matrix_file),
         dist_matrix_path=str(paths.dist_matrix_file),
+        co2_matrix_path=str(paths.core_data_dir / "co2_matrix.npy"),
+        risk_matrix_path=str(paths.core_data_dir / "risk_matrix.npy"),
+        composite_matrix_path=str(paths.core_data_dir / "composite_cost_matrix.npy"),
         weather_file=str(paths.weather_file),
         output_path=target_output_path,
-        optimization_target=ai_strategy["optimization_target"],
-        solver_time_limit_s=int(ai_strategy["solver_time_limit_s"]),
-        first_solution_strategy=ai_strategy["first_solution_strategy"],
-        local_search_metaheuristic=ai_strategy["local_search_metaheuristic"],
-        time_slack_s=int(ai_strategy["time_slack_s"]),
-        max_route_time_s=int(ai_strategy["max_route_time_s"]),
-        drop_penalty=int(ai_strategy["drop_penalty"]),
-        global_span_cost=int(ai_strategy["global_span_cost"]),
+        optimization_target=effective_strategy["optimization_target"],
+        transport_mode=str(effective_strategy.get("transport_mode", mission.get("transport_mode", "drive"))),
+        objective_weights=effective_strategy.get("objective_weights", mission.get("objective_weights")),
+        solver_time_limit_s=int(effective_strategy["solver_time_limit_s"]),
+        first_solution_strategy=effective_strategy["first_solution_strategy"],
+        local_search_metaheuristic=effective_strategy["local_search_metaheuristic"],
+        time_slack_s=int(effective_strategy["time_slack_s"]),
+        max_route_time_s=int(effective_strategy["max_route_time_s"]),
+        drop_penalty=int(effective_strategy["drop_penalty"]),
+        global_span_cost=int(effective_strategy["global_span_cost"]),
         initial_routes=human_routes or None,
-        vehicle_fixed_cost=int(ai_strategy.get("vehicle_fixed_cost", 0)),
+        vehicle_fixed_cost=int(effective_strategy.get("vehicle_fixed_cost", 0)),
+        vehicle_modes=effective_strategy.get("vehicle_modes"),
+        multimodal_profile_path=multimodal_profile_path,
+        random_seed=int(random_seed),
+        night_horizon_s=one_night_meta.get("night_horizon_s") if one_night_meta.get("enabled") else None,
+        prioritize_served_points=bool(one_night_meta.get("prioritize_served_points", False)),
     )
+    if isinstance(solved, dict):
+        solved["one_night"] = one_night_meta
+    return solved
 
 
 def _run_ro_portfolio_probe(
@@ -2611,6 +2910,410 @@ def _run_ro_portfolio_probe(
     }
 
 
+def _solution_total_distance_m(results: dict, df, dist_matrix_path: str | Path) -> float:
+    reported = _safe_float(results.get("total_dist_m"))
+    if reported is not None and reported >= 0:
+        return float(reported)
+
+    dist_path = Path(dist_matrix_path)
+    if not dist_path.exists():
+        return 0.0
+    matrix = np.load(dist_path)
+    id_to_idx = {int(row["id"]): idx for idx, (_, row) in enumerate(df.iterrows())}
+
+    total = 0.0
+    for tour in results.get("tours", []):
+        route_ids = [int(cid) for cid in tour.get("route_ids", [])]
+        if len(route_ids) < 2:
+            continue
+        for source_id, target_id in zip(route_ids[:-1], route_ids[1:]):
+            source_idx = id_to_idx.get(int(source_id))
+            target_idx = id_to_idx.get(int(target_id))
+            if source_idx is None or target_idx is None:
+                continue
+            total += float(matrix[source_idx][target_idx])
+    return float(total)
+
+
+def _sleigh_search_score(
+    *,
+    mission: dict,
+    results: dict,
+    num_vehicles: int,
+    total_dist_m: float,
+    drop_penalty: int,
+) -> float | None:
+    total_time_s = _safe_float(results.get("total_time_s"))
+    if total_time_s is None:
+        return None
+    dropped_count = len(results.get("dropped_points", [])) if isinstance(results.get("dropped_points", []), list) else 0
+    sleigh_cost = max(0.0, float(mission.get("sleigh_cost", 0.0)))
+    score = (
+        float(total_time_s)
+        + float(SLEIGH_SEARCH_DIST_WEIGHT) * max(0.0, float(total_dist_m))
+        + float(SLEIGH_SEARCH_DROP_WEIGHT) * float(max(0, int(drop_penalty))) * float(dropped_count)
+        + float(SLEIGH_SEARCH_FLEET_WEIGHT) * float(max(1, int(num_vehicles))) * sleigh_cost
+    )
+    return float(score)
+
+
+def _sleigh_candidates(k_min: int, k_base: int, k_max: int, max_candidates: int) -> list[int]:
+    lower = max(1, int(k_min))
+    upper = max(lower, int(k_max))
+    base = min(max(lower, int(k_base)), upper)
+    candidates = sorted(set(range(lower, upper + 1)))
+    if len(candidates) <= max_candidates:
+        return candidates
+
+    preferred = [lower, base, upper]
+    selected: list[int] = []
+    for k in preferred:
+        if k not in selected:
+            selected.append(k)
+    if len(selected) >= max_candidates:
+        return sorted(selected[:max_candidates])
+
+    # Complète avec des points intermédiaires répartis régulièrement.
+    gap = float(max(1, upper - lower)) / float(max(1, max_candidates - len(selected) + 1))
+    probe = lower
+    while len(selected) < max_candidates:
+        probe = min(upper, int(round(float(probe) + gap)))
+        if probe not in selected:
+            selected.append(probe)
+        if probe >= upper:
+            break
+    while len(selected) < max_candidates:
+        for k in candidates:
+            if k not in selected:
+                selected.append(k)
+            if len(selected) >= max_candidates:
+                break
+    return sorted(selected[:max_candidates])
+
+
+def _select_sleigh_count_with_halving(
+    paths: MissionPaths,
+    mission: dict,
+    df,
+    weather: dict,
+    incident_matrix_path: str | None,
+    ai_strategy: dict,
+    *,
+    human_routes: dict | None = None,
+    compact_budget: bool = True,
+    max_vehicles_cap: int | None = None,
+) -> dict:
+    if not SLEIGH_SEARCH_ENABLED:
+        return dict(ai_strategy)
+
+    strategy = dict(ai_strategy)
+    num_clients = max(1, int(mission.get("num_clients", max(1, len(df) - 1))))
+    k_base = max(1, int(strategy.get("num_vehicles", 1)))
+    capacity = max(1, int(strategy.get("vehicle_capacity", 1)))
+    total_weight = float(df[df["id"] != 0]["poids_colis"].sum()) if "poids_colis" in df.columns else 0.0
+    k_min_capacity = max(1, int(math.ceil(total_weight / float(capacity)))) if total_weight > 0 else 1
+    k_upper = min(
+        int(SLEIGH_SEARCH_MAX_K),
+        int(num_clients),
+        max(k_min_capacity, k_base + 2),
+    )
+    if max_vehicles_cap is not None:
+        k_upper = min(int(k_upper), int(max_vehicles_cap))
+    k_lower = min(k_min_capacity, k_upper)
+    k_lower = max(1, int(k_lower))
+    if k_upper <= k_lower:
+        strategy["num_vehicles"] = int(max(1, min(k_upper, max_vehicles_cap if max_vehicles_cap is not None else k_upper)))
+        strategy["sleigh_search"] = {
+            "enabled": True,
+            "status": "single_candidate",
+            "selected_k": int(strategy["num_vehicles"]),
+            "k_min": int(k_lower),
+            "k_max": int(k_upper),
+            "k_min_capacity": int(k_min_capacity),
+            "max_vehicles_cap": int(max_vehicles_cap) if max_vehicles_cap is not None else None,
+        }
+        return strategy
+
+    candidates = _sleigh_candidates(k_lower, k_base, k_upper, int(SLEIGH_SEARCH_MAX_CANDIDATES))
+    if len(candidates) <= 1:
+        strategy["num_vehicles"] = int(candidates[0]) if candidates else max(1, k_base)
+        return strategy
+
+    rounds = [1, 2] if compact_budget else [2, 4]
+    rounds = [max(1, int(v)) for v in rounds]
+    probe_rows: dict[int, dict] = {}
+    active = list(candidates)
+    probe_output_path = paths.root_dir / "_sleigh_k_probe_result.json"
+
+    for round_index, round_limit in enumerate(rounds, start=1):
+        round_scores: list[tuple[float, int]] = []
+        for k in active:
+            probe_strategy = dict(strategy)
+            probe_strategy["num_vehicles"] = int(k)
+            probe_strategy["solver_time_limit_s"] = max(1, min(int(probe_strategy.get("solver_time_limit_s", 12)), int(round_limit)))
+            try:
+                solved = _solve_vrp_from_strategy(
+                    paths,
+                    mission,
+                    weather,
+                    incident_matrix_path,
+                    probe_strategy,
+                    output_path=probe_output_path,
+                    human_routes=human_routes,
+                )
+                if not isinstance(solved, dict):
+                    raise RuntimeError("solve_vrp returned no result")
+                total_dist_m = _solution_total_distance_m(solved, df, paths.dist_matrix_file)
+                score = _sleigh_search_score(
+                    mission=mission,
+                    results=solved,
+                    num_vehicles=int(k),
+                    total_dist_m=float(total_dist_m),
+                    drop_penalty=int(probe_strategy.get("drop_penalty", 0)),
+                )
+                if score is None:
+                    raise RuntimeError("invalid sleigh score")
+                row = {
+                    "k": int(k),
+                    "round": int(round_index),
+                    "time_limit_s": int(probe_strategy["solver_time_limit_s"]),
+                    "score": round(float(score), 4),
+                    "total_time_s": _safe_float(solved.get("total_time_s")),
+                    "total_dist_m": round(float(total_dist_m), 2),
+                    "dropped_count": len(solved.get("dropped_points", [])) if isinstance(solved.get("dropped_points", []), list) else 0,
+                    "status": "ok",
+                }
+                probe_rows[int(k)] = row
+                round_scores.append((float(score), int(k)))
+            except Exception as exc:
+                probe_rows[int(k)] = {
+                    "k": int(k),
+                    "round": int(round_index),
+                    "time_limit_s": int(probe_strategy["solver_time_limit_s"]),
+                    "status": "failed",
+                    "error": str(exc),
+                }
+
+        if not round_scores:
+            continue
+        round_scores.sort(key=lambda item: item[0])
+        keep_count = max(1, int(math.ceil(len(round_scores) / 2.0)))
+        active = [k for _, k in round_scores[:keep_count]]
+        if len(active) <= 1:
+            break
+
+    # Repli robuste si toutes les probes ont échoué.
+    if not probe_rows:
+        return strategy
+
+    best_row = None
+    best_score = None
+    for row in probe_rows.values():
+        if row.get("status") != "ok":
+            continue
+        score = _safe_float(row.get("score"))
+        if score is None:
+            continue
+        if best_score is None or float(score) < float(best_score):
+            best_score = float(score)
+            best_row = row
+
+    if best_row is None:
+        return strategy
+
+    selected_k = int(best_row["k"])
+    strategy["num_vehicles"] = int(selected_k)
+    strategy["sleigh_search"] = {
+        "enabled": True,
+        "status": "selected",
+        "selected_k": int(selected_k),
+        "k_min": int(k_lower),
+        "k_max": int(k_upper),
+        "k_min_capacity": int(k_min_capacity),
+        "max_vehicles_cap": int(max_vehicles_cap) if max_vehicles_cap is not None else None,
+        "candidates": [int(k) for k in candidates],
+        "rounds": rounds,
+        "probe_results": [probe_rows[k] for k in sorted(probe_rows.keys())],
+    }
+    return strategy
+
+
+def _build_mode_mix_candidates(num_vehicles: int, available_modes: list[str]) -> list[list[str]]:
+    k = max(1, int(num_vehicles))
+    modes = [str(mode).strip().lower() for mode in available_modes if str(mode).strip()]
+    if not modes:
+        return []
+    if len(modes) == 1:
+        return [[modes[0]] * k]
+
+    candidates: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+
+    def _push(candidate: list[str]) -> None:
+        if len(candidate) != k:
+            return
+        key = tuple(candidate)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(candidate)
+
+    # Homogènes par mode
+    for mode in modes:
+        _push([mode] * k)
+
+    # Splits 50/50 pour chaque paire de modes
+    for i in range(len(modes)):
+        for j in range(i + 1, len(modes)):
+            a = modes[i]
+            b = modes[j]
+            left = max(1, k // 2)
+            _push([a] * left + [b] * (k - left))
+            _push([b] * left + [a] * (k - left))
+
+    # Cycle simple pour couvrir les 3 modes
+    if len(modes) >= 3:
+        cycle = [modes[idx % len(modes)] for idx in range(k)]
+        _push(cycle)
+        _push(list(reversed(cycle)))
+
+    return candidates
+
+
+def _select_vehicle_modes_with_halving(
+    paths: MissionPaths,
+    mission: dict,
+    df,
+    weather: dict,
+    incident_matrix_path: str | None,
+    ai_strategy: dict,
+    *,
+    human_routes: dict | None = None,
+    compact_budget: bool = True,
+) -> dict:
+    if not MODE_MIX_SEARCH_ENABLED:
+        return dict(ai_strategy)
+    if str(mission.get("transport_mode", "drive")).strip().lower() != "multimodal":
+        return dict(ai_strategy)
+
+    strategy = dict(ai_strategy)
+    num_vehicles = max(1, int(strategy.get("num_vehicles", 1)))
+    profile_payload = _read_json(paths.core_data_dir / "multimodal_profile.json", {}) or {}
+    available_modes = [
+        str(mode).strip().lower()
+        for mode in profile_payload.get("available_modes", [])
+        if str(mode).strip()
+    ]
+    if not available_modes:
+        return strategy
+
+    candidates = _build_mode_mix_candidates(num_vehicles, available_modes)
+    if not candidates:
+        return strategy
+    candidates = candidates[: int(MODE_MIX_SEARCH_MAX_CANDIDATES)]
+    if len(candidates) == 1:
+        strategy["vehicle_modes"] = candidates[0]
+        strategy["mode_mix_search"] = {
+            "enabled": True,
+            "status": "single_candidate",
+            "selected_modes": candidates[0],
+            "candidates": candidates,
+        }
+        return strategy
+
+    rounds = [1, 2] if compact_budget else [2, 4]
+    rounds = [max(1, int(v)) for v in rounds]
+    probe_output_path = paths.root_dir / "_mode_mix_probe_result.json"
+    active_indices = list(range(len(candidates)))
+    probe_rows: dict[int, dict] = {}
+
+    for round_index, round_limit in enumerate(rounds, start=1):
+        round_scores: list[tuple[float, int]] = []
+        for idx in active_indices:
+            mode_assignment = candidates[idx]
+            probe_strategy = dict(strategy)
+            probe_strategy["vehicle_modes"] = list(mode_assignment)
+            probe_strategy["solver_time_limit_s"] = max(1, min(int(probe_strategy.get("solver_time_limit_s", 12)), int(round_limit)))
+            try:
+                solved = _solve_vrp_from_strategy(
+                    paths,
+                    mission,
+                    weather,
+                    incident_matrix_path,
+                    probe_strategy,
+                    output_path=probe_output_path,
+                    human_routes=human_routes,
+                )
+                if not isinstance(solved, dict):
+                    raise RuntimeError("solve_vrp returned no result")
+                total_dist_m = _solution_total_distance_m(solved, df, paths.dist_matrix_file)
+                score = _sleigh_search_score(
+                    mission=mission,
+                    results=solved,
+                    num_vehicles=num_vehicles,
+                    total_dist_m=float(total_dist_m),
+                    drop_penalty=int(probe_strategy.get("drop_penalty", 0)),
+                )
+                if score is None:
+                    raise RuntimeError("invalid mode-mix score")
+                probe_rows[idx] = {
+                    "candidate_index": int(idx),
+                    "vehicle_modes": mode_assignment,
+                    "round": int(round_index),
+                    "time_limit_s": int(probe_strategy["solver_time_limit_s"]),
+                    "score": round(float(score), 4),
+                    "total_time_s": _safe_float(solved.get("total_time_s")),
+                    "total_dist_m": round(float(total_dist_m), 2),
+                    "dropped_count": len(solved.get("dropped_points", [])) if isinstance(solved.get("dropped_points", []), list) else 0,
+                    "status": "ok",
+                }
+                round_scores.append((float(score), int(idx)))
+            except Exception as exc:
+                probe_rows[idx] = {
+                    "candidate_index": int(idx),
+                    "vehicle_modes": mode_assignment,
+                    "round": int(round_index),
+                    "time_limit_s": int(probe_strategy["solver_time_limit_s"]),
+                    "status": "failed",
+                    "error": str(exc),
+                }
+
+        if not round_scores:
+            continue
+        round_scores.sort(key=lambda item: item[0])
+        keep_count = max(1, int(math.ceil(len(round_scores) / 2.0)))
+        active_indices = [idx for _, idx in round_scores[:keep_count]]
+        if len(active_indices) <= 1:
+            break
+
+    best_idx = None
+    best_score = None
+    for idx, row in probe_rows.items():
+        if row.get("status") != "ok":
+            continue
+        score = _safe_float(row.get("score"))
+        if score is None:
+            continue
+        if best_score is None or float(score) < float(best_score):
+            best_score = float(score)
+            best_idx = int(idx)
+
+    if best_idx is None:
+        return strategy
+
+    selected_modes = candidates[best_idx]
+    strategy["vehicle_modes"] = list(selected_modes)
+    strategy["mode_mix_search"] = {
+        "enabled": True,
+        "status": "selected",
+        "selected_modes": selected_modes,
+        "rounds": rounds,
+        "candidates": candidates,
+        "probe_results": [probe_rows[idx] for idx in sorted(probe_rows.keys())],
+    }
+    return strategy
+
+
 def _solve_mission_internal(
     mission_id: str,
     payload: dict,
@@ -2618,6 +3321,7 @@ def _solve_mission_internal(
     mission_for_strategy: dict | None = None,
     ai_strategy_override: dict | None = None,
     use_portfolio: bool = False,
+    optimize_sleigh_count: bool = False,
     force_incident_matrix: bool = False,
 ) -> dict:
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
@@ -2631,8 +3335,14 @@ def _solve_mission_internal(
 
     weather = load_weather(paths.weather_file, mission.get("weather_key"))
     incident_matrix_path = _build_incident_matrix(paths, mission, force=force_incident_matrix)
+    num_clients = max(1, int(mission.get("num_clients", max(1, len(df) - 1))))
+    max_vehicles_cap = _normalize_max_vehicles_cap(payload.get("max_vehicles"), num_clients)
     strategy_mission = mission_for_strategy or mission
     ai_strategy = deepcopy(ai_strategy_override) if ai_strategy_override else resolve_ai_strategy(strategy_mission, payload)
+    if max_vehicles_cap is not None:
+        ai_strategy = dict(ai_strategy)
+        ai_strategy["num_vehicles"] = min(max_vehicles_cap, max(1, int(ai_strategy.get("num_vehicles", 1))))
+        ai_strategy["max_vehicles_cap"] = int(max_vehicles_cap)
 
     # Portfolio léger : 2 presets sondés rapidement, on garde la meilleure config.
     # Activé pour solve_mission (basic) ; solve_mission_learned a son propre portfolio
@@ -2640,7 +3350,8 @@ def _solve_mission_internal(
     # (évite de re-sonder lors de l'appel interne depuis solve_mission_learned).
     if use_portfolio and ai_strategy_override is None:
         try:
-            candidates = _build_ro_portfolio_candidates(ai_strategy)[:2]
+            portfolio_limit = 1 if optimize_sleigh_count else 2
+            candidates = _build_ro_portfolio_candidates(ai_strategy)[:portfolio_limit]
             portfolio_probe = _run_ro_portfolio_probe(
                 paths, mission, weather, incident_matrix_path, candidates
             )
@@ -2656,13 +3367,59 @@ def _solve_mission_internal(
         except Exception:
             pass  # repli silencieux sur la stratégie initiale
 
+    if incident_matrix_path:
+        incidents_payload = _read_json(paths.incidents_file, {"segments": []})
+        incident_count = len(incidents_payload.get("segments", []))
+        if _should_boost_for_active_incidents(mission, incident_count):
+            ai_strategy = _boost_strategy_for_active_incidents(ai_strategy)
+        else:
+            ai_strategy = dict(ai_strategy)
+            ai_strategy["incident_tuning"] = {
+                "enabled": False,
+                "reason": "below_complexity_threshold",
+                "incident_count": int(incident_count),
+                "num_clients": max(1, int(mission.get("num_clients", 1))),
+                "thresholds": {
+                    "min_incidents": INCIDENT_TUNING_MIN_INCIDENTS,
+                    "min_clients": INCIDENT_TUNING_MIN_CLIENTS,
+                },
+            }
+
     human_routes = {k: [int(c) for c in v] for k, v in human_state.routes_by_sleigh.items() if v}
+    if optimize_sleigh_count:
+        ai_strategy = _select_sleigh_count_with_halving(
+            paths,
+            mission,
+            df,
+            weather,
+            incident_matrix_path,
+            ai_strategy,
+            human_routes=human_routes or None,
+            compact_budget=bool(use_portfolio),
+            max_vehicles_cap=max_vehicles_cap,
+        )
+    if max_vehicles_cap is not None:
+        ai_strategy["num_vehicles"] = min(max_vehicles_cap, max(1, int(ai_strategy.get("num_vehicles", 1))))
+        ai_strategy["max_vehicles_cap"] = int(max_vehicles_cap)
+    ai_strategy = _select_vehicle_modes_with_halving(
+        paths,
+        mission,
+        df,
+        weather,
+        incident_matrix_path,
+        ai_strategy,
+        human_routes=human_routes or None,
+        compact_budget=bool(use_portfolio),
+    )
     results = _solve_vrp_from_strategy(
         paths, mission, weather, incident_matrix_path, ai_strategy,
         human_routes=human_routes or None,
     )
     if not results:
         raise RuntimeError("Aucune solution VRP trouvee")
+    if isinstance(results, dict) and isinstance(results.get("one_night"), dict):
+        ai_strategy = dict(ai_strategy)
+        ai_strategy["one_night"] = dict(results.get("one_night"))
     results["ai_strategy"] = ai_strategy
     _write_json(paths.results_file, results)
 
@@ -2673,6 +3430,7 @@ def _solve_mission_internal(
         data_path=str(paths.data_file),
         time_matrix_path=str(incident_matrix_path or paths.time_matrix_file),
         dist_matrix_path=str(paths.dist_matrix_file),
+        co2_matrix_path=str(paths.core_data_dir / "co2_matrix.npy"),
         optimized_json_path=str(paths.results_file),
         benchmark_file=str(paths.benchmark_file),
         time_scale_factor=float(weather.get("factor", 1.0)) / max(float(ai_strategy.get("speed_multiplier", 1.0)), 0.1),
@@ -2703,12 +3461,17 @@ def _solve_mission_internal(
 
 
 def solve_mission(mission_id: str, payload: dict) -> dict:
-    return _solve_mission_internal(mission_id, payload, use_portfolio=True)
+    return _solve_mission_internal(
+        mission_id,
+        payload,
+        use_portfolio=True,
+        optimize_sleigh_count=True,
+    )
 
 
 def _solve_payload_lite(results: dict, benchmark: dict) -> dict:
     optimized = benchmark.get("optimized", {}) if isinstance(benchmark, dict) else {}
-    savings = benchmark.get("savings", {}) if isinstance(benchmark, dict) else {}
+    co2_saved_kg = _benchmark_co2_saved_kg(benchmark)
     return {
         "results": {
             "total_time_s": float(results.get("total_time_s", 0.0)),
@@ -2721,7 +3484,7 @@ def _solve_payload_lite(results: dict, benchmark: dict) -> dict:
                 "total_dist_m": float(optimized.get("total_dist_m", 0.0)),
             },
             "savings": {
-                "co2_saved_kg": float(savings.get("co2_saved_kg", 0.0)),
+                "co2_saved_kg": float(co2_saved_kg),
             },
         },
     }
@@ -2955,12 +3718,17 @@ def simulate_incident_replan(mission_id: str, payload: dict) -> dict:
     before_payload = _solve_payload_lite(before_results, before_benchmark)
 
     base_strategy = before_results.get("ai_strategy") if isinstance(before_results, dict) else {}
+    max_vehicles = payload.get("max_vehicles")
+    if max_vehicles is None:
+        max_vehicles = base_strategy.get("max_vehicles_cap")
     solve_payload = {
         "num_vehicles": int(payload.get("num_vehicles") or base_strategy.get("num_vehicles") or max(1, len(before_results.get("tours", [])))),
         "vehicle_capacity": int(payload.get("vehicle_capacity") or base_strategy.get("vehicle_capacity") or 200),
         "speed_multiplier": float(payload.get("speed_multiplier") or base_strategy.get("speed_multiplier") or 1.0),
         "optimization_target": str(payload.get("optimization_target") or base_strategy.get("optimization_target") or "time"),
     }
+    if max_vehicles is not None:
+        solve_payload["max_vehicles"] = int(max_vehicles)
 
     after_payload = _solve_mission_internal(
         mission_id,
@@ -3245,11 +4013,20 @@ def get_debrief(mission_id: str) -> dict:
             two_opt_result = None
 
     time_saved_pct = float(benchmark["savings"]["time_saved_pct"])
-    co2_saved_kg = float(benchmark["savings"]["co2_saved_kg"])
+    co2_saved_kg = float(_benchmark_co2_saved_kg(benchmark))
+    if (
+        _safe_float((benchmark.get("naive") or {}).get("total_co2_kg")) is None
+        or _safe_float((benchmark.get("optimized") or {}).get("total_co2_kg")) is None
+    ):
+        try:
+            eco_payload = get_eco_analysis(mission_id)
+            co2_saved_kg = float((eco_payload.get("eco_impact") or {}).get("route_optimisation_saving_kg", co2_saved_kg))
+        except Exception:
+            pass
     budget_remaining_pct = float(benchmark.get("budget", {}).get("remaining_pct", 50.0))
 
     # Recalibration : OR-Tools économise typiquement 20-40% vs solution naïve.
-    # On normalise sur 40% max (× 2.5) pour que 40% → 100 pts sur la composante temps.
+    # On normalise sur 40% max (× 2.5) pour que 40% -> 100 pts sur la composante temps.
     time_score_pct = max(0.0, min(100.0, time_saved_pct * 2.5))
 
     # CO2 : missions de 10 clients ≈ 0.3-1 kg économisés. Seuil 1 kg pour le max
@@ -3258,9 +4035,14 @@ def get_debrief(mission_id: str) -> dict:
     co2_ref_kg = max(1.0, num_clients * 0.1)  # 0.1 kg/client de référence
     co2_score = max(0.0, min(co2_saved_kg / co2_ref_kg * 100.0, 100.0))
     budget_remaining_pct = max(0.0, min(100.0, budget_remaining_pct))
+    coverage_score_pct = max(0.0, min(100.0, _resolve_served_ratio(results, num_clients) * 100.0))
 
     ai_strategy = results.get("ai_strategy", resolve_ai_strategy(mission, {}))
-    base_score = 0.60 * time_score_pct + 0.25 * co2_score + 0.15 * budget_remaining_pct
+    time_contribution = 0.45 * time_score_pct
+    co2_contribution = 0.20 * co2_score
+    budget_contribution = 0.10 * budget_remaining_pct
+    coverage_contribution = 0.25 * coverage_score_pct
+    base_score = time_contribution + co2_contribution + budget_contribution + coverage_contribution
     base_score = max(0.0, min(base_score, 100.0))
     ai_profile_bonus = float(ai_strategy.get("difficulty_bonus", 0.0))
     incident_bonus = 10.0 if mission.get("random_incidents", False) else 0.0
@@ -3309,6 +4091,14 @@ def get_debrief(mission_id: str) -> dict:
             "human_beat_ai": human_beat_ai,
             "breakdown": {
                 "base_score": round(base_score, 1),
+                "time_score_pct": round(time_score_pct, 1),
+                "co2_score_pct": round(co2_score, 1),
+                "budget_remaining_pct": round(budget_remaining_pct, 1),
+                "coverage_score_pct": round(coverage_score_pct, 1),
+                "time_contribution": round(time_contribution, 1),
+                "co2_contribution": round(co2_contribution, 1),
+                "budget_contribution": round(budget_contribution, 1),
+                "coverage_contribution": round(coverage_contribution, 1),
                 "ai_profile_bonus": round(ai_profile_bonus, 1),
                 "incident_bonus": round(incident_bonus, 1),
                 "human_bonus": round(human_bonus, 1),
@@ -3929,6 +4719,7 @@ def _sanitize_and_validate_versus_mission_config(payload: dict | None) -> dict:
         "center_lon",
         "search_radius_km",
         "max_clients",
+        "max_vehicles",
         "num_clients",
         "budget",
         "sleigh_cost",
@@ -3957,6 +4748,10 @@ def _sanitize_and_validate_versus_mission_config(payload: dict | None) -> dict:
     if num_clients > VERSUS_CUSTOM_MAX_CLIENTS:
         raise ValueError(f"En versus custom, le nombre maximal de colis est {VERSUS_CUSTOM_MAX_CLIENTS}.")
     sanitized["num_clients"] = num_clients
+    max_vehicles = sanitized.get("max_vehicles")
+    if max_vehicles is not None:
+        normalized_max_vehicles = max(1, min(20, int(max_vehicles)))
+        sanitized["max_vehicles"] = min(normalized_max_vehicles, num_clients)
     sanitized["budget"] = max(0, int(sanitized.get("budget", 0)))
     sanitized["sleigh_cost"] = max(0, int(sanitized.get("sleigh_cost", 0)))
     sanitized["weather_key"] = str(sanitized.get("weather_key", "Clear")).strip() or "Clear"
@@ -3993,6 +4788,7 @@ def _mission_summary_from_payload(mission_payload: dict | None, *, map_source: s
         "random_incidents": bool(mission.get("random_incidents", False)),
         "budget": int(mission.get("budget", 0) or 0),
         "sleigh_cost": int(mission.get("sleigh_cost", 0) or 0),
+        "max_vehicles": int(mission.get("max_vehicles", 0) or 0) or None,
         "search_radius_km": _safe_float(mission.get("search_radius_km")),
         "center_lat": _safe_float(mission.get("center_lat")),
         "center_lon": _safe_float(mission.get("center_lon")),
@@ -4888,36 +5684,79 @@ def list_versus_player_stats(limit: int = 20, max_matches: int = 500) -> dict:
 
 def get_eco_analysis(mission_id: str) -> dict:
     """
-    Calcule l'empreinte CO2 et les économies pour les routes IA, humaine et naïve.
-
-    Modèle physique :
-    - Camion de livraison urbain standard : 120 g CO2/km
-    - Surcoût montée : +4 g CO2/m de dénivelé positif (effort moteur additionnel)
-    - Paris 5ème : terrain vallonné (Montagne Sainte-Geneviève) → dénivelé estimé 45 m
-    - Traîneau (électrique / traction animale) : ~10 % de l'effort équivalent d'un camion
+    Calcule l'empreinte CO2 et les économies pour les routes IA, humaine et naïve,
+    en se basant sur la matrice CO2 de mission (ADEME si activé, sinon fallback local).
     """
     paths, mission, human_state_payload = load_mission_bundle(mission_id)
-
     results = _read_json(paths.results_file, {})
     benchmark = _read_json(paths.benchmark_file, {})
 
-    ai_dist_m = float((benchmark.get("optimized") or {}).get("total_dist_m", 0.0))
-    naive_dist_m = float((benchmark.get("naive") or {}).get("total_dist_m", ai_dist_m))
+    df = read_points(paths.data_file)
+    id_to_idx = {int(row["id"]): idx for idx, (_, row) in enumerate(df.iterrows())}
+    dist_matrix = np.load(paths.dist_matrix_file) if paths.dist_matrix_file.exists() else None
+    co2_context = _load_mission_co2_context(paths, mission, dist_matrix=dist_matrix)
+    co2_matrix = co2_context["co2_matrix"]
+    fallback_factor_g_per_km = float(co2_context["fallback_factor_g_per_km"])
+
+    def _co2_for_route_ids_kg(route_ids: list[int]) -> float:
+        if len(route_ids) < 2:
+            return 0.0
+        total_g = 0.0
+        for from_id, to_id in zip(route_ids[:-1], route_ids[1:]):
+            total_g += _co2_for_leg_g(
+                int(from_id),
+                int(to_id),
+                id_to_idx=id_to_idx,
+                dist_matrix=dist_matrix,
+                co2_matrix=co2_matrix,
+                fallback_factor_g_per_km=fallback_factor_g_per_km,
+            )
+        return total_g / 1000.0
 
     human_state = human_state_from_payload(human_state_payload)
     human_segments = [seg for segs in human_state.segments_by_sleigh.values() for seg in segs]
     human_dist_m = float(summarize_segments(human_segments).get("total_dist_m", 0.0))
+    human_co2_kg = 0.0
+    for segment in human_segments:
+        try:
+            from_id = int(segment.get("from_id"))
+            to_id = int(segment.get("to_id"))
+        except Exception:
+            continue
+        human_co2_kg += _co2_for_leg_g(
+            from_id,
+            to_id,
+            id_to_idx=id_to_idx,
+            dist_matrix=dist_matrix,
+            co2_matrix=co2_matrix,
+            fallback_factor_g_per_km=fallback_factor_g_per_km,
+        ) / 1000.0
 
-    # Terrain Paris 5ème : Montagne Sainte-Geneviève → vallonné, ~45 m de dénivelé positif
-    TERRAIN_TYPE = "vallonné"
-    ESTIMATED_CLIMB_M = 45.0
-    BASE_CO2_G_PER_KM = 120.0
-    CLIMB_CO2_G_PER_M = 4.0
-    SLEIGH_FACTOR = 0.10  # traîneau ≈ 10 % de l'effort d'un camion
+    optimized_payload = (benchmark.get("optimized") or {}) if isinstance(benchmark, dict) else {}
+    naive_payload = (benchmark.get("naive") or {}) if isinstance(benchmark, dict) else {}
 
-    def _co2_profile(dist_m: float) -> dict:
+    ai_dist_m = float(optimized_payload.get("total_dist_m", _safe_float(results.get("total_dist_m"), 0.0) or 0.0))
+    naive_dist_m = float(naive_payload.get("total_dist_m", ai_dist_m))
+
+    ai_co2_kg = _safe_float(optimized_payload.get("total_co2_kg"))
+    if ai_co2_kg is None:
+        ai_co2_kg = 0.0
+        for tour in results.get("tours", []) if isinstance(results.get("tours", []), list) else []:
+            route_ids = [int(route_id) for route_id in tour.get("route_ids", [])]
+            ai_co2_kg += _co2_for_route_ids_kg(route_ids)
+
+    naive_co2_kg = _safe_float(naive_payload.get("total_co2_kg"))
+    if naive_co2_kg is None:
+        naive_co2_kg = 0.0
+        for tour in naive_payload.get("tours", []) if isinstance(naive_payload.get("tours", []), list) else []:
+            route_ids = [int(route_id) for route_id in tour.get("route_ids", [])]
+            naive_co2_kg += _co2_for_route_ids_kg(route_ids)
+
+    SLEIGH_FACTOR = 0.10
+
+    def _co2_profile(dist_m: float, truck_co2_kg: float) -> dict:
         dist_km = max(0.0, dist_m) / 1000.0
-        truck_g = dist_km * BASE_CO2_G_PER_KM + ESTIMATED_CLIMB_M * CLIMB_CO2_G_PER_M
+        truck_g = max(0.0, float(truck_co2_kg)) * 1000.0
         sleigh_g = truck_g * SLEIGH_FACTOR
         saved_g = truck_g - sleigh_g
         return {
@@ -4928,21 +5767,29 @@ def get_eco_analysis(mission_id: str) -> dict:
             "trees_month_offset": round(saved_g / 20.0, 1),
         }
 
-    ai_profile = _co2_profile(ai_dist_m)
-    naive_profile = _co2_profile(naive_dist_m)
-    human_profile = _co2_profile(human_dist_m) if human_dist_m > 0 else None
+    ai_profile = _co2_profile(ai_dist_m, ai_co2_kg)
+    naive_profile = _co2_profile(naive_dist_m, naive_co2_kg)
+    human_profile = _co2_profile(human_dist_m, human_co2_kg) if human_dist_m > 0 else None
 
-    # Gain additionnel de l'optimisation : réduction CO2 truck(naïf) → truck(IA)
     route_optimization_saving_kg = round(
         naive_profile["truck_co2_kg"] - ai_profile["truck_co2_kg"], 3
+    )
+    elevation = _read_json(paths.elevation_file, None)
+    raw_terrain = str((elevation or {}).get("terrain_type", "plat")).strip().lower()
+    terrain_type = raw_terrain if raw_terrain in {"plat", "vallonné", "montagneux"} else "plat"
+    estimated_climb_m = float((elevation or {}).get("total_climb_m", 0.0) or 0.0)
+    terrain_note = (
+        f"Données relief mesurées ({terrain_type}) via SRTM."
+        if elevation else
+        "Relief non activé sur cette mission."
     )
 
     return {
         "terrain": {
-            "type": TERRAIN_TYPE,
-            "estimated_climb_m": ESTIMATED_CLIMB_M,
-            "zone": mission.get("zone", "Paris 5"),
-            "note": "Dénivelé estimé — Montagne Sainte-Geneviève",
+            "type": terrain_type,
+            "estimated_climb_m": round(estimated_climb_m, 1),
+            "zone": mission.get("zone", "zone"),
+            "note": terrain_note,
         },
         "routes": {
             "ai": ai_profile,
@@ -4955,6 +5802,10 @@ def get_eco_analysis(mission_id: str) -> dict:
             "ai_vs_naive_dist_pct": round(
                 (1.0 - ai_dist_m / naive_dist_m) * 100.0, 1
             ) if naive_dist_m > 0 else 0.0,
+        },
+        "co2_model": {
+            "source": co2_context.get("source", {}),
+            "fallback_factor_g_per_km": round(fallback_factor_g_per_km, 4),
         },
     }
 

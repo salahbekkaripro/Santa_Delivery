@@ -12,6 +12,7 @@ import type {
   GraphMetrics,
   HumanState,
   IncidentReplanResponse,
+  SolverDebugPayload,
   LeaderboardEntry,
   MissionConfig,
   MissionSnapshot,
@@ -342,6 +343,10 @@ export function getMissions(limit: number = 50) {
   return apiFetch<{ missions: MissionSnapshot[] }>(`/api/missions?limit=${limit}`);
 }
 
+export function getSolverDebug(missionId: string) {
+  return apiFetch<SolverDebugPayload>(`/api/missions/${missionId}/solver-debug`);
+}
+
 export function getRouteOptions(
   missionId: string,
   payload: { from_id: number; to_id: number; sleigh_id: number; speed_multiplier: number; vehicle_capacity?: number; k?: number }
@@ -372,7 +377,7 @@ export function validateSegment(
 
 export function solveMission(
   missionId: string,
-  payload: { num_vehicles: number; vehicle_capacity: number; speed_multiplier: number; optimization_target?: string }
+  payload: { num_vehicles: number; max_vehicles?: number; vehicle_capacity: number; speed_multiplier: number; optimization_target?: string }
 ) {
   return apiFetch<SolveResponse>(`/api/missions/${missionId}/solve`, {
     method: "POST",
@@ -382,7 +387,7 @@ export function solveMission(
 
 export function solveMissionLearned(
   missionId: string,
-  payload: { num_vehicles: number; vehicle_capacity: number; speed_multiplier: number; optimization_target?: string }
+  payload: { num_vehicles: number; max_vehicles?: number; vehicle_capacity: number; speed_multiplier: number; optimization_target?: string }
 ) {
   return apiFetch<SolveResponse>(`/api/missions/${missionId}/solve-learned`, {
     method: "POST",
@@ -397,9 +402,10 @@ export function simulateIncidentReplan(
     strategy?: "guided" | "random";
     seed?: number;
     num_vehicles?: number;
+    max_vehicles?: number;
     vehicle_capacity?: number;
     speed_multiplier?: number;
-    optimization_target?: "time" | "distance";
+    optimization_target?: "time" | "distance" | "composite";
     manual_segments?: Array<{
       from_id: number;
       to_id: number;

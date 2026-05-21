@@ -113,6 +113,13 @@ SOLVE_RESPONSE = {
     "comparison": COMPARISON_RESPONSE,
 }
 
+INCIDENT_REPLAN_RESPONSE = {
+    "incidents": {"count": 1, "segments": []},
+    "before": {"benchmark": {"optimized": {"total_time_s": 100.0, "total_dist_m": 1000.0}, "savings": {"co2_saved_kg": 1.0}}},
+    "after": SOLVE_RESPONSE,
+    "delta_kpi": {"time_s": 12.0, "dist_m": 150.0, "co2_kg": -0.1, "time_pct": 12.0, "dist_pct": 15.0},
+}
+
 VERSUS_MATCH_RESPONSE = {
     "match_id": "match123",
     "mode": "private",
@@ -348,6 +355,26 @@ class ApiTests(unittest.TestCase):
         self.assertIn("comparison", response.json())
         solve_mission_mock.assert_called_once()
 
+    @patch("backend.app.services.simulate_incident_replan", return_value=INCIDENT_REPLAN_RESPONSE)
+    def test_incident_replan_accepts_max_vehicles(self, simulate_incident_replan_mock):
+        response = self.client.post(
+            "/api/missions/mission123/simulation/incident-replan",
+            json={
+                "incident_count": 1,
+                "strategy": "guided",
+                "num_vehicles": 2,
+                "max_vehicles": 1,
+                "vehicle_capacity": 200,
+                "speed_multiplier": 1.0,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("delta_kpi", response.json())
+        simulate_incident_replan_mock.assert_called_once()
+        args, _kwargs = simulate_incident_replan_mock.call_args
+        self.assertEqual(args[0], "mission123")
+        self.assertEqual(args[1]["max_vehicles"], 1)
+
     @patch("backend.app.services.get_comparison", return_value=COMPARISON_RESPONSE)
     def test_get_comparison_success(self, get_comparison_mock):
         response = self.client.get("/api/missions/mission123/comparison")
@@ -386,6 +413,7 @@ class ApiTests(unittest.TestCase):
                     "num_clients": 20,
                     "budget": 2200,
                     "sleigh_cost": 500,
+                    "max_vehicles": 4,
                     "weather_key": "Rain",
                     "random_incidents": True,
                 },
@@ -393,6 +421,29 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         create_versus_match_mock.assert_called_once()
+        args, _kwargs = create_versus_match_mock.call_args
+        self.assertEqual(args[0]["mission_config"]["max_vehicles"], 4)
+
+    def test_create_versus_match_custom_map_invalid_max_vehicles(self):
+        response = self.client.post(
+            "/api/versus/matches",
+            json={
+                "player_id": "player001",
+                "mode": "private",
+                "map_source": "custom",
+                "winner_rule": "time",
+                "mission_config": {
+                    "zone": "Lyon Centre",
+                    "num_clients": 20,
+                    "budget": 2200,
+                    "sleigh_cost": 500,
+                    "max_vehicles": 30,
+                    "weather_key": "Rain",
+                    "random_incidents": True,
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 422)
 
     @patch("backend.app.services.join_versus_match", side_effect=RuntimeError("Partie indisponible"))
     def test_join_versus_match_conflict(self, _join_versus_match_mock):

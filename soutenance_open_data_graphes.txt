@@ -1,0 +1,177 @@
+SOUTENANCE — GRAPHES & OPEN DATA
+Projet : Operation Noel
+Format : script oral prêt à lire (10–12 minutes)
+Positionnement : présentation individuelle (je)
+
+[0:00 – 1:00] Introduction
+Bonjour à toutes et à tous.
+Je vais vous présenter mon projet Operation Noel, développé dans le cadre de la matière Graphes et Open Data.
+L’idée est de transformer un problème concret de logistique urbaine en problème d’optimisation sur graphe, puis de le résoudre avec des méthodes de théorie des graphes et de recherche opérationnelle.
+
+Le problème central est le VRPTW, Vehicle Routing Problem with Time Windows.
+Concrètement, je dois organiser des tournées de livraison avec plusieurs véhicules, en respectant des contraintes de capacité, des fenêtres temporelles de livraison, des incidents, et des conditions météo.
+
+Mon objectif n’était pas seulement de produire une interface fonctionnelle, mais de construire une chaîne complète : acquisition open data, modélisation graphe, algorithmes de plus court chemin, optimisation globale, puis validation expérimentale et reproductibilité.
+
+Je vais suivre 8 points :
+1. Open data et modélisation du réseau.
+2. Analyse de graphes.
+3. Algorithmes de cheminement.
+4. Optimisation VRPTW par OR-Tools.
+5. Architecture logicielle.
+6. Fiabilité et reproductibilité.
+7. Démonstration guidée.
+8. Limites et perspectives.
+
+[1:00 – 3:00] Open Data et modélisation du graphe
+La base du projet est l’open data géographique.
+J’utilise OpenStreetMap via OSMnx pour extraire le réseau routier réel de la zone d’étude.
+Sur ma configuration de soutenance, le graphe contient 124 nœuds et 210 arêtes.
+
+Mathématiquement, je modélise le réseau comme un graphe orienté pondéré.
+- Un nœud représente une intersection.
+- Une arête représente un segment de route orienté.
+- Le poids principal est le temps de trajet, pas seulement la distance.
+
+Le temps de trajet est construit à partir de la longueur des arêtes et de la vitesse, puis ajusté dynamiquement avec la météo via Open-Meteo.
+Donc le coût d’une arête devient contextuel : la même route n’a pas le même coût en météo claire et en tempête de neige.
+
+Cette étape est importante car elle évite de travailler sur un graphe abstrait déconnecté du réel.
+On est directement sur un graphe opérationnel, exploitable par les algorithmes de plus court chemin et par le solveur VRPTW.
+
+Enfin, je prépare des matrices de coût entre points de livraison, qui servent d’entrée au solveur OR-Tools.
+Ce pré-calcul permet de séparer le problème en deux niveaux :
+- niveau local : calcul de trajets sur graphe,
+- niveau global : optimisation de la tournée multi-véhicules.
+
+[3:00 – 5:00] Analyse de graphes : centralité et robustesse
+Une fois le graphe construit, j’ai mené une analyse structurelle.
+La première mesure clé est la centralité d’intermédiarité, betweenness centrality.
+Cette métrique quantifie les nœuds qui servent de passage sur les plus courts chemins entre les autres nœuds.
+
+Dans mes résultats, les nœuds 368142 et 368143 ressortent parmi les plus critiques.
+Par exemple, le nœud 368142 a un score de betweenness proche de 0.48, ce qui est très élevé à cette échelle.
+Cela signifie qu’une grande partie des trajets optimaux passent par ce point.
+
+Ensuite, j’ai testé la robustesse du graphe par suppression de nœuds.
+Deux stratégies :
+- suppression ciblée des nœuds les plus centraux,
+- suppression aléatoire.
+
+Résultat marquant : en suppression ciblée, retirer seulement 1% des nœuds provoque environ 60.48% de perte de connectivité sur la plus grande composante fortement connexe.
+En suppression aléatoire à 1%, la perte est beaucoup plus faible, autour de 5.65%.
+
+Interprétation : le réseau est vulnérable à des attaques ciblées sur les hubs.
+Cette information est très utile pour la logistique : elle justifie des mécanismes de replanification rapide et des alternatives de routage dès qu’un nœud critique devient indisponible.
+
+[5:00 – 6:30] Algorithmes de cheminement
+Pour le routage local, je compare plusieurs familles d’algorithmes.
+
+D’abord Dijkstra.
+Il garantit l’optimalité sur poids positifs, mais son coût d’exploration peut être élevé.
+Je l’utilise comme référence robuste.
+
+Ensuite A*.
+Il conserve l’optimalité si l’heuristique est admissible, et réduit l’espace exploré en guidant la recherche vers la destination.
+Sur réseau routier, il offre de meilleures latences dans de nombreux cas.
+
+J’exploite aussi des versions bidirectionnelles, où la recherche part à la fois de la source et de la destination.
+L’intérêt est de réduire l’exploration totale en faisant se rencontrer les deux fronts.
+
+Le compromis global est le suivant :
+- Dijkstra pour la robustesse de base,
+- A* pour la performance en pratique,
+- bidirectionnel pour améliorer encore la latence sur certaines requêtes.
+
+Dans le produit, cela se traduit par un routing interactif plus réactif et des options de trajet exploitables en temps réel pendant une mission.
+
+[6:30 – 8:30] Optimisation VRPTW et IA
+Le cœur décisionnel global est confié à Google OR-Tools.
+Je formule un VRPTW avec :
+- plusieurs véhicules,
+- contraintes de capacité,
+- fenêtres de temps,
+- pénalités éventuelles de non-service,
+- coûts de déplacement issus du graphe et du contexte.
+
+OR-Tools combine une stratégie de solution initiale et une métaheuristique d’amélioration locale.
+Dans mes expérimentations, j’utilise notamment des stratégies comme PATH_CHEAPEST_ARC ou PARALLEL_CHEAPEST_INSERTION, puis des métaheuristiques de type GUIDED_LOCAL_SEARCH selon les politiques testées.
+
+J’ai aussi intégré des profils de comportement IA, et un cadre d’expérimentation pour comparer différentes politiques de résolution selon le contexte mission.
+
+Sur le benchmark IA versus approche gloutonne humaine, j’obtiens environ :
+- 36.7% de gain en temps,
+- 36.1% de gain en distance.
+
+Ce point est important pour la soutenance :
+on ne montre pas seulement une belle architecture, on montre un gain mesurable, donc une valeur opérationnelle concrète.
+
+[8:30 – 9:30] Architecture logicielle et fiabilité
+L’architecture est organisée en pipeline complet.
+- Frontend : Next.js / TypeScript pour l’interface mission.
+- Backend : FastAPI pour l’API, l’orchestration et les services.
+- Moteurs : scripts d’analyse graphe et solveur OR-Tools.
+- Données : OpenStreetMap/Open-Meteo en entrée, SQLite et fichiers de cache/rapports pour la persistance.
+
+Sur la fiabilité, j’ai travaillé la reproductibilité expérimentale.
+Le pipeline `make repro-check` calcule des hash SHA256 des artefacts open data et des sorties solveur, puis vérifie la stabilité sur plusieurs passes.
+Dans le rapport, le taux observé est de 1.0 sur le run validé.
+
+Donc je peux défendre les résultats avec une traçabilité technique, et pas uniquement avec une exécution ponctuelle impossible à reproduire.
+
+[9:30 – 10:30] Présentation du site (ce que je montre au jury)
+Ici, je présente rapidement le produit avant la démo algorithmique.
+Je montre d’abord l’interface web et les principaux écrans :
+1. création de mission,
+2. espace mission avec carte et contraintes,
+3. page de résultats/debrief.
+
+Je précise la logique UX que j’ai conçue :
+- le frontend guide l’utilisateur dans les décisions,
+- le backend calcule et valide les contraintes,
+- l’affichage expose les impacts métiers (temps, distance, score, points servis).
+
+Je peux dire explicitement :
+\"Le site n’est pas juste une vitrine, c’est une interface de pilotage.
+Chaque écran correspond à une étape décisionnelle : préparer, exécuter, analyser.\"
+
+[10:30 – 11:30] Démo live guidée (ce que je dis pendant la démonstration)
+Je lance une mission en mode météo difficile, avec incidents activés.
+Je montre d’abord la carte et la distribution des points de livraison.
+Ensuite je mets en évidence l’impact des incidents sur certaines zones critiques du graphe.
+
+Je déclenche la replanification :
+- côté moteur, le solveur recalcule les routes sous contraintes,
+- côté interface, je visualise les trajets et les métriques de mission.
+
+Pendant la démo, je commente trois KPI finaux :
+1. couverture de livraison,
+2. coût temps/distance total,
+3. stabilité des décisions sous perturbation.
+
+Le message que je veux faire passer au jury est :
+quand le contexte se dégrade, le système reste décisionnel, explicable et mesurable.
+
+[11:30 – 11:50] Limites et perspectives
+Côté limites :
+- la diversité des contextes d’entraînement peut encore être élargie,
+- certaines évaluations dépendent du volume de missions générées,
+- le coût calcul peut monter fortement quand on augmente simultanément taille de flotte, nombre de clients et richesse des contraintes.
+
+Côté perspectives :
+- intégrer des données multimodales de transport type GTFS,
+- enrichir l’analyse réseau avec d’autres centralités avancées,
+- étendre les benchmarks multi-villes avec protocole statistique plus large,
+- améliorer l’auto-tuning des paramètres OR-Tools selon le contexte.
+
+[11:50 – 12:00] Conclusion
+Pour conclure, ce projet m’a permis de relier directement la théorie des graphes à un système d’optimisation opérationnelle complet.
+J’ai construit une chaîne cohérente depuis l’open data jusqu’à la décision algorithmique, avec des résultats quantifiés et reproductibles.
+
+En résumé :
+- le graphe modélise le réel,
+- les algorithmes de cheminement donnent la base locale,
+- le VRPTW optimise la stratégie globale,
+- et les métriques confirment la valeur concrète de l’approche.
+
+Merci.

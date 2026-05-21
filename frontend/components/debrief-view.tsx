@@ -273,7 +273,9 @@ export function DebriefView({ missionId }: { missionId: string }) {
             <span className="muted">Gain vs naïf : {asMinutes(analysis.naive_vs_ai_delta_s)}</span>
             {scoreBreakdown && (
               <span className="muted" style={{ fontSize: "0.8rem" }}>
-                Score : {scoreBreakdown.base_score} (base) + {scoreBreakdown.ai_profile_bonus} (IA) + {scoreBreakdown.incident_bonus} (incidents) + {scoreBreakdown.human_bonus} (duel) + {scoreBreakdown.weather_bonus ?? 0} (météo)
+                Score : {scoreBreakdown.base_score} (base
+                {typeof scoreBreakdown.coverage_contribution === "number" ? `, couverture ${scoreBreakdown.coverage_contribution}` : ""}
+                ) + {scoreBreakdown.ai_profile_bonus} (IA) + {scoreBreakdown.incident_bonus} (incidents) + {scoreBreakdown.human_bonus} (duel) + {scoreBreakdown.weather_bonus ?? 0} (météo)
               </span>
             )}
             {campaignLevel > 0 && (

@@ -56,6 +56,7 @@ function InviteMapPreview({ invite }: { invite: VersusInvite }) {
         {typeof summary?.num_clients === "number" ? ` · ${summary.num_clients} colis` : ""}
         {typeof summary?.budget === "number" ? ` · Budget ${summary.budget}` : ""}
         {typeof summary?.sleigh_cost === "number" ? ` · Coût ${summary.sleigh_cost}` : ""}
+        {typeof summary?.max_vehicles === "number" ? ` · Cap traîneaux ${summary.max_vehicles}` : ""}
         {typeof summary?.search_radius_km === "number" ? ` · Rayon ${summary.search_radius_km}km` : ""}
       </div>
       <div className="muted">

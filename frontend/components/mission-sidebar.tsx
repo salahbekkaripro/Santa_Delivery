@@ -64,20 +64,23 @@ type AiPreview = {
   signature: string;
   difficultyBonus: number;
   description: string;
-  optimizationTarget: "time" | "distance";
+  optimizationTarget: "time" | "distance" | "composite";
 };
 
 type MissionSidebarProps = {
   missionId: string;
   mission: MissionResponse;
   numVehicles: number;
+  limitMaxVehicles: boolean;
+  maxVehicles: number;
+  maxVehiclesLocked?: boolean;
   vehicleCapacity: number;
   speedMultiplier: number;
   activeSleigh: number;
   versusLocked: boolean;
   aiProfileLocked: boolean;
   aiProfilePreview: AiPreview;
-  optimizationTarget: "time" | "distance";
+  optimizationTarget: "time" | "distance" | "composite";
   secondaryObjectives: Array<{ code: string; label: string }>;
   isFreeRouting: boolean;
   showFeasibleOnly: boolean;
@@ -104,10 +107,12 @@ type MissionSidebarProps = {
   solvePending: boolean;
   resultsAvailable: boolean;
   onNumVehiclesChange: (value: number) => void;
+  onLimitMaxVehiclesChange: (value: boolean) => void;
+  onMaxVehiclesChange: (value: number) => void;
   onVehicleCapacityChange: (value: number) => void;
   onSpeedMultiplierChange: (value: number) => void;
   onActiveSleighChange: (value: number) => void;
-  onOptimizationTargetChange: (value: "time" | "distance") => void;
+  onOptimizationTargetChange: (value: "time" | "distance" | "composite") => void;
   onToggleFreeRouting: () => void;
   onToggleShowFeasibleOnly: () => void;
   onSuggest: () => void;
@@ -129,6 +134,9 @@ export function MissionSidebar(props: MissionSidebarProps) {
     missionId,
     mission,
     numVehicles,
+    limitMaxVehicles,
+    maxVehicles,
+    maxVehiclesLocked = false,
     vehicleCapacity,
     speedMultiplier,
     activeSleigh,
@@ -162,6 +170,8 @@ export function MissionSidebar(props: MissionSidebarProps) {
     solvePending,
     resultsAvailable,
     onNumVehiclesChange,
+    onLimitMaxVehiclesChange,
+    onMaxVehiclesChange,
     onVehicleCapacityChange,
     onSpeedMultiplierChange,
     onActiveSleighChange,
@@ -190,6 +200,34 @@ export function MissionSidebar(props: MissionSidebarProps) {
       <label className="field">
         <span>Traîneaux</span>
         <input type="number" min={1} max={10} value={numVehicles} onChange={(e) => onNumVehiclesChange(Number(e.target.value))} />
+      </label>
+      <label className="field">
+        <span>Cap max solveur</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label className={`tag ${limitMaxVehicles ? "is-selected" : ""}`} style={{ cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={limitMaxVehicles}
+              onChange={(e) => onLimitMaxVehiclesChange(e.target.checked)}
+              disabled={versusLocked || maxVehiclesLocked}
+            />
+            &nbsp;Limiter
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={maxVehicles}
+            onChange={(e) => onMaxVehiclesChange(Number(e.target.value))}
+            disabled={!limitMaxVehicles || versusLocked || maxVehiclesLocked}
+            style={{ maxWidth: 110 }}
+          />
+        </div>
+        <span className="muted" style={{ fontSize: "0.78rem" }}>
+          {maxVehiclesLocked
+            ? "Cap imposé par la configuration du duel custom."
+            : "Limite le nombre de traîneaux autorisés pour l&apos;IA pendant la résolution."}
+        </span>
       </label>
       <label className="field">
         <span>Capacité (kg)</span>
@@ -225,10 +263,11 @@ export function MissionSidebar(props: MissionSidebarProps) {
         <select
           value={aiProfileLocked ? aiProfilePreview.optimizationTarget : optimizationTarget}
           disabled={aiProfileLocked}
-          onChange={(e) => onOptimizationTargetChange(e.target.value as "time" | "distance")}
+          onChange={(e) => onOptimizationTargetChange(e.target.value as "time" | "distance" | "composite")}
         >
           <option value="time">⚡ Express (Temps)</option>
           <option value="distance">🌱 Écolo (Distance)</option>
+          <option value="composite">🧠 Composite (Temps+Distance+CO₂+Risque)</option>
         </select>
       </label>
 
@@ -243,7 +282,15 @@ export function MissionSidebar(props: MissionSidebarProps) {
         </div>
         <p className="muted">{aiProfilePreview.description}</p>
         <div className="ai-profile-meta">
-          <span>Cible : {aiProfilePreview.optimizationTarget === "time" ? "temps" : "distance"}</span>
+          <span>
+            Cible : {
+              aiProfilePreview.optimizationTarget === "time"
+                ? "temps"
+                : aiProfilePreview.optimizationTarget === "distance"
+                  ? "distance"
+                  : "composite"
+            }
+          </span>
           <span className="muted">{aiProfileLocked ? "Verrouillé" : "Libre"}</span>
         </div>
       </div>
@@ -439,9 +486,11 @@ export function MissionSidebar(props: MissionSidebarProps) {
             <p className="muted" style={{ fontSize: "0.8rem", margin: "4px 0 0" }}>
               {aiProfileLocked
                 ? `Profil ${aiProfilePreview.label} imposé · ${aiProfilePreview.signature}`
-                : aiProfilePreview.optimizationTarget === "time"
+                : optimizationTarget === "time"
                   ? "L'IA cherchera à finir le plus vite possible."
-                  : "L'IA parcourra le moins de km possible."}
+                  : optimizationTarget === "distance"
+                    ? "L'IA parcourra le moins de km possible."
+                    : "L'IA arbitre en multi-objectif (temps, distance, CO₂, risque)."}
             </p>
           </div>
           <span className="tag">+{aiProfilePreview.difficultyBonus}</span>

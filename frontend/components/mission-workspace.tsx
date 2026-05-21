@@ -185,6 +185,8 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const queryClient = useQueryClient();
   const versusMatchId = searchParams.get("versus_match_id");
   const [numVehicles, setNumVehicles] = useState(3);
+  const [limitMaxVehicles, setLimitMaxVehicles] = useState(false);
+  const [maxVehicles, setMaxVehicles] = useState(3);
   const [vehicleCapacity, setVehicleCapacity] = useState(200);
   const [speedMultiplier, setSpeedMultiplier] = useState(1);
   const [activeSleigh, setActiveSleigh] = useState(0);
@@ -193,7 +195,7 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
   const [routeError, setRouteError] = useState<string | null>(null);
-  const [optimizationTarget, setOptimizationTarget] = useState<"time" | "distance">("time");
+  const [optimizationTarget, setOptimizationTarget] = useState<"time" | "distance" | "composite">("composite");
   const [suggestions, setSuggestions] = useState<Array<{ client_id: number; nom_client: string; arrival_clock: string; is_feasible: boolean }>>([]);
   const [isFreeRouting, setIsFreeRouting] = useState(false);
   const [showFeasibleOnly, setShowFeasibleOnly] = useState(false);
@@ -270,6 +272,15 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     const nextState = missionData.human_state ?? defaultHumanState();
     setHumanState(nextState);
     setNumVehicles(nextState.num_vehicles ?? 3);
+    const missionMaxVehiclesRaw = Number(missionData.mission?.max_vehicles);
+    if (Number.isFinite(missionMaxVehiclesRaw) && missionMaxVehiclesRaw >= 1) {
+      const normalizedCap = Math.max(1, Math.min(20, Math.round(missionMaxVehiclesRaw)));
+      setLimitMaxVehicles(true);
+      setMaxVehicles(normalizedCap);
+    } else {
+      setLimitMaxVehicles(false);
+      setMaxVehicles(3);
+    }
     setVehicleCapacity(nextState.vehicle_capacity ?? 200);
     setSpeedMultiplier(nextState.speed_multiplier ?? 1);
     if (missionData.mission?.ai_profile) {
@@ -404,9 +415,15 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
     mutationFn: () =>
       (useLearnedAi ? solveMissionLearned : solveMission)(missionId, {
           num_vehicles: numVehicles,
+          max_vehicles:
+            Number.isFinite(Number(missionData?.mission?.max_vehicles)) && Number(missionData?.mission?.max_vehicles) >= 1
+              ? Math.max(1, Math.min(20, Math.round(Number(missionData?.mission?.max_vehicles))))
+              : limitMaxVehicles
+                ? Math.max(1, Math.min(20, Math.round(Number(maxVehicles) || 1)))
+                : undefined,
           vehicle_capacity: vehicleCapacity,
           speed_multiplier: speedMultiplier,
-          optimization_target: optimizationTarget
+          optimization_target: "composite"
         }),
     onSuccess: () => {
       setRouteError(null);
@@ -719,6 +736,11 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
   const aiProfilePreview = getAiProfilePreview(mission.mission.ai_profile);
   const aiProfileLocked = Boolean(mission.mission.ai_profile);
   const secondaryObjectives = mission.mission.secondary_objectives ?? [];
+  const missionConfiguredMaxVehicles =
+    Number.isFinite(Number(mission.mission.max_vehicles)) && Number(mission.mission.max_vehicles) >= 1
+      ? Math.max(1, Math.min(20, Math.round(Number(mission.mission.max_vehicles))))
+      : null;
+  const maxVehiclesLockedByMission = missionConfiguredMaxVehicles !== null;
   const weather = weatherInfo(String(mission.weather?.desc ?? mission.mission.weather_key));
   const progressPct = mission.clients.length > 0 ? (assignedClientsCount / mission.clients.length) * 100 : 0;
   const selfProgress = versusSelf?.progress;
@@ -777,6 +799,9 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
             missionId={missionId}
             mission={mission}
             numVehicles={numVehicles}
+            limitMaxVehicles={limitMaxVehicles}
+            maxVehicles={maxVehicles}
+            maxVehiclesLocked={maxVehiclesLockedByMission}
             vehicleCapacity={vehicleCapacity}
             speedMultiplier={speedMultiplier}
             activeSleigh={activeSleigh}
@@ -810,6 +835,8 @@ export function MissionWorkspace({ missionId }: { missionId: string }) {
             solvePending={solveMutation.isPending}
             resultsAvailable={mission.results_available}
             onNumVehiclesChange={setNumVehicles}
+            onLimitMaxVehiclesChange={setLimitMaxVehicles}
+            onMaxVehiclesChange={setMaxVehicles}
             onVehicleCapacityChange={setVehicleCapacity}
             onSpeedMultiplierChange={setSpeedMultiplier}
             onActiveSleighChange={setActiveSleigh}

@@ -20,6 +20,13 @@ class MissionCreateRequest(BaseModel):
     center_lon: float | None = None
     search_radius_km: float | None = Field(default=None, gt=0, le=30)
     max_clients: int | None = Field(default=None, ge=1, le=200)
+    max_vehicles: int | None = Field(default=None, ge=1, le=20)
+    departure_hour: int | None = Field(default=None, ge=0, le=23)
+    with_elevation: bool = False
+    transport_mode: Literal["drive", "bike", "walk", "multimodal"] = "drive"
+    use_ademe_co2: bool = False
+    ademe_transport_id: int | None = Field(default=None, ge=1)
+    objective_weights: dict | None = None
 
 
 class ClientPoint(BaseModel):
@@ -164,9 +171,10 @@ class RouteSegment(BaseModel):
 
 class SolveMissionRequest(BaseModel):
     num_vehicles: int = Field(ge=1, le=20)
+    max_vehicles: int | None = Field(default=None, ge=1, le=20)
     vehicle_capacity: int = Field(ge=1)
     speed_multiplier: float = Field(default=1.0, gt=0)
-    optimization_target: Literal["time", "distance"] = "time"
+    optimization_target: Literal["time", "distance", "composite"] = "time"
 
 
 class IncidentReplanRequest(BaseModel):
@@ -174,9 +182,10 @@ class IncidentReplanRequest(BaseModel):
     strategy: Literal["guided", "random"] = "guided"
     seed: int | None = None
     num_vehicles: int | None = Field(default=None, ge=1, le=20)
+    max_vehicles: int | None = Field(default=None, ge=1, le=20)
     vehicle_capacity: int | None = Field(default=None, ge=1)
     speed_multiplier: float | None = Field(default=None, gt=0)
-    optimization_target: Literal["time", "distance"] | None = None
+    optimization_target: Literal["time", "distance", "composite"] | None = None
     manual_segments: list[dict] | None = None
 
 
@@ -256,6 +265,7 @@ class VersusMissionConfigRequest(BaseModel):
     center_lon: float | None = None
     search_radius_km: float | None = Field(default=None, gt=0, le=30)
     max_clients: int | None = Field(default=None, ge=1, le=200)
+    max_vehicles: int | None = Field(default=None, ge=1, le=20)
 
 
 class VersusMatchCreateRequest(BaseModel):

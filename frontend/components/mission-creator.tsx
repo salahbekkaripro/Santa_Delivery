@@ -349,6 +349,13 @@ export function MissionCreator() {
                       random_incidents: campaigns[2].random_incidents,
                       ai_profile: campaigns[2].ai_profile,
                       level: campaigns[2].level,
+                      transport_mode: "multimodal",
+                      objective_weights: {
+                        time: 0.55,
+                        distance: 0.2,
+                        co2: 0.15,
+                        risk: 0.1,
+                      },
                     })
                   }
                   disabled={createMutation.isPending}
@@ -606,6 +613,13 @@ export function MissionCreator() {
                     random_incidents: campaign.random_incidents,
                     ai_profile: campaign.ai_profile,
                     level: campaign.level,
+                    transport_mode: "multimodal",
+                    objective_weights: {
+                      time: 0.55,
+                      distance: 0.2,
+                      co2: 0.15,
+                      risk: 0.1,
+                    },
                   })
                 }
                 disabled={createMutation.isPending}
@@ -823,6 +837,13 @@ export function MissionCreator() {
                   random_incidents: sandbox.random_incidents,
                   departure_hour: sandbox.departure_hour,
                   level: null,
+                  transport_mode: "multimodal",
+                  objective_weights: {
+                    time: 0.55,
+                    distance: 0.2,
+                    co2: 0.15,
+                    risk: 0.1,
+                  },
                 });
               }}
             >

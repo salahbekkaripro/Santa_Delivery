@@ -49,7 +49,12 @@ export function ResultsView({ missionId }: { missionId: string }) {
     queryKey: ["debrief", missionId],
     queryFn: () => getDebrief(missionId)
   });
-  const animatedScore = useCountUp(Number(debriefQuery.data?.score.value ?? 0));
+  const solverScoreRaw = Number(
+    debriefQuery.data?.benchmark?.savings?.score
+    ?? debriefQuery.data?.score?.value
+    ?? 0
+  );
+  const animatedScore = useCountUp(solverScoreRaw);
 
   if (missionQuery.isLoading || comparisonQuery.isLoading || debriefQuery.isLoading) {
     return (
@@ -105,6 +110,7 @@ export function ResultsView({ missionId }: { missionId: string }) {
                 <span className="score-big-number score-big-number--reveal">{animatedScore}</span>
                 <span className="score-big-denom">/100</span>
               </div>
+              <span className="muted" style={{ fontSize: "0.82rem" }}>Score solveur</span>
               <span className="score-rank-badge">
                 {debrief.score.rank_title} · {mission.mission.zone}
               </span>

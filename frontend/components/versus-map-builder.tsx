@@ -98,6 +98,11 @@ export const VersusMapBuilder = forwardRef<VersusMapBuilderHandle, {
     Math.max(SEARCH_MIN_RADIUS_KM, Number(customConfig.search_radius_km ?? DEFAULT_RADIUS_KM)),
   );
   const requestedClients = Math.max(1, Math.min(60, Math.round(Number(customConfig.num_clients) || 1)));
+  const requestedMaxVehicles = Math.max(
+    1,
+    Math.min(20, requestedClients, Math.round(Number(customConfig.max_vehicles ?? Math.ceil(requestedClients / 3)) || 1)),
+  );
+  const limitMaxVehicles = typeof customConfig.max_vehicles === "number";
   const requestedBudget = Math.max(0, Math.round(Number(customConfig.budget) || 0));
   const requestedSleighCost = Math.max(0, Math.round(Number(customConfig.sleigh_cost) || 0));
   const areaKm2 = useMemo(() => Math.PI * radiusKm * radiusKm, [radiusKm]);
@@ -213,6 +218,7 @@ export const VersusMapBuilder = forwardRef<VersusMapBuilderHandle, {
         center_lon: resolvedAddress.lon,
         search_radius_km: radiusKm,
         num_clients: requestedClients,
+        max_vehicles: limitMaxVehicles ? requestedMaxVehicles : undefined,
         budget: requestedBudget,
         sleigh_cost: requestedSleighCost,
       };
@@ -230,8 +236,10 @@ export const VersusMapBuilder = forwardRef<VersusMapBuilderHandle, {
     radiusKm,
     requestedBudget,
     requestedClients,
+    requestedMaxVehicles,
     requestedSleighCost,
     selectedAddress,
+    limitMaxVehicles,
   ]);
 
   return (
@@ -347,6 +355,41 @@ export const VersusMapBuilder = forwardRef<VersusMapBuilderHandle, {
                   })
                 }
               />
+            </label>
+            <label className="field">
+              <span>Cap max traîneaux (optionnel)</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label className={`tag ${limitMaxVehicles ? "is-selected" : ""}`} style={{ cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={limitMaxVehicles}
+                    onChange={(event) =>
+                      onCustomConfigChange({
+                        ...customConfig,
+                        max_vehicles: event.target.checked ? requestedMaxVehicles : undefined,
+                      })
+                    }
+                  />
+                  &nbsp;Limiter
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={Math.min(20, requestedClients)}
+                  value={requestedMaxVehicles}
+                  disabled={!limitMaxVehicles}
+                  onChange={(event) =>
+                    onCustomConfigChange({
+                      ...customConfig,
+                      max_vehicles: Math.max(
+                        1,
+                        Math.min(20, requestedClients, Math.round(asNumber(event.target.value, requestedMaxVehicles))),
+                      ),
+                    })
+                  }
+                  style={{ maxWidth: 110 }}
+                />
+              </div>
             </label>
             <label className="field">
               <span>Budget</span>

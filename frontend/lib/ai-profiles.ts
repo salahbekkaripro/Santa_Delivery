@@ -4,7 +4,7 @@ type AiProfilePreview = {
   signature: string;
   description: string;
   difficultyBonus: number;
-  optimizationTarget: "time" | "distance";
+  optimizationTarget: "time" | "distance" | "composite";
   accentClass: string;
 };
 
@@ -69,7 +69,7 @@ const AI_PROFILE_PREVIEWS: Record<string, AiProfilePreview> = {
     signature: "Mode libre",
     description: "Reprend simplement les paramètres de mission choisis par le joueur.",
     difficultyBonus: 0,
-    optimizationTarget: "time",
+    optimizationTarget: "composite",
     accentClass: "profile-adaptatif",
   },
 };

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -278,6 +279,19 @@ def _run_policy_on_mission(
     experiment_dir.mkdir(parents=True, exist_ok=True)
     output_json_path = experiment_dir / f"result_{policy_id}.json"
     benchmark_json_path = experiment_dir / f"benchmark_{policy_id}.json"
+    seed_basis = "|".join(
+        [
+            mission_id,
+            str(policy_id),
+            str(num_vehicles),
+            str(vehicle_capacity),
+            str(speed_multiplier),
+            str(policy.get("first_solution_strategy", "")),
+            str(policy.get("local_search_metaheuristic", "")),
+            str(policy.get("solver_time_limit_s", "")),
+        ]
+    )
+    random_seed = int(hashlib.sha256(seed_basis.encode("utf-8")).hexdigest()[:8], 16)
 
     start = time.perf_counter()
     try:
@@ -300,6 +314,7 @@ def _run_policy_on_mission(
             max_route_time_s=int(policy["max_route_time_s"]),
             drop_penalty=int(policy["drop_penalty"]),
             global_span_cost=int(policy["global_span_cost"]),
+            random_seed=int(random_seed),
         )
         elapsed = float(time.perf_counter() - start)
         if not isinstance(results, dict):
@@ -320,6 +335,7 @@ def _run_policy_on_mission(
             data_path=str(paths.data_file),
             time_matrix_path=str(paths.time_matrix_file),
             dist_matrix_path=str(paths.dist_matrix_file),
+            co2_matrix_path=str(paths.core_data_dir / "co2_matrix.npy"),
             optimized_json_path=str(output_json_path),
             benchmark_file=str(benchmark_json_path),
         )

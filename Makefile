@@ -8,7 +8,7 @@ BACKEND_HOST ?= 127.0.0.1
 BACKEND_PORT ?= 8000
 FRONTEND_PORT ?= 3000
 
-.PHONY: help install test lint e2e ci protect-main backend frontend dev docker clean legacy-clean ro-experiment
+.PHONY: help install test lint e2e ci protect-main backend frontend dev docker clean legacy-clean ro-experiment repro-check multi-city-benchmark
 
 help:
 	@echo "🎅 Santa Router Optimizer - Commandes disponibles :"
@@ -22,6 +22,8 @@ help:
 	@echo "  make docker    - Lance l'application via Docker Compose"
 	@echo "  make clean     - Nettoie les artefacts de build"
 	@echo "  make ro-experiment - Lance une experience RO heuristiques appairee"
+	@echo "  make repro-check - Verifie la reproductibilite solveur (2 passes, hash des solutions)"
+	@echo "  make multi-city-benchmark - Compare les politiques solveur sur plusieurs villes"
 
 install:
 	$(VENV_PIP) install -r requirements.txt
@@ -65,3 +67,9 @@ legacy-clean:
 
 ro-experiment:
 	$(VENV_PYTHON) scripts/ro_heuristics_experiment.py --mode existing --instances 6
+
+repro-check:
+	$(VENV_PYTHON) scripts/repro_solver_pipeline.py --instances 4 --seed 42 --context-mode stable
+
+multi-city-benchmark:
+	$(VENV_PYTHON) scripts/multi_city_benchmark.py --missions-per-zone 1 --repeat-runs 2 --context-mode stable

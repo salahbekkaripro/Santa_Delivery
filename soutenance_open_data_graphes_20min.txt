@@ -1,0 +1,309 @@
+SOUTENANCE 20 MINUTES — GRAPHES, OPEN DATA, ARCHITECTURE DU SITE
+Projet : Operation Noel
+Format : script oral prêt à lire
+Objectif : expliquer la logique de construction complète (donnée -> graphe -> solveur -> site)
+
+[0:00 – 1:00] Introduction
+Bonjour.
+Je vais vous présenter Operation Noel, un projet de logistique urbaine que j’ai construit comme une chaîne complète allant de l’open data à la décision algorithmique, puis à l’interface web opérationnelle.
+
+Le problème traité est un VRPTW, Vehicle Routing Problem with Time Windows : plusieurs traîneaux, des capacités limitées, des fenêtres de livraison, des incidents, et une météo dynamique.
+
+Ce que je veux démontrer aujourd’hui, c’est que je ne me suis pas contenté de coder une interface : j’ai structuré un système modulaire, avec des choix d’architecture défendables, des algorithmes justifiés, des métriques, et de la reproductibilité.
+
+[1:00 – 2:30] Vue d’ensemble : comment le système est construit
+L’architecture est en 3 couches principales.
+
+Première couche : frontend Next.js / TypeScript.
+C’est là où l’utilisateur prépare une mission, interagit avec la carte, valide des segments, lance le solveur, et analyse les résultats.
+
+Deuxième couche : backend FastAPI.
+Le backend expose les endpoints métier : missions, routage humain, solveur IA, social, versus, classement.
+Il orchestre aussi la logique métier, les validations, le scoring, et la persistance.
+
+Troisième couche : moteurs et données.
+- Moteurs de graphes et routage (OSMnx/NetworkX, calculs de chemins, options de routes).
+- Solveur VRPTW OR-Tools.
+- Stockage SQLite pour joueurs, missions, leaderboard, versus, social.
+
+En résumé : le frontend pilote, le backend décide, les moteurs calculent.
+
+[2:30 – 4:30] Module Données : comment je traite l’open data
+Le premier bloc clé est le traitement de données.
+
+Je pars d’OpenStreetMap via OSMnx pour construire le graphe routier réel de la zone sélectionnée.
+Dans mon jeu de soutenance, j’ai un graphe de 124 nœuds et 210 arêtes.
+
+Modélisation :
+- Nœud = intersection.
+- Arête orientée = segment routier.
+- Poids = coût temporel de déplacement.
+
+Je n’utilise pas uniquement la distance, car en logistique le temps est la variable critique.
+Le coût d’arête est donc : longueur / vitesse, avec ajustement météo.
+La météo vient d’Open-Meteo et modifie la vitesse effective.
+
+Ensuite je génère les points clients dans la zone, et je calcule la matrice des coûts entre points.
+Cette matrice devient l’entrée du solveur global.
+
+C’est une séparation importante :
+- la donnée géographique brute est transformée en donnée algorithmique,
+- puis la donnée algorithmique alimente l’optimisation combinatoire.
+
+[4:30 – 6:30] Module Analyse Graphes : ce que j’extrais du réseau
+Après la construction du graphe, j’analyse sa structure pour comprendre ses fragilités.
+
+Je calcule la centralité d’intermédiarité, betweenness centrality.
+Cette mesure détecte les nœuds qui contrôlent la majorité des plus courts chemins.
+Dans mes résultats, les nœuds 368142 et 368143 ressortent comme critiques.
+
+J’évalue aussi la robustesse par simulation de suppressions.
+Résultat fort : retirer 1% des nœuds les plus centraux fait chuter la connectivité d’environ 60.48%.
+À l’inverse, une suppression aléatoire de 1% produit une perte bien plus faible, autour de 5.65%.
+
+Conclusion opérationnelle : le réseau est vulnérable aux pannes ciblées sur hubs.
+Donc il faut des stratégies de replanification rapide et des alternatives d’itinéraires.
+
+Ce point est exactement ce que le cours Graphes/Open Data cherche :
+passer d’un indicateur mathématique à une décision de conception logicielle.
+
+[6:30 – 8:30] Module Algorithmes de cheminement
+Pour le routage local dans le site, j’utilise plusieurs algorithmes complémentaires.
+
+1. Dijkstra :
+C’est la référence robuste, optimale avec poids positifs, mais parfois coûteuse en exploration.
+
+2. A* :
+Il ajoute une heuristique pour guider la recherche vers la destination, donc réduit souvent la latence.
+
+3. Versions bidirectionnelles :
+La recherche démarre des deux côtés, source et destination, pour réduire l’espace de recherche.
+
+Dans l’application, ces algorithmes servent à :
+- proposer des options de segment au joueur,
+- estimer temps/distances en direct,
+- alimenter les validations de faisabilité avant commit d’un segment.
+
+Donc ce n’est pas “juste de la théorie” : l’algorithme est branché dans l’interaction utilisateur.
+
+[8:30 – 10:30] OR-Tools : c’est quoi et pourquoi je l’utilise
+OR-Tools est une bibliothèque d’optimisation combinatoire de Google.
+Je l’utilise pour résoudre le VRPTW global.
+
+Pourquoi ?
+Parce que le problème est NP-difficile : une approche exhaustive devient inapplicable très vite.
+OR-Tools combine :
+- une stratégie de construction initiale,
+- puis des métaheuristiques d’amélioration locale.
+
+Dans mon projet, les politiques varient selon les profils IA :
+- first solution strategy : `path_cheapest_arc`, `parallel_cheapest_insertion`, ou `savings`.
+- local search : `guided_local_search`, `tabu_search`, `simulated_annealing`.
+
+Je paramètre aussi :
+- `solver_time_limit_s`,
+- `time_slack_s`,
+- `max_route_time_s`,
+- `drop_penalty`,
+- `global_span_cost`.
+
+Donc je ne traite pas OR-Tools comme une boîte noire.
+Je contrôle les paramètres, je compare les politiques, et je mesure l’impact.
+
+Sur benchmark IA vs glouton humain, j’obtiens environ :
+- 36.7% de gain en temps,
+- 36.1% de gain en distance.
+
+[10:30 – 12:00] Logique backend : API, services, repository
+Le backend est structuré en trois niveaux clairs.
+
+Niveau 1 : `main.py`.
+C’est la couche API FastAPI, avec routes REST et WebSocket.
+Elle gère le contrat HTTP : validation des payloads via schémas, mapping des erreurs en codes 400/404/409, et exposition des endpoints.
+On retrouve par exemple des routes par domaine : missions, humain, solveur, social, auth, versus, leaderboard.
+
+Niveau 2 : `services.py`.
+Là se trouve la logique métier réelle :
+- génération de mission,
+- calcul d’options de routes,
+- validation de segments,
+- lancement solveur,
+- apprentissage de profils IA et auto-tuner OR-Tools,
+- règles versus,
+- social et notifications live.
+Cette couche est volontairement dense, car elle centralise les décisions métier.
+
+Niveau 3 : `repository.py`.
+Cette couche isole la persistance SQLite.
+Elle initialise le schéma et les index, puis expose les accès aux tables sans polluer la logique métier.
+
+Ce découpage API -> service -> repository est important pour la maintenabilité :
+on sépare le transport, la règle métier, et le stockage.
+
+[12:00 – 14:30] Présentation des modules du site — Frontend
+Je détaille maintenant les modules visibles côté site et leur rôle.
+
+Module 1 : Accueil (`/`).
+La home joue le rôle de routeur produit : campagne, versus, social, salon, solveur, explore, data.
+Elle oriente l’utilisateur vers l’expérience adaptée.
+
+Module 2 : Authentification (`/login`, `/register`, `/forgot-password`, `/reset-password`).
+- Parcours local email/mot de passe.
+- Parcours OAuth via NextAuth.
+- Flux de reset par token temporel.
+Ici j’ai voulu un module complet, pas juste un mock, avec persistance réelle.
+
+Module 3 : Campagne (`/campaign`, `/campaign/finale`).
+Ce module scénarise la progression, utile pour la découverte.
+
+Module 4 : Salon (`/salon`).
+C’est une entrée de démo rapide : création de mission, réglages visibles, exécution directe.
+
+Module 5 : Solveur libre (`/solver`).
+On fournit adresse, rayon, météo, incidents, clients.
+Le backend construit la mission puis exécute le solveur sur un graphe réel.
+
+Module 6 : Explore (`/explore`).
+Module pédagogique : visualisation Dijkstra, A*, métriques graphes, comparaison d’approches.
+
+Module 7 : Data (`/data`).
+Explication du pipeline de données et de la chaîne de transformation.
+
+Module 8 : Mission runtime (`/mission/[id]`, `/results`, `/debrief`).
+Cœur opérationnel du produit : pilotage humain + comparaison IA.
+
+Module 9 : Social + Messages (`/social`, `/messages`).
+Ajout d’amis, demandes, blocages, conversations directes.
+
+Module 10 : Versus (`/versus`, `/versus/private`, `/versus/queue`, `/versus/invite`, `/versus/match/[id]`).
+Système compétitif complet avec états de match synchronisés.
+
+Module 11 : Leaderboard (`/leaderboard`).
+Classements solo et versus pour fermer la boucle d’engagement.
+
+[14:30 – 16:30] Module Mission : comment la logique de jeu est construite
+Le module mission est construit en composants spécialisés :
+- `mission-creator` : collecte paramètres.
+- `mission-workspace` : orchestration globale de l’état.
+- `map-surface` : interaction cartographique.
+- `mission-sidebar` : contrôles et décisions.
+- `mission-vehicle-stats` : suivi opérationnel.
+
+Le flux technique principal est le suivant :
+1. `POST /api/missions` crée la mission et le snapshot.
+2. `GET /api/missions/{id}` hydrate l’interface.
+3. L’utilisateur choisit un segment, et la UI appelle `/human/route-options`.
+4. Le backend renvoie des options avec informations de faisabilité.
+5. L’utilisateur valide un segment via `/human/validate-segment`.
+6. Il peut corriger avec `/human/undo-last`, `/human/clear-sleigh`, `/human/reset`.
+7. Puis il lance `/solve` ou `/solve-learned` pour la référence IA.
+8. Enfin il lit `/comparison` et `/debrief`.
+
+Ce découplage permet d’avoir une progression incrémentale :
+le joueur agit étape par étape, et le système garde un état cohérent.
+
+Dans cette partie, le jury valorise le fait que je gère :
+- la logique de contrainte,
+- l’ergonomie de décision,
+- et l’alignement entre UI et calcul.
+
+[16:30 – 17:45] Résultats, Debrief, scoring
+Le module résultats n’est pas seulement visuel, il est analytique.
+
+La vue Results compare directement humain vs IA sur les mêmes unités :
+temps total, distance totale, score.
+
+La vue Debrief donne une lecture plus explicative :
+ce qui a coûté cher, où sont les écarts, quel arbitrage aurait été meilleur.
+
+Le score est composite : temps, distance/CO2, budget, bonus de difficulté.
+Donc je ne récompense pas seulement la vitesse brute, mais une performance multi-critères.
+
+Cette partie matérialise une idée importante :
+un solveur sans explication est peu utile pédagogiquement.
+Le debrief transforme le calcul en connaissance actionnable.
+
+[17:45 – 18:30] Social temps réel
+Le module social combine persistance et événementiel.
+
+Endpoints principaux :
+- recherche joueurs,
+- gestion d’amis,
+- messagerie directe,
+- blocage/déblocage.
+
+Temps réel :
+- WebSocket social `/ws/social/{player_id}`,
+- émission d’événements applicatifs côté backend,
+- rafraîchissement ciblé côté frontend selon l’événement.
+
+Ce modèle est volontairement hybride :
+la DB donne la vérité durable, le WebSocket donne la réactivité.
+
+[18:30 – 19:15] Versus : architecture compétitive
+Le versus est un sous-système complet avec ses propres règles.
+
+Trois entrées de jeu :
+- duel privé par code,
+- file d’attente matchmaking,
+- invitation ciblée.
+
+Cycle de vie d’un match :
+création -> join -> ready -> lancement -> soumission -> winner -> leaderboard.
+
+Synchronisation :
+le frontend écoute `/ws/versus/{match_id}`,
+le backend publie l’état courant avec heartbeat et contrôle de cohérence.
+
+Persistance dédiée :
+tables `versus_matches`, `versus_participants`, `versus_invites`, `versus_queue`, `versus_leaderboard`.
+
+Ce que je veux montrer ici, c’est la capacité à construire un module multi-acteurs, stateful, avec contraintes de synchro.
+
+[19:15 – 19:45] Base de données et schéma métier
+La base SQLite contient les entités structurantes :
+- `players`, `password_reset_tokens`,
+- `mission_snapshots`,
+- `leaderboard`,
+- tables social (`friendships`, `direct_messages`, `user_blocks`),
+- tables versus.
+
+Ce choix SQLite est pragmatique pour un projet académique :
+simple à déployer, suffisant pour la démonstration, et facile à versionner au niveau schéma.
+
+J’ai aussi ajouté des index pour les accès critiques, par exemple sur les classements et états de match.
+
+[19:45 – 20:15] Fiabilité, reproductibilité, qualité
+J’ai ajouté un axe de fiabilité expérimentale :
+- hash SHA256 des artefacts open data,
+- hash des sorties solveur,
+- vérification multi-pass via `make repro-check`.
+
+Le rapport de reproductibilité observé monte à 1.0 sur le run validé.
+J’ai aussi des tests ciblés sur des briques critiques.
+
+Donc je peux défendre des résultats stables, pas seulement un “run qui passe une fois”.
+
+[20:15 – 20:45] Démo minute par minute (si jury demande “montre le site”)
+Minute 1 : j’ouvre l’accueil et j’explique la séparation des modules.
+Minute 2 : je passe par le salon/creator et je crée une mission avec météo + incidents.
+Minute 3 : j’entre dans workspace, je montre map + sidebar + état des traîneaux.
+Minute 4 : je valide un segment humain et je montre la faisabilité.
+Minute 5 : je lance le solveur et je vais sur results/debrief.
+Minute 6 : je montre social/messages puis versus pour prouver la modularité produit.
+Minute 7 : je termine sur leaderboard et la reproductibilité.
+
+[20:45 – 21:00] Conclusion et ce que le jury valorise
+Conclusion :
+Operation Noel démontre une chaîne complète :
+open data -> modélisation graphe -> routage local -> optimisation VRPTW -> interface décisionnelle modulaire.
+
+Si je résume ce que le jury valorise ici :
+1. Je sais transformer une donnée ouverte en modèle algorithmique exploitable.
+2. Je sais justifier mes choix de solveur et de paramétrage.
+3. Je sais découper le site en modules avec responsabilités claires.
+4. Je sais relier performance, explicabilité et reproductibilité.
+
+Autrement dit, je présente une logique d’ingénierie complète, argumentée et mesurable.
+
+Merci.

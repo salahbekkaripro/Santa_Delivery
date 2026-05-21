@@ -1190,7 +1190,7 @@ def two_opt_star_routes(
 # ILS — ITERATED LOCAL SEARCH avec DOUBLE-BRIDGE
 # ─────────────────────────────────────────────────────────
 
-def _double_bridge_single(route: list[int]) -> list[int]:
+def _double_bridge_single(route: list[int], rng: random.Random | None = None) -> list[int]:
     """
     Perturbation double-bridge (4-opt non-séquentiel) sur une route.
 
@@ -1208,7 +1208,8 @@ def _double_bridge_single(route: list[int]) -> list[int]:
         return list(route)
 
     # 3 points de coupe dans [1, n-1] distincts, garantissant 4 segments non-vides
-    cuts = sorted(random.sample(range(1, n), 3))
+    rng = rng or random.Random(42)
+    cuts = sorted(rng.sample(range(1, n), 3))
     i, j, k = cuts
     A, B, C, D = route[:i], route[i:j], route[j:k], route[k:]
     return A + C + B + D
@@ -1243,6 +1244,7 @@ def iterated_local_search(
     n_iterations: int = 8,
     capacity: float | None = None,
     demands: dict[int, float] | None = None,
+    seed: int = 42,
 ) -> dict:
     """
     Iterated Local Search (ILS) pour VRPTW multi-véhicules.
@@ -1272,6 +1274,7 @@ def iterated_local_search(
     """
     original = {sid: list(r) for sid, r in routes_by_sleigh.items()}
     sleigh_ids = list(original.keys())
+    rng = random.Random(int(seed))
 
     # Phase 1 : recherche locale initiale
     best = _full_local_search(original, time_matrix, depot_id, capacity, demands)
@@ -1291,7 +1294,7 @@ def iterated_local_search(
 
         # Perturbation double-bridge
         candidate = dict(best)
-        candidate[target_sid] = _double_bridge_single(best[target_sid])
+        candidate[target_sid] = _double_bridge_single(best[target_sid], rng=rng)
 
         # Recherche locale sur la solution perturbée
         candidate = _full_local_search(candidate, time_matrix, depot_id, capacity, demands)
