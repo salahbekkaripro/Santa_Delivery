@@ -17,9 +17,10 @@ const DEFAULT_ADDRESS = {
 };
 const SEARCH_MIN_RADIUS_KM = 0.5;
 const SEARCH_MAX_RADIUS_KM = 30;
-const SEARCH_MAX_CLIENTS = 200;
+const SEARCH_MAX_CLIENTS = 2000;
 const SEARCH_MIN_CLIENTS = 8;
 const SEARCH_CLIENT_DENSITY_PER_KM2 = 2.0;
+const LARGE_MISSION_MULTIMODAL_LIMIT = 150;
 
 const SLEIGH_COLORS = ["#1a6fb5", "#9e2f3f", "#1f7a56", "#b8892f", "#6b3fa0", "#c45e00"];
 
@@ -105,8 +106,7 @@ function computeScore(
 }
 
 function computeMaxClientsForRadius(radiusKm: number) {
-  const areaKm2 = Math.PI * radiusKm * radiusKm;
-  return Math.min(SEARCH_MAX_CLIENTS, Math.max(SEARCH_MIN_CLIENTS, Math.floor(areaKm2 * SEARCH_CLIENT_DENSITY_PER_KM2)));
+  return SEARCH_MAX_CLIENTS;
 }
 
 function formatMin(s: number) {
@@ -253,6 +253,7 @@ export default function SolverPage() {
   }
 
   async function handleSolve() {
+    if (step === "loading") return;
     if (!selectedAddress) return;
     setError(null);
     setResult(null);
@@ -284,7 +285,7 @@ export default function SolverPage() {
         with_elevation: sandbox.with_elevation,
         use_ademe_co2: sandbox.use_ademe_co2,
         ademe_transport_id: sandbox.use_ademe_co2 ? sandbox.ademe_transport_id : undefined,
-        transport_mode: "multimodal",
+        transport_mode: requestedClients >= LARGE_MISSION_MULTIMODAL_LIMIT ? "drive" : "multimodal",
         objective_weights: {
           time: 0.55,
           distance: 0.2,

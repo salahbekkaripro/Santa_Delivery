@@ -223,7 +223,7 @@ SEARCH_MIN_RADIUS_KM = 0.5
 SEARCH_MAX_RADIUS_KM = 30.0
 SEARCH_CLIENT_DENSITY_PER_KM2 = 2.0
 SEARCH_MIN_CLIENTS = 8
-SEARCH_MAX_CLIENTS = 200
+SEARCH_MAX_CLIENTS = 2000
 
 
 def _env_int(name: str, default: int, *, min_value: int | None = None, max_value: int | None = None) -> int:
@@ -242,10 +242,10 @@ def _env_int(name: str, default: int, *, min_value: int | None = None, max_value
 INCIDENT_TUNING_MIN_INCIDENTS = _env_int("NOEL_INCIDENT_TUNING_MIN_INCIDENTS", 2, min_value=1, max_value=10)
 INCIDENT_TUNING_MIN_CLIENTS = _env_int("NOEL_INCIDENT_TUNING_MIN_CLIENTS", 20, min_value=1, max_value=500)
 SLEIGH_SEARCH_ENABLED = bool(_env_int("NOEL_SLEIGH_SEARCH_ENABLED", 1, min_value=0, max_value=1))
-SLEIGH_SEARCH_MAX_K = _env_int("NOEL_SLEIGH_SEARCH_MAX_K", 8, min_value=2, max_value=20)
+SLEIGH_SEARCH_MAX_K = _env_int("NOEL_SLEIGH_SEARCH_MAX_K", 8, min_value=2, max_value=2000)
 SLEIGH_SEARCH_MAX_CANDIDATES = _env_int("NOEL_SLEIGH_SEARCH_MAX_CANDIDATES", 4, min_value=2, max_value=8)
 SLEIGH_SEARCH_DIST_WEIGHT = float(os.getenv("NOEL_SLEIGH_SEARCH_DIST_WEIGHT", "0.015"))
-SLEIGH_SEARCH_DROP_WEIGHT = float(os.getenv("NOEL_SLEIGH_SEARCH_DROP_WEIGHT", "0.0015"))
+SLEIGH_SEARCH_DROP_WEIGHT = float(os.getenv("NOEL_SLEIGH_SEARCH_DROP_WEIGHT", "1.0"))
 SLEIGH_SEARCH_FLEET_WEIGHT = float(os.getenv("NOEL_SLEIGH_SEARCH_FLEET_WEIGHT", "2.0"))
 MODE_MIX_SEARCH_ENABLED = bool(_env_int("NOEL_MODE_MIX_SEARCH_ENABLED", 1, min_value=0, max_value=1))
 MODE_MIX_SEARCH_MAX_CANDIDATES = _env_int("NOEL_MODE_MIX_SEARCH_MAX_CANDIDATES", 8, min_value=3, max_value=24)
@@ -370,10 +370,7 @@ def _sanitize_avatar_hint(value: str | None) -> str | None:
 
 
 def _max_clients_for_radius(radius_km: float) -> int:
-    area_km2 = float(np.pi) * float(radius_km) * float(radius_km)
-    capacity = int(area_km2 * SEARCH_CLIENT_DENSITY_PER_KM2)
-    capacity = max(SEARCH_MIN_CLIENTS, capacity)
-    return min(SEARCH_MAX_CLIENTS, capacity)
+    return SEARCH_MAX_CLIENTS
 
 
 def _validate_search_area_constraints(payload: dict) -> tuple[float | None, int | None]:
@@ -2948,12 +2945,13 @@ def _sleigh_search_score(
         return None
     dropped_count = len(results.get("dropped_points", [])) if isinstance(results.get("dropped_points", []), list) else 0
     sleigh_cost = max(0.0, float(mission.get("sleigh_cost", 0.0)))
-    score = (
+    missed_delivery_cost = float(SLEIGH_SEARCH_DROP_WEIGHT) * float(max(0, int(drop_penalty))) * float(dropped_count)
+    operating_cost = (
         float(total_time_s)
         + float(SLEIGH_SEARCH_DIST_WEIGHT) * max(0.0, float(total_dist_m))
-        + float(SLEIGH_SEARCH_DROP_WEIGHT) * float(max(0, int(drop_penalty))) * float(dropped_count)
         + float(SLEIGH_SEARCH_FLEET_WEIGHT) * float(max(1, int(num_vehicles))) * sleigh_cost
     )
+    score = operating_cost + missed_delivery_cost
     return float(score)
 
 
@@ -3012,10 +3010,10 @@ def _select_sleigh_count_with_halving(
     capacity = max(1, int(strategy.get("vehicle_capacity", 1)))
     total_weight = float(df[df["id"] != 0]["poids_colis"].sum()) if "poids_colis" in df.columns else 0.0
     k_min_capacity = max(1, int(math.ceil(total_weight / float(capacity)))) if total_weight > 0 else 1
+    k_search_target = max(k_base, int(SLEIGH_SEARCH_MAX_K), k_min_capacity)
     k_upper = min(
-        int(SLEIGH_SEARCH_MAX_K),
         int(num_clients),
-        max(k_min_capacity, k_base + 2),
+        k_search_target,
     )
     if max_vehicles_cap is not None:
         k_upper = min(int(k_upper), int(max_vehicles_cap))

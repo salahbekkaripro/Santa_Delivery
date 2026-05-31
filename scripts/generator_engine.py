@@ -855,9 +855,7 @@ def generate_new_zone(
         if normalized_mode == "multimodal":
             matrices = _compute_multimodal_matrices(mode_graphs, mode_node_ids)
         else:
-            selected_graph = mode_graphs[requested_modes[0]]
-            selected_nodes = mode_node_ids[requested_modes[0]]
-            matrices = _compute_matrices_local(selected_graph, selected_nodes)
+            matrices = mode_mats_raw[requested_modes[0]]
 
         durations = matrices["travel_time"]
         distances = matrices["length"]

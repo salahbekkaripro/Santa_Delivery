@@ -1,0 +1,108 @@
+\documentclass[a4paper, 12pt, twoside]{article}
+\usepackage[utf8]{inputenc} % LaTeX, comprend les accents !
+\usepackage[T1]{fontenc}
+\usepackage[francais]{babel}
+\usepackage{lmodern}
+\usepackage{ae,aecompl}
+\usepackage[top=2.5cm, bottom=2cm,
+			left=3cm, right=2.5cm,
+			headheight=15pt]{geometry}
+\usepackage{graphicx}
+\usepackage{eso-pic} % Nécessaire pour mettre des images en arrière plan
+\usepackage{array}
+\usepackage{hyperref}
+\input{pagedegarde}
+
+
+\title{Titre de mon projet}
+
+\datedebut{jour mois anéée}
+\datefin{jour mois année}
+
+
+\membrea{Nom  prénom étudiant 1}
+\membreb{Nom  prénom étudiant 2}
+
+
+
+\begin{document}
+\pagedegarde
+\section*{Remerciements}
+Je remercie mon chien, mon chat, mon cousin...
+\newpage
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+\paragraph{Attention !} Vous devez impérativement utiliser ce template pour réaliser votre rapport de projet d'harmonisation. Vous n'avez pas le droit de changer le format (A4), la police (12pt), l'interligne ou les marges.\\
+
+Voici un exemple pour citer un ouvrage ou un site web \cite{cat} et un exemple de tableau :
+
+\begin{table}[h]
+	\begin{center}
+		\begin{tabular}{|c|c|}
+			\hline
+			• & • \\
+			\hline
+			• & • \\
+			\hline
+		\end{tabular}
+	\end{center}
+	\label{referencedutableau}
+
+	\caption{Titre du tableau : légende du tableau}
+\end{table}
+Et ne jamais oublier que lorsqu'on place un tableau, on doit l'utiliser comme ici avec le tableau Table \ref{referencedutableau}. et on fait la meme chose avec une image, comme avec la Figure \ref{Tux}.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics{Tux.png}
+	\caption{Tux, le pingouin}
+	\label{Tux}
+\end{figure}
+
+
+
+\section{Environnement de travail}
+\section{Description du projet et objectifs}
+\subsection{Exemple de sous section}
+\subsection{Un autre exemple de sous section}
+
+\section{Bibliothèques, Outils et technologies}
+\section{Travail réalisé}
+\section{Difficultés rencontrées}
+\section{Bilan}
+\subsection{Conclusion}
+\subsection{Perspectives}
+
+
+
+\newpage
+\section{Bibliographie}
+\renewcommand{\bibname}{}
+\renewcommand{\refname}{}
+\begin{thebibliography}{2}
+	\bibitem[label]{cle} Auteur, TITRE, editeur, annee
+	\bibitem[LAM94]{lam1} L. LAMPORT, {\it \LaTeX : A Document preparation system, Addison-Wesley, 1994}
+\end{thebibliography}
+
+\newpage
+\section{Webographie}
+\begin{thebibliography}{2}
+	\bibitem[CAT]{cat} \url{savoircoder.fr/cat}
+\end{thebibliography}
+
+
+\newpage
+\section{Annexes}
+\appendix
+\makeatletter
+\def\@seccntformat#1{Annexe~\csname the#1\endcsname:\quad}
+\makeatother
+\section{Cahier des charges}
+\section{Exemple d'exécution du projet}
+\section{Manuel utilisateur}
+
+
+\end{document}

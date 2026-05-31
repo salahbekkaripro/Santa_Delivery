@@ -1,0 +1,1674 @@
+\documentclass[a4paper, 12pt, twoside]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[top=2.5cm, bottom=2cm,
+            left=3cm, right=2.5cm,
+            headheight=15pt]{geometry}
+\usepackage{graphicx}
+\usepackage{eso-pic}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{microtype}
+\setlength{\emergencystretch}{3em}
+\input{pagedegarde}
+
+\lstset{
+  basicstyle=\footnotesize\ttfamily,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  breaklines=true,
+  frame=single,
+  numbers=none,
+}
+
+\title{Op\'{e}ration No\"{e}l}
+
+\datedebut{janvier 2025}
+\datefin{mai 2025}
+
+\membrea{Bekkaripro Salah}
+\membreb{}
+
+\begin{document}
+\pagedegarde
+
+\section*{Remerciements}
+Je remercie les enseignants du d\'{e}partement MIAGE de l'Universit\'{e} Paris Nanterre pour
+l'encadrement de ce projet, ainsi que les \'{e}quipes OpenStreetMap, Open-Meteo et ADEME pour la
+mise \`{a} disposition gratuite de leurs donn\'{e}es et APIs.
+
+\newpage
+\tableofcontents
+\newpage
+
+%=======================================================
+\section{Introduction}
+%=======================================================
+
+Ce rapport pr\'{e}sente le projet \textbf{Op\'{e}ration No\"{e}l}, une plateforme web d'optimisation
+logistique urbaine d\'{e}velopp\'{e}e dans le cadre du cours Graphes et Open Data de la Licence MIAGE.
+
+\subsection{Probl\'{e}matique}
+
+La probl\'{e}matique retenue est la suivante~:
+\begin{quote}
+\emph{Comment exploiter les graphes et l'open data pour organiser des tourn\'{e}es de livraison
+du P\`{e}re No\"{e}l r\'{e}alistes, optimis\'{e}es et adaptables aux contraintes du terrain~?}
+\end{quote}
+
+Cette question m\^{e}le deux dimensions du cours~: les \textbf{graphes}, car le r\'{e}seau routier
+est mod\'{e}lis\'{e} sous forme de n\oe uds et d'ar\^{e}tes pond\'{e}es, et l'\textbf{open data},
+car les tourn\'{e}es sont construites \`{a} partir de donn\'{e}es r\'{e}elles comme OpenStreetMap,
+la m\'{e}t\'{e}o ou le relief. Le probl\`{e}me sous-jacent est un VRPTW (Vehicle Routing Problem
+with Time Windows), NP-difficile~: le nombre de solutions possibles cro\^{i}t tr\`{e}s vite avec
+le nombre de clients, ce qui rend une recherche exhaustive impraticable.
+
+\subsection{Approche retenue}
+
+Le projet combine trois couches~:
+\begin{enumerate}
+  \item Des donn\'{e}es \textbf{Open Data} issues de plusieurs sources publiques
+        (OpenStreetMap, Open-Meteo, Overpass, ADEME). OSRM n'est conserv\'{e}
+        que comme outil historique pour le jeu de r\'{e}f\'{e}rence.
+  \item Un \textbf{solveur de recherche op\'{e}rationnelle} (Google OR-Tools) configurable par profil
+        de strat\'{e}gie.
+  \item Des \textbf{algorithmes de graphes} impl\'{e}ment\'{e}s de bout en bout (Dijkstra, A*,
+        Floyd-Warshall, K-Means, Louvain, centralit\'{e}), expos\'{e}s \`{a} la fois comme outils de
+        calcul et comme supports p\'{e}dagogiques visualisables.
+\end{enumerate}
+
+%=======================================================
+\section{Environnement de travail}
+%=======================================================
+
+\subsection{Stack technique}
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|l|l|}
+      \hline
+      \textbf{Composant} & \textbf{Technologie} \\
+      \hline
+      Syst\`{e}me & Linux Ubuntu 22.04 LTS \\
+      Backend & Python 3.10, FastAPI, Uvicorn \\
+      Solveur & Google OR-Tools (\texttt{ortools}) \\
+      Graphes & OSMnx $\geq$2.0.0, NetworkX \\
+      Donn\'{e}es & NumPy, Pandas \\
+      Frontend & Next.js 14, TypeScript, React 18 \\
+      Cartographie & Leaflet + React-Leaflet, Mapbox GL \\
+      Base de donn\'{e}es & SQLite (module standard Python) \\
+      D\'{e}ploiement & Docker Compose \\
+      Tests & Pytest (20 fichiers) + Playwright (E2E) \\
+      Versionnement & Git \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Stack technique du projet}
+  \label{tab:stack}
+\end{table}
+
+\subsection{Architecture g\'{e}n\'{e}rale}
+
+Le projet est s\'{e}par\'{e} en deux services Docker~:
+\begin{itemize}
+  \item \textbf{Backend} (port 8000)~: FastAPI expose 70 routes REST et 2 WebSockets.
+        Toute la logique m\'{e}tier (g\'{e}n\'{e}ration de zone, calcul de matrices, solveur VRP,
+        algorithmes de graphes, mod\`{e}le d'apprentissage) est concentr\'{e}e dans
+        \texttt{backend/app/services.py} et les scripts Python.
+  \item \textbf{Frontend} (port 3000)~: Next.js 14 sert l'interface web. La cartographie
+        est rendue c\^{o}t\'{e} client avec Leaflet. Les requ\^{e}tes API utilisent TanStack Query
+        pour la mise en cache et la synchronisation.
+\end{itemize}
+
+\subsection{M\'{e}thodologie de d\'{e}veloppement assist\'{e} par IA}
+
+Le d\'{e}veloppement a \'{e}t\'{e} assist\'{e} par plusieurs agents IA~: Claude Code pour
+l'organisation et la coh\'{e}rence d'ensemble, Gemini CLI pour les parties math\'{e}matiques
+(score, matrices, heuristiques) et Codex pour l'impl\'{e}mentation, les tests et les
+corrections. Ces outils ont acc\'{e}l\'{e}r\'{e} le travail, mais les choix finaux, les tests
+et l'int\'{e}gration sont rest\'{e}s sous contr\^{o}le du d\'{e}veloppeur.
+
+\subsection{Organisation des fichiers}
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|l|l|}
+      \hline
+      \textbf{R\'{e}pertoire} & \textbf{Contenu} \\
+      \hline
+      \texttt{backend/app/} & API REST, logique m\'{e}tier, persistance SQLite \\
+      \texttt{scripts/} & G\'{e}n\'{e}ration OSM, algorithmes de graphes, benchmark \\
+      \texttt{final\_scripts/} & Solveur VRPTW principal \\
+      \texttt{core\_data/} & Graphe de r\'{e}f\'{e}rence (paris5), matrices, donn\'{e}es clients \\
+      \texttt{frontend/app/} & Pages Next.js (solver, mission, versus, leaderboard) \\
+      \texttt{tests/} & Suite pytest + Playwright \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Organisation du d\'{e}p\^{o}t}
+  \label{tab:structure}
+\end{table}
+
+\subsection{Lien du d\'{e}p\^{o}t}
+
+Le code source complet du projet est versionn\'{e} sur GitHub~:
+\url{https://github.com/salahbekkaripro/Santa_Delivery}.
+
+%=======================================================
+\section{Description du projet et objectifs}
+%=======================================================
+
+\subsection{Objectif}
+
+Op\'{e}ration No\"{e}l est une application web ludique o\`{u} l'utilisateur joue le r\^{o}le d'un
+logisticien du P\`{e}re No\"{e}l. Il g\'{e}n\`{e}re une mission de livraison dans n'importe quelle
+ville du monde, peut tenter de construire manuellement ses tourn\'{e}es, puis compare ses d\'{e}cisions
+\`{a} celles d'un solveur d'optimisation. Un score et un rang r\'{e}compensent l'efficacit\'{e}
+de la solution produite.
+
+\subsection{P\'{e}rim\`{e}tre g\'{e}ographique}
+
+L'application est mondiale~: l'utilisateur peut saisir n'importe quelle adresse (Paris, Tokyo,
+Montr\'{e}al, etc.). Un jeu de donn\'{e}es de r\'{e}f\'{e}rence pr\'{e}-calcul\'{e}, nomm\'{e}
+\texttt{paris5} dans le d\'{e}p\^{o}t, couvre une zone parisienne de test avec un d\'{e}p\^{o}t
+central et 10 clients.
+
+\subsection{Fonctionnalit\'{e}s impl\'{e}ment\'{e}es}
+
+\begin{enumerate}
+  \item G\'{e}n\'{e}ration d'une mission~: t\'{e}l\'{e}chargement OSM, s\'{e}lection de clients,
+        calcul des matrices de co\^{u}t.
+  \item R\'{e}solution automatique par solveur VRPTW (3 profils disponibles dans l'interface,
+        7 dans le backend).
+  \item Mode de jeu humain~: l'utilisateur choisit ses it\'{e}raires segment par segment.
+  \item Incidents dynamiques~: routes bloqu\'{e}es, re-planification automatique.
+  \item Analyse structurelle du graphe~: centralit\'{e}, robustesse, secteurs de livraison.
+  \item Visualisation p\'{e}dagogique~: Dijkstra, A* bidirectionnel, Floyd-Warshall pas-\`{a}-pas.
+  \item Score et classement~: 5 rangs (S, A, B, C, D).
+  \item Mode versus exp\'{e}rimental~: duel en temps r\'{e}el entre deux joueurs (WebSockets).
+  \item Recommandation contextuelle~: suggestion du profil IA le plus adapt\'{e} selon
+        l'historique disponible.
+\end{enumerate}
+
+\subsection{Choix de p\'{e}rim\`{e}tre}
+
+Au d\'{e}but du projet, l'objectif \'{e}tait de d\'{e}velopper en parall\`{e}le de nombreuses
+fonctionnalit\'{e}s~: solveur, mode humain, versus, social, campagne, classement et apprentissage.
+La r\'{e}alisation a montr\'{e} que le c\oe ur du sujet Graphes et Open Data se trouvait surtout
+dans la g\'{e}n\'{e}ration des graphes, le calcul des matrices, les contraintes de tourn\'{e}es
+et l'optimisation. Les modules sociaux, versus et campagne ont donc \'{e}t\'{e} conserv\'{e}s
+comme extensions secondaires~: ils existent dans l'application, mais ils ne sont pas consid\'{e}r\'{e}s
+comme le c\oe ur finalis\'{e} du projet.
+
+%=======================================================
+\section{Parcours utilisateur sur le site}
+%=======================================================
+
+Cette section d\'{e}crit le parcours concret sur l'interface, en liant chaque action \`{a} la
+cha\^{i}ne technique qu'elle d\'{e}clenche.
+
+\subsection{\'{E}tape 1 -- Saisie de l'adresse}
+
+L'utilisateur acc\`{e}de \`{a} la page \textbf{Solveur de tourn\'{e}es}. Il tape librement une adresse
+dans un champ de texte avec auto-compl\'{e}tion~: chaque frappe d\'{e}clenche (apr\`{e}s un
+d\'{e}lai de 280\,ms) un appel \`{a} l'\textbf{API Mapbox Geocoding}
+(\texttt{https://api.mapbox.com/geocoding/v5/mapbox.places/}), qui renvoie
+des suggestions de lieux (adresses, quartiers, POI).
+
+Lorsqu'une suggestion est s\'{e}lectionn\'{e}e, les coordonn\'{e}es GPS (latitude, longitude) du
+point central sont v\'{e}rouill\'{e}es. Une mini-carte Leaflet affiche imm\'{e}diatement le cercle
+de la zone de recherche, dont le rayon est r\'{e}glable de 0,5 \`{a} 30\,km.
+
+\subsection{\'{E}tape 2 -- Configuration de la mission}
+
+L'utilisateur param\`{e}tre~:
+\begin{itemize}
+  \item Le nombre de colis \`{a} livrer (8 \`{a} 2\,000).
+  \item Le budget total et le co\^{u}t par tra\^{i}neau.
+  \item Le \textbf{profil IA}~: trois choix sont pr\'{e}sent\'{e}s dans l'interface~:
+    \textbf{Express} (vitesse maximale, bonus +2\,pts), \textbf{\'{E}colo} (distance minimale,
+    bonus +3\,pts), \textbf{Prudent} (marges de s\'{e}curit\'{e}, bonus +4\,pts). Ces profils
+    correspondent \`{a} trois des sept pr\'{e}sets d\'{e}finis dans le backend~; les autres
+    (\textit{Agressive}, \textit{Opportuniste}, \textit{Championne}, \textit{Championne Secteurs})
+    ne sont pas expos\'{e}s dans l'UI actuelle.
+  \item Des options avanc\'{e}es~: incidents al\'{e}atoires, relief SRTM, CO2 ADEME, limite
+        de tra\^{i}neaux.
+\end{itemize}
+
+\subsection{\'{E}tape 3 -- G\'{e}n\'{e}ration de la mission (pipeline c\^{o}t\'{e} serveur)}
+
+Quand l'utilisateur lance le calcul de la tourn\'{e}e, le frontend
+envoie deux requ\^{e}tes successives au backend~:
+
+\paragraph{Requ\^{e}te 1 --- Cr\'{e}ation de mission.}
+Le backend ex\'{e}cute le pipeline suivant (\texttt{scripts/generator\_engine.py})~:
+
+\begin{enumerate}
+  \item \textbf{T\'{e}l\'{e}chargement OSM}~: OSMnx appelle les APIs Nominatim et Overpass pour
+        t\'{e}l\'{e}charger le r\'{e}seau routier de la zone d\'{e}finie par le point central et
+        le rayon. Le graphe est un MultiDiGraph dirig\'{e} repr\'{e}sentant les intersections
+        (n\oe uds) et les tron\c{c}ons de voie (ar\^{e}tes).
+  \item \textbf{Annotation des ar\^{e}tes}~: chaque ar\^{e}te re\c{c}oit quatre attributs calcul\'{e}s
+        localement \`{a} partir de la g\'{e}om\'{e}trie OSM~: temps de trajet, distance, \'{e}missions
+        CO2 (ou facteur ADEME si l'option est activ\'{e}e), et score de risque selon le type de voie.
+  \item \textbf{S\'{e}lection des points}~: un d\'{e}p\^{o}t central et $n$ clients sont s\'{e}lectionn\'{e}s
+        parmi les n\oe uds du graphe. Les noms des clients sont enrichis avec de vrais noms
+        d'\'{e}tablissements r\'{e}cup\'{e}r\'{e}s via l'API Overpass (commerces, \'{e}quipements).
+  \item \textbf{Calcul des matrices}~: pour chaque paire de points, NetworkX calcule le plus court
+        chemin sur le graphe OSM annot\'{e}. Cela produit 5 matrices $n \times n$~: temps, distance,
+        CO2, risque, et une matrice composite pond\'{e}r\'{e}e.
+  \item \textbf{M\'{e}t\'{e}o}~: la condition m\'{e}t\'{e}orologique choisie (ou r\'{e}elle via
+        Open-Meteo) est appliqu\'{e}e comme multiplicateur sur la matrice de temps.
+  \item \textbf{Congestion horaire}~: si une heure de d\'{e}part est sp\'{e}cifi\'{e}e, un facteur
+        de congestion (ex. 1,8$\times$ \`{a} 18h) est appliqu\'{e}.
+\end{enumerate}
+
+L'interface affiche en temps r\'{e}el les \'{e}tapes de chargement (\og Chargement du graphe OSM \fg{},
+\og G\'{e}n\'{e}ration des points \fg{}, \og Calcul de la matrice \fg{}, etc.).
+
+\paragraph{Requ\^{e}te 2 --- R\'{e}solution VRPTW.}
+Avec les matrices calcul\'{e}es, le backend appelle OR-Tools pour r\'{e}soudre le VRPTW. La
+strat\'{e}gie de r\'{e}solution (premi\`{e}re solution, m\'{e}taheuristique, limite de temps) est
+s\'{e}lectionn\'{e}e automatiquement selon le profil IA choisi.
+
+\subsection{\'{E}tape 4 -- Affichage des r\'{e}sultats}
+
+La carte Leaflet affiche les tourn\'{e}es optimis\'{e}es, color\'{e}es par tra\^{i}neau. L'utilisateur
+voit~:
+\begin{itemize}
+  \item Le \textbf{score} (0--100) avec ses composantes (temps, CO2, budget, couverture) et
+        le rang obtenu.
+  \item Les KPIs~: temps total, distance, CO2 \'{e}conom\'{e}, nombre de tra\^{i}neaux utilis\'{e}s,
+        gain par rapport \`{a} la solution na\"ive.
+  \item Le \textbf{d\'{e}tail des tourn\'{e}es}~: ordre des clients par tra\^{i}neau, avec ETA
+        (heure d'arriv\'{e}e estim\'{e}e) et poids charg\'{e}.
+  \item La \textbf{recherche automatique du nombre de tra\^{i}neaux}~: le solveur teste
+        plusieurs valeurs de $k$ (nombre de v\'{e}hicules) et retient celle qui maximise
+        le meilleur compromis entre co\^{u}t op\'{e}rationnel et clients non livr\'{e}s.
+\end{itemize}
+
+\subsection{\'{E}tape 5 -- Options avanc\'{e}es}
+
+Depuis la page de r\'{e}sultats, l'utilisateur peut~:
+\begin{itemize}
+  \item \textbf{Simuler un incident}~: une route al\'{e}atoire est bloqu\'{e}e et le solveur
+        re-planifie en temps r\'{e}el.
+  \item \textbf{Acc\'{e}der aux m\'{e}triques du graphe}~: densit\'{e}, composantes fortement
+        connexes, top-5 des n\oe uds critiques par centralit\'{e} d'interm\'{e}diarit\'{e}.
+  \item \textbf{Consulter le d\'{e}bogueur de strat\'{e}gie}~: profil utilis\'{e}, param\`{e}tres
+        OR-Tools, statut du solveur.
+\end{itemize}
+
+%=======================================================
+\section{Architecture fonctionnelle du site}
+%=======================================================
+
+Au-del\`{a} du solveur, le projet est organis\'{e} comme une plateforme compl\`{e}te. Chaque page
+du site correspond \`{a} un usage distinct, mais toutes reposent sur les m\^{e}mes briques~:
+missions persist\'{e}es, graphes OSM, matrices de co\^{u}t, scores et comptes joueurs.
+
+Les modules principaux sont~: \textbf{Solveur} (configuration et lancement), \textbf{Mission}
+(carte, r\'{e}sultats, d\'{e}briefing), \textbf{Mode humain} (construction manuelle de tourn\'{e}es),
+\textbf{Explore} (visualisation Dijkstra, A*, Floyd-Warshall, 2-opt, OR-opt, ILS),
+\textbf{Data} (sources open data et caches) et \textbf{Leaderboard} (scores solo).
+
+Les modules \textbf{Versus}, \textbf{Social}, \textbf{Authentification} et \textbf{Campagne}
+compl\`{e}tent la plateforme, mais ils sont secondaires par rapport au sujet principal.
+Le Versus et la Campagne sont donc pr\'{e}sent\'{e}s comme des extensions exp\'{e}rimentales~:
+ils rendent le site plus vivant, mais le noyau finalis\'{e} reste la partie graphe,
+open data et solveur.
+
+%=======================================================
+\section{Sources Open Data et services externes utilis\'{e}s}
+%=======================================================
+
+\subsection{Connexion entre les APIs}
+
+Le sch\'{e}ma ci-dessous (reproduit de la page \textit{Data} du site) illustre le flux de donn\'{e}es
+entre les APIs externes et les modules internes~:
+
+\begin{center}
+\begin{tabular}{lcl}
+  \textbf{Source ou service} & $\rightarrow$ & \textbf{Donn\'{e}e produite} \\
+  \hline
+  Mapbox Geocoding & $\rightarrow$ & Coordonn\'{e}es GPS du point central \\
+  OpenStreetMap (OSMnx) & $\rightarrow$ & Graphe routier (n\oe uds + ar\^{e}tes) \\
+  Overpass API & $\rightarrow$ & Noms r\'{e}els des commerces (clients) \\
+  Open-Meteo & $\rightarrow$ & Facteur m\'{e}t\'{e}o $\times$ matrice de temps \\
+  ADEME ImpactCO2 & $\rightarrow$ & Facteur CO2 en g/km (optionnel) \\
+  \textit{(calcul local)} & $\rightarrow$ & Matrices $n \times n$ via NetworkX \\
+  \hline
+\end{tabular}
+\end{center}
+
+\subsection{OpenStreetMap via OSMnx}
+
+C'est la source centrale. OSMnx interroge l'API Nominatim (g\'{e}ocodage) et l'API Overpass
+(r\'{e}seau routier) pour t\'{e}l\'{e}charger le graphe de la zone demand\'{e}e. Deux modes de
+t\'{e}l\'{e}chargement sont impl\'{e}ment\'{e}s~:
+\begin{itemize}
+  \item par nom de lieu (ex. \og Le Marais, Paris \fg{})~;
+  \item par point central + rayon en m\`{e}tres (mode pr\'{e}f\'{e}r\'{e} quand les coordonn\'{e}es
+        GPS sont connues via Mapbox).
+\end{itemize}
+En cas d'\'{e}chec du t\'{e}l\'{e}chargement par nom, un fallback automatique tente le t\'{e}l\'{e}chargement
+par point. Le graphe est sauvegard\'{e} localement au format GraphML pour \'{e}viter de re-t\'{e}l\'{e}charger.
+
+\subsection{API Overpass (noms des clients)}
+
+Apr\`{e}s la s\'{e}lection des n\oe uds du graphe comme points de livraison, l'application enrichit
+leurs noms en interrogeant l'API Overpass dans un rayon de 1\,500\,m autour du centre. Les noms
+r\'{e}els d'\'{e}tablissements OSM (commerces, \'{e}quipements publics, sites touristiques) sont
+utilis\'{e}s en priorit\'{e}. Trois endpoints Overpass sont test\'{e}s successivement en cas de
+d\'{e}faillance.
+
+\subsection{API Open-Meteo (m\'{e}t\'{e}o)}
+
+La m\'{e}t\'{e}o r\'{e}elle est r\'{e}cup\'{e}r\'{e}e gratuitement et sans cl\'{e} via Open-Meteo.
+Les codes WMO renvoy\'{e}s (0 = clair, 61--65 = pluie, 71--75 = neige, 95 = orage) sont convertis
+en facteur multiplicatif appliqu\'{e} sur la matrice des temps de trajet~: $\times 1{,}0$ par
+beau temps, $\times 1{,}3$ sous la pluie, $\times 2{,}0$ sous la neige, $\times 2{,}5$ par
+temps d'orage.
+
+\subsection{API ADEME ImpactCO2 (facteurs CO2)}
+
+Lorsque l'option \og CO2 ADEME \fg{} est activ\'{e}e, le facteur d'\'{e}mission CO2 par
+kilom\`{e}tre est r\'{e}cup\'{e}r\'{e} dynamiquement via l'API ADEME ImpactCO2
+(\texttt{https://impactco2.fr/api/v1/transport}). L'utilisateur peut choisir entre voiture
+thermique (120\,g/km), voiture \'{e}lectrique ou v\'{e}lo. Sans cette option, un facteur
+local par d\'{e}faut est utilis\'{e} (v\'{e}hicule : 120\,g/km, v\'{e}lo : 8\,g/km, marche : 0).
+
+\subsection{API Mapbox Geocoding (auto-compl\'{e}tion)}
+
+L'auto-compl\'{e}tion de l'adresse dans le formulaire de l'interface utilise l'API
+Mapbox Geocoding. Si le token Mapbox est absent, la saisie libre reste fonctionnelle
+(la zone est transmise telle quelle \`{a} OSMnx).
+
+\subsection{Donn\'{e}es de r\'{e}f\'{e}rence pr\'{e}-calcul\'{e}es}
+
+Pour le jeu de donn\'{e}es initial (5\`{e}me arrondissement de Paris, 10 clients), la matrice
+de temps a \'{e}t\'{e} g\'{e}n\'{e}r\'{e}e via l'\textbf{API publique OSRM}
+\url{http://router.project-osrm.org/table/v1/driving/} et sauvegard\'{e}e dans
+\texttt{core\_data/live\_time\_matrix.npy}. Pour toutes les missions dynamiques g\'{e}n\'{e}r\'{e}es
+depuis l'interface, les matrices sont calcul\'{e}es \textbf{localement} \`{a} partir du graphe OSMnx,
+sans appel OSRM.
+
+%=======================================================
+\section{Biblioth\`{e}ques, Outils et technologies}
+%=======================================================
+
+\subsection{Backend -- Python}
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|l|l|}
+      \hline
+      \textbf{Biblioth\`{e}que} & \textbf{R\^{o}le} \\
+      \hline
+      \texttt{FastAPI} & Framework HTTP : routes REST et WebSockets \\
+      \texttt{uvicorn[standard]} & Serveur ASGI \\
+      \texttt{Pydantic v2} & Validation des entr\'{e}es (mod\`{e}les de requ\^{e}te/r\'{e}ponse) \\
+      \texttt{ortools} & Solveur VRPTW de Google \\
+      \texttt{osmnx} $\geq$2.0.0 & T\'{e}l\'{e}chargement et manipulation des graphes OSM \\
+      \texttt{networkx} & Algorithmes de graphes (SCC, Louvain, centralit\'{e}, etc.) \\
+      \texttt{numpy} & Matrices de co\^{u}t et calculs num\'{e}riques \\
+      \texttt{pandas} & Lecture et \'{e}criture des CSV de livraisons \\
+      \texttt{requests} & Appels HTTP (Open-Meteo, Overpass, ADEME) \\
+      \texttt{shapely} & Enveloppes convexes pour les secteurs Louvain \\
+      \texttt{sqlite3} & Base de donn\'{e}es relationnelle embarqu\'{e}e \\
+      \texttt{pytest} + \texttt{httpx} & Tests unitaires et d'int\'{e}gration \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Biblioth\`{e}ques Python (fichier \texttt{requirements.txt})}
+  \label{tab:python-libs}
+\end{table}
+
+\subsection{Frontend -- TypeScript / Next.js}
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|l|l|l|}
+      \hline
+      \textbf{Biblioth\`{e}que} & \textbf{Version} & \textbf{R\^{o}le} \\
+      \hline
+      \texttt{next} & \textasciicircum14.2 & Framework React SSR \\
+      \texttt{react} & \textasciicircum18.3 & Rendu UI \\
+      \texttt{typescript} & \textasciicircum5.6 & Typage statique \\
+      \texttt{@tanstack/react-query} & \textasciicircum5.59 & Cache et synchro des requ\^{e}tes API \\
+      \texttt{leaflet} + \texttt{react-leaflet} & 1.9/4.2 & Carte interactive (tourn\'{e}es, markers) \\
+      \texttt{mapbox-gl} & \textasciicircum3.21 & Tuiles de fond de carte \\
+      \texttt{recharts} & \textasciicircum3.8 & Graphiques de comparaison KPI \\
+      \texttt{next-auth} & \textasciicircum4.24 & Authentification OAuth \\
+      \texttt{@playwright/test} & \textasciicircum1.54 & Tests E2E \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{D\'{e}pendances frontend (\texttt{frontend/package.json})}
+  \label{tab:frontend-libs}
+\end{table}
+
+%=======================================================
+\section{Travail r\'{e}alis\'{e}}
+%=======================================================
+
+\subsection{Construction du graphe}
+
+\subsubsection{Structure}
+
+Le graphe routier est un \textbf{networkx.MultiDiGraph dirig\'{e}} charg\'{e} depuis un fichier
+GraphML (format standard OSM). Chaque n\oe ud est une intersection du r\'{e}seau routier avec
+ses coordonn\'{e}es GPS. Chaque ar\^{e}te est un tron\c{c}on de voie avec ses attributs physiques
+(longueur, type de voie) enrichis par annotation~:
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|l|l|l|}
+      \hline
+      \textbf{Attribut} & \textbf{Unit\'{e}} & \textbf{Calcul} \\
+      \hline
+      \texttt{travel\_time} & secondes & longueur / vitesse (selon type de voie) \\
+      \texttt{co2\_g} & grammes & (longueur / 1000) $\times$ facteur CO2 du mode \\
+      \texttt{risk\_score} & sans unit\'{e} & (longueur / 1000) $\times$ facteur risque de la voie \\
+      \texttt{length} & m\`{e}tres & donn\'{e}e OSM ou haversine si absente \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Attributs calcul\'{e}s sur les ar\^{e}tes (\texttt{scripts/generator\_engine.py})}
+  \label{tab:edge-attrs}
+\end{table}
+
+Les facteurs de risque varient selon le type de voie~: motorway (1,8), residential (0,9),
+cycleway (0,55), footway (0,45). Les modes de transport configurent vitesse et CO2~:
+voiture (35\,km/h, 120\,g/km), v\'{e}lo (18\,km/h, 8\,g/km), marche (5\,km/h, 0\,g/km).
+
+\subsubsection{Graphe de r\'{e}f\'{e}rence (paris5)}
+
+Le jeu de donn\'{e}es pr\'{e}-calcul\'{e} couvre un quartier de Paris (\texttt{core\_data/paris5.graphml}).
+Ses m\'{e}triques structurelles sont document\'{e}es dans \texttt{core\_data/graph\_analysis\_soutenance.json}~:
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|l|c|}
+      \hline
+      N\oe uds & 124 \\
+      Ar\^{e}tes & 210 \\
+      Plus court chemin moyen & 13,485 \\
+      Diam\`{e}tre & 35 \\
+      Densit\'{e} & 0,01377 \\
+      Clustering moyen & 0,0685 \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{M\'{e}triques du graphe paris5}
+  \label{tab:graph-metrics}
+\end{table}
+
+\subsubsection{Les matrices de co\^{u}t}
+
+\`{A} partir du graphe annot\'{e}, plusieurs matrices carr\'{e}es $n \times n$ sont construites
+et sauvegard\'{e}es au format NumPy (\texttt{.npy}). $n$ est le nombre total de points,
+d\'{e}p\^{o}t inclus~; l'indice~0 est toujours le d\'{e}p\^{o}t. Le jeu de r\'{e}f\'{e}rence
+historique \texttt{core\_data/} contient directement les matrices temps et distance
+($n = 11$, d\'{e}p\^{o}t + 10 clients). Les missions g\'{e}n\'{e}r\'{e}es depuis l'interface
+produisent aussi les matrices CO2, risque et composite dans leur dossier de cache.
+
+\paragraph{Matrice de temps $T$ --- \texttt{live\_time\_matrix.npy}.}
+
+Chaque entr\'{e}e $T_{ij}$ est le \textbf{temps de trajet minimal en secondes} pour aller
+du point $i$ au point $j$ en suivant le plus court chemin pond\'{e}r\'{e} par
+\texttt{travel\_time} sur le graphe OSM annot\'{e}. Pour le jeu de r\'{e}f\'{e}rence,
+$T_{ij}$ varie de 13\,s (Boulangerie $\rightarrow$ Garage, distants de 87\,m) \`{a} 412\,s
+(D\'{e}p\^{o}t $\rightarrow$ H\^{o}tel de Ville, 2\,312\,m).
+
+La matrice est \textbf{asym\'{e}trique}~: $T_{ij} \neq T_{ji}$ en g\'{e}n\'{e}ral, car le
+graphe OSM est dirig\'{e} (sens uniques, vitesses diff\'{e}rentes selon le sens de circulation).
+Par exemple, $T_{0 \rightarrow 1} = 412$\,s mais $T_{1 \rightarrow 0} = 130$\,s.
+
+Le calcul de chaque temps d'ar\^{e}te (\texttt{\_annotate\_multimodal\_edges}) est~:
+\[
+  T^{\text{ar\^{e}te}} = \frac{\text{longueur (m)}}{\text{vitesse (m/s)}}
+\]
+La vitesse est~: la limite OSM (\texttt{maxspeed}) si disponible, sinon la vitesse par
+d\'{e}faut du type de voie (50\,km/h pour \texttt{tertiary}, 30\,km/h pour
+\texttt{residential}, etc.). La vitesse minimale est born\'{e}e \`{a} 0,8\,m/s pour
+\'{e}viter les valeurs nulles. Sur le jeu de r\'{e}f\'{e}rence, les vitesses implicites
+mesur\'{e}es varient entre 17 et 24\,km/h, coh\'{e}rent avec la congestion urbaine parisienne.
+
+\paragraph{Matrice de distances $D$ --- \texttt{matrix\_5eme.npy}.}
+
+Chaque entr\'{e}e $D_{ij}$ est la \textbf{distance en m\`{e}tres} du plus court chemin
+pond\'{e}r\'{e} par \texttt{length}. La matrice est aussi asym\'{e}trique~: le chemin le
+plus court en distance n'est pas n\'{e}cessairement le m\^{e}me que le chemin le plus court
+en temps. Sur le jeu de r\'{e}f\'{e}rence~: $D_{ij} \in [87\,\text{m},\; 2\,312\,\text{m}]$.
+
+Lorsqu'une ar\^{e}te OSM n'a pas d'attribut \texttt{length} valide, la longueur est
+calcul\'{e}e par la formule \textbf{haversine} \`{a} partir des coordonn\'{e}es des
+extr\'{e}mit\'{e}s.
+
+\paragraph{Matrice CO2 $K$ --- \texttt{co2\_matrix.npy}.}
+
+Chaque entr\'{e}e $K_{ij}$ est l'\textbf{\'{e}mission de CO2 en grammes} pour aller de
+$i$ \`{a} $j$. Elle est calcul\'{e}e par Dijkstra avec le poids \texttt{co2\_g},
+c'est-\`{a}-dire en cherchant le chemin le moins \'{e}metteur selon le mod\`{e}le CO2~:
+\[
+  K_{ij} = \sum_{\text{ar\^{e}tes}(i \to j)} \frac{\text{longueur\_ar\^{e}te (m)}}{1000}
+            \times f_{\text{CO2}}
+\]
+avec $f_{\text{CO2}} = 120{,}0$\,g/km par d\'{e}faut pour la voiture. En mode monomodal
+avec un facteur CO2 constant, cela revient souvent \`{a} minimiser la distance~:
+\[
+  K_{ij} = \frac{D_{ij}}{1000} \times f_{\text{CO2}}
+\]
+En mode multimodal, les chemins peuvent toutefois diff\'{e}rer, car le v\'{e}lo et la
+marche ont des facteurs d'\'{e}mission plus faibles que la voiture.
+Dans les missions dynamiques, cette matrice est sauvegard\'{e}e dans le dossier propre
+\`{a} la mission. Si l'option ADEME est activ\'{e}e, le facteur $f_{\text{CO2}}$ est
+r\'{e}cup\'{e}r\'{e} dynamiquement depuis l'API ImpactCO2 et peut diff\'{e}rer
+sensiblement de la valeur par d\'{e}faut.
+
+Cette matrice permet au solveur de tenir compte des \'{e}missions lorsque
+\texttt{optimization\_target = "composite"}. L'objectif \texttt{"distance"} peut aussi
+r\'{e}duire indirectement le CO2 en mode monomodal, car l'\'{e}mission est alors
+proportionnelle \`{a} la distance. Elle sert \'{e}galement au module d'analyse CO2 pour
+calculer le bilan environnemental de chaque tourn\'{e}e.
+
+\paragraph{Matrice de risque $R$ --- \texttt{risk\_matrix.npy}.}
+
+Chaque entr\'{e}e $R_{ij}$ est un \textbf{score de risque sans unit\'{e}} repr\'{e}sentant
+la dangerosit\'{e} de l'itin\'{e}raire. Pour chaque ar\^{e}te, le risque est pond\'{e}r\'{e}
+par la longueur et le type de voie~:
+\[
+  R^{\text{ar\^{e}te}} = \frac{\text{longueur (m)}}{1000} \times f_{\text{risk}}
+  \times f_{\text{oneway}}
+\]
+avec $f_{\text{oneway}} = 1{,}08$ si la voie est \`{a} sens unique et le mode est v\'{e}lo
+ou marche (d\'{e}passement interdit, risque accru). Les facteurs par type de voie vont de
+1,8 (autoroute) \`{a} 0,45 (chemin pi\'{e}ton), en passant par 0,9 (rue r\'{e}sidentielle).
+Cette matrice n'est pas utilis\'{e}e seule comme objectif~; elle est uniquement un
+composant de la matrice composite.
+
+\paragraph{Matrice composite $C$ --- \texttt{composite\_cost\_matrix.npy}.}
+
+C'est la matrice utilis\'{e}e par OR-Tools lorsque \texttt{optimization\_target = "composite"}.
+Elle combine les quatre pr\'{e}c\'{e}dentes en une seule mesure de co\^{u}t global.
+
+Avant la combinaison, chaque matrice est \textbf{normalis\'{e}e par sa m\'{e}diane}
+(fonction \texttt{\_robust\_scale})~:
+\[
+  \tilde{M}_{ij} = \frac{M_{ij}}{\text{m\'{e}d}(M^+)}
+\]
+o\`{u} $M^+$ d\'{e}signe les valeurs finies positives de $M$. La normalisation par la
+m\'{e}diane est plus robuste que la normalisation par le maximum~: elle n'est pas
+influenc\'{e}e par les rares paires tr\`{e}s \'{e}loign\'{e}es ou par des valeurs aberrantes.
+La matrice composite est ensuite~:
+\[
+  C_{ij} = w_t \cdot \tilde{T}_{ij} + w_d \cdot \tilde{D}_{ij}
+           + w_c \cdot \tilde{K}_{ij} + w_r \cdot \tilde{R}_{ij}
+\]
+avec $w_t = 0{,}55$, $w_d = 0{,}20$, $w_c = 0{,}15$, $w_r = 0{,}10$.
+Les poids sont normalis\'{e}s pour sommer \`{a} 1.
+
+Dans les missions dynamiques, la valeur composite guide OR-Tools vers les clients
+qui sont \`{a} la fois rapides,
+proches, peu polluants et peu risqu\'{e}s.
+
+\paragraph{Matrice d'incidents $T_{\text{inc}}$ --- \texttt{live\_time\_matrix\_incident.npy}.}
+
+Une sixi\`{e}me matrice est g\'{e}n\'{e}r\'{e}e dynamiquement lorsqu'un incident est
+simul\'{e} (\texttt{simulate\_incident\_replan()}). Elle est identique \`{a} $T$ sauf
+pour les ar\^{e}tes affect\'{e}es par l'incident, dont le temps est multipli\'{e} par le
+facteur de p\'{e}nalit\'{e} (1,5 par d\'{e}faut, configurable). Les effets en cascade
+peuvent \^{e}tre drastiques~: le tronçon Garage $\to$ Boulangerie (13\,s normalement)
+monte \`{a} 378\,s (+2\,808\,\%) quand l'ar\^{e}te interposée est bloqu\'{e}e et que
+le d\'{e}tour oblige \`{a} un long contournement. OR-Tools est relancé sur cette matrice
+modifi\'{e}e pour recalculer les tourn\'{e}es.
+
+\paragraph{Algorithme de construction (r\'{e}sum\'{e}).}
+
+Pour chaque source $i$, quatre Dijkstra sont ex\'{e}cut\'{e}s via
+\texttt{nx.single\_source\_dijkstra\_path\_length}~:
+un par m\'{e}trique (\texttt{travel\_time}, \texttt{length}, \texttt{co2\_g},
+\texttt{risk\_score}).
+Chaque matrice est initialis\'{e}e \`{a} $10^9$ (paires inaccessibles) et la diagonale
+\`{a} 0. Complexit\'{e} totale~: $O\bigl(n \times (V + E) \log V\bigr)$.
+
+La matrice composite est construite apr\`{e}s les quatre autres, par normalisation
+et combinaison lin\'{e}aire.
+
+\paragraph{Mode multimodal.}
+
+Quand \texttt{transport\_mode = "multimodal"}, les matrices sont calcul\'{e}es
+\emph{ind\'{e}pendamment} pour chaque mode (drive, bike, walk) puis fusionn\'{e}es
+par \textbf{minimum} pour chaque paire $(i, j)$~:
+\[
+  M^{\text{multi}}_{ij} = \min_{m \in \{\text{drive, bike, walk}\}} M^{(m)}_{ij}
+\]
+Si aller en v\'{e}lo de $i$ \`{a} $j$ est plus rapide qu'en voiture, c'est la valeur
+v\'{e}lo qui est retenue dans $T$, et la valeur v\'{e}lo (8\,g/km) dans $K$.
+Cela permet au solveur de proposer naturellement l'\'{e}co-mobilit\'{e} quand elle est
+avantageuse.
+
+\subsubsection{Ajustements post-construction}
+
+\begin{itemize}
+  \item \textbf{M\'{e}t\'{e}o}~: $T \leftarrow T \times \dfrac{f_{\text{m\'{e}t\'{e}o}}}{f_{\text{vitesse}}}$
+        (ex. $\times 2$ sous la neige). En cas de conditions s\'{e}v\`{e}res,
+        $\lfloor n/5 \rfloor$ indices al\'{e}atoires re\c{c}oivent une majoration
+        suppl\'{e}mentaire $\times 1{,}5$ (perturbations locales).
+  \item \textbf{Congestion horaire}~: $T \leftarrow T \times f_{\text{trafic}(h)}$
+        ($\times 1{,}7$ \`{a} 8h, $\times 1{,}8$ \`{a} 18h, $\times 1{,}0$ en heures creuses).
+  \item \textbf{Relief SRTM} (optionnel)~: les temps et distances sont ajust\'{e}s
+        en fonction du d\'{e}nivel\'{e} calcul\'{e} par le module \texttt{elevation\_engine}.
+\end{itemize}
+
+\subsection{Solveur VRPTW (Google OR-Tools)}
+
+\subsubsection{Principe de r\'{e}solution}
+
+Google OR-Tools est un solveur de recherche op\'{e}rationnelle open-source. Pour le VRPTW,
+il utilise un \textbf{RoutingModel} qui mod\'{e}lise le probl\`{e}me comme un graphe de d\'{e}cision~:
+\begin{itemize}
+  \item Chaque n\oe ud correspond \`{a} un client ou au d\'{e}p\^{o}t.
+  \item Les co\^{u}ts de transit entre n\oe uds sont fournis par des \textit{callbacks} (fonctions
+        Python qui lisent la matrice de co\^{u}t choisie).
+  \item Les contraintes (capacit\'{e}, fenêtres de temps, horizon maximal) sont d\'{e}clar\'{e}es
+        comme dimensions du mod\`{e}le.
+  \item Un \textit{drop penalty} p\'{e}nalise les clients non servis~; OR-Tools peut en d\'{e}poser
+        certains si la faisabilit\'{e} l'exige.
+\end{itemize}
+
+\subsubsection{Strat\'{e}gies disponibles}
+
+Cinq strat\'{e}gies de premi\`{e}re solution sont configur\'{e}es~:
+\begin{itemize}
+  \item \textbf{PATH\_CHEAPEST\_ARC}~: construit la solution en ajoutant l'arc le moins cher.
+  \item \textbf{PARALLEL\_CHEAPEST\_INSERTION}~: ins\`{e}re les clients en parall\`{e}le au
+        co\^{u}t d'insertion minimal.
+  \item \textbf{SAVINGS} (Clarke-Wright)~: fusionne des routes en partant de tourn\'{e}es
+        aller-retour, selon les \'{e}conomies r\'{e}alis\'{e}es.
+  \item \textbf{CHRISTOFIDES}~: construction inspir\'{e}e du TSP m\'{e}trique, utilis\'{e}e ici
+        comme strat\'{e}gie initiale possible.
+  \item \textbf{GLOBAL\_CHEAPEST\_ARC}~: variante globale de PATH\_CHEAPEST\_ARC.
+\end{itemize}
+
+Trois m\'{e}taheuristiques de recherche locale sont utilis\'{e}es pour am\'{e}liorer la solution
+initiale~: Guided Local Search, Simulated Annealing, Tabu Search.
+
+\subsubsection{Flotte dynamique et co\^{u}t fixe}
+
+Le solveur ne fixe pas arbitrairement le nombre de tra\^{i}neaux. Il calcule d'abord
+deux rep\`{e}res d\'{e}terministes~:
+\[
+  k_{\min} = \left\lceil \frac{\text{poids total}}{\text{capacit\'{e} d'un tra\^{i}neau}} \right\rceil
+  \qquad
+  k_{\text{base}} = \left\lceil \frac{n_{\text{clients}}}{3} \right\rceil
+\]
+$k_{\min}$ est le minimum physique impos\'{e} par la capacit\'{e}. $k_{\text{base}}$
+est une heuristique prudente li\'{e}e au nombre de clients. Le backend teste ensuite
+plusieurs valeurs de $k$ r\'{e}parties entre ces rep\`{e}res, par exemple
+$142, 206, 270, 334$ pour une mission de 1000 clients.
+
+Pour chaque valeur de $k$, le solveur lance une r\'{e}solution et calcule un co\^{u}t
+global~:
+\[
+  \text{score}_{k} = \text{co\^{u}t op\'{e}rationnel} + \text{co\^{u}t non-livr\'{e}s}
+\]
+\begin{align*}
+  \text{co\^{u}t op\'{e}rationnel}
+    &= \text{temps} + \text{distance} + \text{co\^{u}t flotte} \\
+  \text{co\^{u}t non-livr\'{e}s}
+    &= \text{drop\_penalty} \times n_{\text{non livr\'{e}s}}
+\end{align*}
+Le nombre de tra\^{i}neaux retenu est donc celui qui offre le meilleur compromis
+entre couverture des colis et rentabilit\'{e}.
+
+\subsubsection{Limite de temps adaptative}
+
+Toutes les missions ne requi\`{e}rent pas le m\^{e}me budget de calcul. La limite de temps
+de r\'{e}solution s'adapte au nombre de clients~:
+\[
+  t_{\max} = \text{clamp}\!\left(8,\; t_{\text{base}} \times \sqrt{\frac{n}{20}},\; 45\right)
+  \text{ secondes}
+\]
+Les petites missions sont r\'{e}solues en quelques secondes~; les grandes bénéficient de
+plus de budget de recherche.
+
+\subsubsection{Post-traitement}
+
+Apr\`{e}s la r\'{e}solution OR-Tools, les tourn\'{e}es sont am\'{e}lior\'{e}es par des heuristiques
+de recherche op\'{e}rationnelle (\texttt{scripts/ro\_improvements.py})~:
+\textbf{ALNS} puis \textbf{ILS}. ALNS effectue des destructions/r\'{e}parations de
+tourn\'{e}es (random, worst, related, greedy, regret-2). ILS applique ensuite une
+recherche locale it\'{e}r\'{e}e avec des mouvements \textbf{3-opt}, \textbf{OR-opt},
+\textbf{2-opt*} et \textbf{double-bridge}. Une v\'{e}rification d'invariants garantit
+l'absence de doublons ou de clients manquants~; en cas de violation, la solution
+OR-Tools brute est restaur\'{e}e.
+
+\subsubsection{Recherche automatique du nombre de tra\^{i}neaux}
+
+Un m\'{e}canisme de sonde (\textit{sleigh search}) lance plusieurs r\'{e}solutions en parall\`{e}le
+avec diff\'{e}rentes valeurs de $k$ (nombre de v\'{e}hicules), puis s\'{e}lectionne le $k$ qui
+minimise le co\^{u}t global d\'{e}crit ci-dessus. Ce r\'{e}sultat est affich\'{e} dans la
+section \og S\'{e}lection auto des tra\^{i}neaux \fg{} de la page de r\'{e}sultats.
+
+\subsubsection{Mode grande \'{e}chelle}
+
+\`{A} partir d'un seuil de 150 clients, le projet n'utilise plus directement le solveur
+classique OR-Tools sur l'instance compl\`{e}te. Cette limite \'{e}vite de faire exploser
+le temps de calcul quand le nombre de combinaisons devient trop grand.
+
+Le mode \textit{large scale} transforme le probl\`{e}me en deux \'{e}tapes~:
+\begin{enumerate}
+  \item \textbf{G\'{e}n\'{e}ration de tourn\'{e}es candidates}~: le solveur construit de nombreuses
+        petites tourn\'{e}es avec une logique gloutonne locale. Depuis un client, il regarde
+        les voisins les plus proches dans la matrice de temps, puis ajoute le meilleur client
+        faisable.
+  \item \textbf{S\'{e}lection des tourn\'{e}es}~: seules les candidates qui respectent le d\'{e}p\^{o}t,
+        la capacit\'{e}, les fen\^{e}tres horaires et la limite de 8h sont conserv\'{e}es.
+        Un mod\`{e}le CP-SAT choisit ensuite la meilleure combinaison de candidates, en
+        \'{e}vitant qu'un client soit livr\'{e} deux fois et en p\'{e}nalisant les clients non
+        livr\'{e}s.
+\end{enumerate}
+
+Si CP-SAT n'est pas disponible ou ne trouve pas de solution faisable, un fallback glouton
+s\'{e}lectionne les routes qui couvrent le plus de nouveaux clients pour le meilleur ratio
+couverture/co\^{u}t. Ce mode permet de traiter des missions de plusieurs centaines ou
+milliers de colis tout en conservant les contraintes principales du VRP.
+
+\subsection{Profils IA}
+
+Les profils d\'{e}finissent la strat\'{e}gie de r\'{e}solution utilis\'{e}e par OR-Tools.
+L'interface expose \textbf{trois profils} \`{a} l'utilisateur~; sept existent dans le backend.
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|l|l|l|c|l|}
+      \hline
+      \textbf{Profil (UI)} & \textbf{Cible} & \textbf{Premi\`{e}re strat.} & \textbf{Bonus} & \textbf{M\'{e}ta} \\
+      \hline
+      Express & temps & parallel cheapest insertion & +2 & Guided local search \\
+      \'{E}colo & distance & savings & +3 & Simulated annealing \\
+      Prudent & temps + marges & parallel cheapest insertion & +4 & Guided local search \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Profils IA expos\'{e}s dans l'interface (\texttt{frontend/app/solver/page.tsx})}
+  \label{tab:profiles-ui}
+\end{table}
+
+Les profils suppl\'{e}mentaires du backend (Opportuniste, Agressive, Championne,
+Championne Secteurs) permettent des strat\'{e}gies plus sp\'{e}cialis\'{e}es~: la Championne
+dispose d'une limite de temps de 35 secondes et du bonus de difficult\'{e} le plus \'{e}lev\'{e}
+(+8\,pts), tandis que Championne Secteurs (\texttt{spatial\_sectorization = True}) applique
+en plus un K-Means spatial avant la r\'{e}solution.
+
+\subsection{Algorithmes de graphes}
+
+Il est essentiel de distinguer les algorithmes \textbf{utilis\'{e}s dans le pipeline de calcul}
+(toute mission les ex\'{e}cute) de ceux utilis\'{e}s uniquement \`{a} des fins d'\textbf{analyse
+ou de p\'{e}dagogie} (appels \`{a} la demande, sans impact sur la tourn\'{e}e calcul\'{e}e).
+
+\subsubsection{Algorithmes du pipeline technique}
+
+\paragraph{Dijkstra --- construction des matrices de co\^{u}t.}
+
+\textbf{O\`{u}~:} fonction \texttt{\_compute\_matrices\_local()} dans \texttt{scripts/generator\_engine.py},
+appel\'{e}e \`{a} chaque cr\'{e}ation de mission.
+
+\textbf{Principe~:} pour chaque source $i$ parmi les $n$ points de livraison,
+\begin{lstlisting}[language=Python]
+nx.single_source_dijkstra_path_length(graph, i, weight=w)
+\end{lstlisting}
+est ex\'{e}cut\'{e} avec les quatre poids (\texttt{travel\_time}, \texttt{length},
+\texttt{co2\_g}, \texttt{risk\_score}).
+Cela produit les quatre matrices $n \times n$ n\'{e}cessaires au solveur.
+Complexit\'{e} totale~: $O\bigl(n \times (V + E) \log V\bigr)$.
+
+\textbf{Pourquoi Dijkstra et pas Floyd-Warshall~?}
+Floyd-Warshall calcule \emph{tous} les plus courts chemins en $O(N^3)$ o\`{u} $N$ est
+le nombre de n\oe uds du graphe routier complet (des milliers de n\oe uds pour une zone
+urbaine). Dijkstra est ex\'{e}cut\'{e} seulement depuis les points utiles \`{a} la mission
+(d\'{e}p\^{o}t et clients), ce qui est plus rapide en pratique que de calculer tous les couples
+du graphe routier. Floyd-Warshall resterait adapt\'{e}
+si l'on travaillait sur un graphe dense de petite taille~; ici le graphe OSM est creux
+(densit\'{e} 0,01377) et la seule matrice utile est celle entre les $n$ points de livraison,
+pas entre toutes les intersections.
+
+\textbf{Pourquoi pas Bellman-Ford~?}
+Tous les poids (temps, distance, CO2, risque) sont positifs ou nuls~; Dijkstra est donc
+adapt\'{e} \`{a} ce cas. Bellman-Ford, conçu pour les poids n\'{e}gatifs, serait
+$O(VE)$ -- plus lent pour rien.
+
+\paragraph{A* avec heuristique Haversine --- reconstruction g\'{e}om\'{e}trique des segments.}
+
+\textbf{O\`{u}~:} fonction \texttt{build\_ai\_payload()} dans \texttt{scripts/routing\_payloads.py},
+appel\'{e}e \`{a} chaque r\'{e}solution pour afficher les tourn\'{e}es sur la carte.
+
+OR-Tools retourne l'\textbf{ordre de visite} des clients (indices), mais pas le chemin routier
+r\'{e}el entre eux. Pour tracer les trajets sur la carte Leaflet, A* reconstruit le chemin
+r\'{e}el sur le graphe OSM pour chaque segment $(\text{client}_i \rightarrow \text{client}_{i+1})$~:
+\[
+  \texttt{route} = \texttt{nx.astar\_path}(\text{graph},\; \text{src},\; \text{dst},\;
+  \text{heuristic}=h,\; \text{weight}=\texttt{"travel\_time"})
+\]
+L'heuristique Haversine~:
+\[
+  h(u, v) = \frac{\text{haversine}(u, v)}{13{,}89 \text{ m/s}}
+\]
+sert d'heuristique g\'{e}om\'{e}trique de guidage. Dans un contexte urbain born\'{e} autour
+de 50\,km/h, elle se comporte comme une heuristique admissible pratique~; sur des voies
+plus rapides, il faut plut\^{o}t la lire comme une approximation d'affichage. A* explore
+souvent \textbf{moins de n\oe uds} gr\^{a}ce au guidage vers la destination.
+
+\textbf{Pourquoi A* et pas Dijkstra pour la g\'{e}om\'{e}trie~?}
+Les deux peuvent donner le m\^{e}me plus court chemin si le poids et l'heuristique sont
+coh\'{e}rents.
+A* est souvent plus rapide car l'heuristique Haversine lui permet d'\'{e}viter d'explorer
+une partie des n\oe uds ``dans la mauvaise direction''.
+Sur un graphe de quartier (124 n\oe uds pour paris5), le gain est modeste~; sur une
+zone de plusieurs kilom\`{e}tres, il devient significatif. C'est aussi la raison pour
+laquelle la page \textit{Explore} du site visualise la r\'{e}duction du nombre de n\oe uds
+explor\'{e}s entre Dijkstra et A*.
+
+Il faut toutefois distinguer son r\^{o}le de celui du solveur~: A* ne choisit pas les
+tourn\'{e}es. Il sert \`{a} reconstruire ou proposer des chemins point-\`{a}-point sur la
+carte. Les matrices d'entr\'{e}e du VRP sont, elles, construites principalement avec
+Dijkstra.
+
+\paragraph{A* et K plus courts chemins --- options de route pour le joueur humain.}
+
+\textbf{O\`{u}~:} fonction \texttt{\_collect\_candidate\_routes()} dans \texttt{routing\_payloads.py}.
+
+Quand le joueur choisit sa prochaine livraison, le backend propose jusqu'\`{a} 5 routes
+alternatives. Ces candidates sont g\'{e}n\'{e}r\'{e}es en combinant~:
+\begin{enumerate}
+  \item \texttt{nx.astar\_path} sur le poids \texttt{travel\_time} (route la plus rapide)~;
+  \item \texttt{ox.routing.shortest\_path} sur le poids \texttt{length} (route la plus courte)~;
+  \item \texttt{ox.routing.k\_shortest\_paths} (algorithme de Yen) sur les deux poids,
+        pour obtenir des alternatives structurellement diff\'{e}rentes.
+\end{enumerate}
+Un filtre de diversit\'{e} (\texttt{\_pick\_diverse\_options}) \'{e}limine ensuite les routes
+trop similaires (ratio de chevauchement d'ar\^{e}tes $> 40\,\%$) pour que chaque option
+pr\'{e}sent\'{e}e soit r\'{e}ellement diff\'{e}rente.
+
+\textbf{Pourquoi l'algorithme de Yen~?}
+Le joueur ne veut pas trois fois le m\^{e}me chemin l\'{e}g\`{e}rement modifi\'{e}~:
+les $K$ plus courts chemins au sens de Yen garantissent que les routes sont
+syst\'{e}matiquement diff\'{e}rentes en termes de co\^{u}t, offrant de vraies alternatives.
+
+\paragraph{ALNS + ILS --- post-traitement des tourn\'{e}es OR-Tools.}
+
+\textbf{O\`{u}~:} fonction \texttt{\_postprocess\_vrp\_tours()} dans
+\texttt{final\_scripts/solve\_santa\_final.py}, ex\'{e}cut\'{e}e \emph{automatiquement}
+apr\`{e}s chaque r\'{e}solution OR-Tools classique (uniquement pour les missions monomodales).
+
+OR-Tools peut se retrouver bloqu\'{e} dans un optimum local si son budget de temps
+est \'{e}puis\'{e}. Deux \'{e}tapes de post-traitement am\'{e}liorent la solution~:
+
+\textbf{Phase 1 --- ALNS} (Ropke \& Pisinger, 2006)~:
+\begin{itemize}
+  \item 3 op\'{e}rateurs de \emph{destruction}~: suppression al\'{e}atoire, suppression
+        des pires clients (``worst removal''), suppression par similarit\'{e} de Shaw.
+  \item 2 op\'{e}rateurs de \emph{r\'{e}paration}~: r\'{e}insertion gloutonne, r\'{e}insertion
+        par regret-2 (ins\`{e}re le client pour lequel l'\'{e}cart entre le meilleur et
+        le deuxi\`{e}me meilleur emplacement est maximal).
+  \item S\'{e}lection \textbf{adaptative par roulette}~: les op\'{e}rateurs qui ont
+        r\'{e}cemment am\'{e}lior\'{e} la solution voient leur probabilit\'{e} de s\'{e}lection augmenter.
+  \item Crit\`{e}re d'acceptation~: \textbf{recuit simul\'{e}} (temp\'{e}rature initiale = 5\,\%
+        du co\^{u}t initial, refroidissement $\times 0{,}995$/it\'{e}ration).
+  \item Nombre d'it\'{e}rations~: $\max(120, \min(400, 6n))$.
+  \item Complexit\'{e} par it\'{e}ration~: $O(n^2)$.
+\end{itemize}
+
+\textbf{Phase 2 --- ILS} (Recherche locale it\'{e}r\'{e}e)~:
+\begin{itemize}
+  \item 20 it\'{e}rations de perturbation/am\'{e}lioration.
+  \item Chaque it\'{e}ration~: perturbation \textbf{double-bridge} sur la route la plus
+        longue, puis recherche locale compl\`{e}te (3-opt + OR-opt + 2-opt*).
+  \item Double-bridge~: coupe la tourn\'{e}e en 4 segments et les r\'{e}assemble dans
+        un ordre diff\'{e}rent --- garantit une diversification qu'aucun 2-opt
+        ou 3-opt ne peut d\'{e}faire directement.
+  \item Crit\`{e}re d'acceptation~: am\'{e}lioration stricte ($\Delta < -1$\,s).
+\end{itemize}
+
+\textbf{Pourquoi ALNS + ILS apr\`{e}s OR-Tools~?}
+OR-Tools fait une excellente exploration initiale mais travaille dans l'espace de
+repr\'{e}sentation de son mod\`{e}le de routage. ALNS et ILS travaillent directement
+sur la structure des tourn\'{e}es avec des mouvements plus larges (\'{e}change de
+clients entre v\'{e}hicules, double-bridge), ce qui permet d'\'{e}chapper aux optima
+locaux que les m\'{e}taheuristiques internes d'OR-Tools ne peuvent pas franchir dans
+leur budget de temps.
+
+\subsubsection{Algorithmes d'analyse (sur demande)}
+
+Ces algorithmes sont ex\'{e}cut\'{e}s uniquement quand l'utilisateur consulte certaines
+pages ou appelle certaines routes API~; ils n'influencent pas la tourn\'{e}e calcul\'{e}e.
+
+\paragraph{Centralit\'{e} d'interm\'{e}diarit\'{e} --- identification des n\oe uds critiques.}
+
+\textbf{O\`{u}~:} route \texttt{GET /api/missions/\{id\}/graph/metrics},
+impl\'{e}ment\'{e}e dans \texttt{scripts/ro\_improvements.py} (\texttt{compute\_graph\_metrics}).
+
+\[
+  BC(v) = \sum_{s \neq v \neq t} \frac{\sigma_{st}(v)}{\sigma_{st}}
+\]
+
+Calcul approximatif par \'{e}chantillonnage ($k = \min(30, n)$ pivots) pour rester
+temps-r\'{e}el. Identifie les ``goulots d'\'{e}tranglement'' du r\'{e}seau.
+
+\textbf{Pourquoi cet algorithme~?}
+Le solveur VRPTW ignore la topologie du graphe~; il travaille sur les matrices pr\'{e}-calcul\'{e}es.
+La betweenness centrality r\'{e}pond \`{a} une autre question~: quels n\oe uds du r\'{e}seau
+routier sont les plus vuln\'{e}rables~? Cette information est utile pour comprendre
+les risques d'incidents.
+
+\textbf{R\'{e}sultat v\'{e}rifi\'{e} sur paris5}~: le \textbf{Pont Marie} (n\oe ud 368142,
+$BC = 0{,}484$) est le point le plus critique. Sa suppression r\'{e}duit la principale
+SCC de 124 \`{a} 49 n\oe uds (--60,5\,\%), avec un rapport de d\'{e}vastation de 4,9
+(attaque cibl\'{e}e 4,9$\times$ plus destructrice qu'une suppression al\'{e}atoire).
+
+\paragraph{D\'{e}tection de communaut\'{e}s (Louvain) --- secteurs de livraison.}
+
+\textbf{O\`{u}~:} route \texttt{GET /api/missions/\{id\}/graph/delivery-sectors},
+impl\'{e}ment\'{e}e dans \texttt{scripts/community\_detection.py}.
+
+L'algorithme de Louvain optimise la \textbf{modularit\'{e}} $Q$ du partitionnement~:
+un bon partitionnement a plus d'ar\^{e}tes \textit{intra-cluster} que ne l'attendrait
+un graphe al\'{e}atoire de m\^{e}me degr\'{e}. Appliqu\'{e} au graphe routier non-orient\'{e},
+il d\'{e}couvre des quartiers naturels. Pour chaque cluster, une enveloppe convexe
+(Shapely) est calcul\'{e}e pour l'affichage.
+
+\textbf{Pourquoi Louvain plut\^{o}t que K-Means~?}
+K-Means partitionne selon la proximit\'{e} g\'{e}ographique euclidienne~; Louvain respecte
+la \textbf{connectivit\'{e} r\'{e}elle du r\'{e}seau routier}. Deux zones proches \`{a} vol
+d'oiseau mais s\'{e}par\'{e}es par un mur ou un fleuve seront correctement mises dans des
+clusters diff\'{e}rents par Louvain, pas par K-Means.
+
+\paragraph{Floyd-Warshall, Dijkstra step-by-step, A* bidirectionnel, Dijkstra bidirectionnel --- visualisation p\'{e}dagogique.}
+
+Ces quatre algorithmes sont expos\'{e}s via la page \textit{Explore} du site et des routes
+API d\'{e}di\'{e}es. Ils ne sont pas appel\'{e}s lors du calcul d'une tourn\'{e}e.
+
+\textbf{Floyd-Warshall} est expos\'{e} pour illustrer le calcul de \emph{tous} les plus
+courts chemins simultan\'{e}ment~: il montre combien de paires $(i,j)$ seraient am\'{e}lior\'{e}es
+en passant par un point interm\'{e}diaire. Dans le pipeline principal, cette \'{e}tape n'est pas
+n\'{e}cessaire car les matrices sont d\'{e}j\`{a} construites par plus courts chemins sur le
+graphe OSM complet.
+
+\textbf{Dijkstra step-by-step}, \textbf{A* bidirectionnel} et \textbf{Dijkstra bidirectionnel}
+permettent de comparer visuellement le nombre de n\oe uds explor\'{e}s selon la strat\'{e}gie
+de recherche~: Dijkstra explore en cercles concentriques~; l'A* se concentre vers la cible~;
+le bidirectionnel r\'{e}duit l'espace explor\'{e} en partant des deux extr\'{e}mit\'{e}s.
+
+\paragraph{2-opt, OR-opt, Plus Proche Voisin --- analyse du bilan de mission.}
+
+Ces trois algorithmes sont calcul\'{e}s dans \texttt{get\_debrief()} \textbf{uniquement
+pour l'analyse post-mission}, pas pour l'optimisation~:
+\begin{itemize}
+  \item \textbf{2-opt et OR-opt}~: appliqu\'{e}s aux routes humaines pour calculer le
+        \emph{potentiel d'am\'{e}lioration} que le joueur aurait pu r\'{e}aliser. Affich\'{e}
+        dans la section \og Analyse \fg{} du bilan.
+  \item \textbf{Nearest Neighbor (Plus Proche Voisin)}~: construit une tourn\'{e}e mono-v\'{e}hicule
+        na\"ive TSP comme r\'{e}f\'{e}rence p\'{e}dagogique. Complexit\'{e} $O(n^2)$.
+        Montre combien OR-Tools fait mieux qu'une heuristique gloutonne simple.
+\end{itemize}
+
+\subsection{Architecture modulaire}
+
+Le projet est organis\'{e} en modules ind\'{e}pendants aux responsabilit\'{e}s clairement
+d\'{e}limit\'{e}es. Tous gravitent autour d'un coeur central~: le \textbf{solveur VRP}.
+
+\subsubsection{Le module central~: le solveur VRPTW}
+
+\textbf{Fichier~:} \texttt{final\_scripts/solve\_santa\_final.py} (1\,437 lignes).
+
+C'est le module principal du projet. Tous les autres modules existent pour lui fournir
+des donn\'{e}es, pour am\'{e}liorer ses r\'{e}sultats, ou pour les pr\'{e}senter. Sans ce
+solveur, aucune tourn\'{e}e optimis\'{e}e n'existe.
+
+Le module s'articule en six phases~:
+\begin{enumerate}
+  \item \textbf{Chargement}~: lecture du CSV de points, chargement des matrices NumPy, application du facteur m\'{e}t\'{e}o.
+  \item \textbf{Dispatch}~: en dessous du seuil grande \'{e}chelle, le solveur classique est utilis\'{e}; au-dessus de 150 clients, le mode \textit{large scale} prend le relais.
+  \item \textbf{Mod\'{e}lisation OR-Tools}~: cr\'{e}ation du \texttt{RoutingIndexManager} et du \texttt{RoutingModel}, d\'{e}claration des callbacks de co\^{u}t, des contraintes de capacit\'{e} et de temps, du co\^{u}t fixe par v\'{e}hicule.
+  \item \textbf{R\'{e}solution}~: strat\'{e}gie de premi\`{e}re solution + m\'{e}taheuristique, dans le budget de temps adaptatif.
+  \item \textbf{Post-traitement}~: ALNS (Ropke \& Pisinger) puis ILS (double-bridge + 3-opt/OR-opt/2-opt*) pour affiner la solution.
+  \item \textbf{Sauvegarde}~: s\'{e}rialisation JSON des tourn\'{e}es avec toutes les m\'{e}triques (temps, distance, CO2, v\'{e}hicules utilis\'{e}s).
+\end{enumerate}
+
+Le module est appel\'{e} exclusivement via la fonction \texttt{solve\_vrp()} depuis
+\texttt{services.py}. Il est stateless~: il ne lit pas la base de donn\'{e}es et ne
+d\'{e}pend que des fichiers de donn\'{e}es qui lui sont pass\'{e}s en param\`{e}tre.
+
+\subsubsection{Module de g\'{e}n\'{e}ration de zone}
+
+\textbf{Fichier~:} \texttt{scripts/generator\_engine.py} (989 lignes).
+
+Ce module produit toutes les donn\'{e}es d'entr\'{e}e n\'{e}cessaires au solveur.
+Il est d\'{e}clench\'{e} une seule fois par mission, \`{a} la cr\'{e}ation.
+
+Son r\^{o}le~:
+\begin{itemize}
+  \item T\'{e}l\'{e}charger le graphe routier depuis OpenStreetMap (OSMnx).
+  \item Annoter les ar\^{e}tes avec les quatre m\'{e}triques (temps, distance, CO2, risque).
+  \item S\'{e}lectionner le d\'{e}p\^{o}t (noeud le plus proche du centre fourni par l'utilisateur) et les clients (noeuds al\'{e}atoires dans la zone).
+  \item Enrichir les noms des clients via l'API Overpass.
+  \item Calculer les quatre matrices de base par Dijkstra, puis construire la matrice composite.
+  \item Appliquer les facteurs de congestion horaire et le relief SRTM si demand\'{e}.
+  \item Sauvegarder graphe, CSV et matrices.
+\end{itemize}
+
+Sans ce module, il est impossible de g\'{e}n\'{e}rer une nouvelle zone~: le solveur
+n'aurait pas de matrices \`{a} consommer.
+
+\subsubsection{Module d'am\'{e}lioration des routes}
+
+\textbf{Fichier~:} \texttt{scripts/ro\_improvements.py} (1\,803 lignes).
+
+C'est le deuxi\`{e}me module le plus volumineux apr\`{e}s \texttt{services.py}. Il regroupe
+les principaux algorithmes de graphes et d'optimisation combinatoire du projet.
+
+\textbf{Fonctions utilis\'{e}es dans le pipeline de calcul~:}
+\begin{itemize}
+  \item \texttt{adaptive\_large\_neighborhood\_search()} --- ALNS post-solveur (phase~1 du post-traitement).
+  \item \texttt{iterated\_local\_search()} --- ILS post-solveur (phase~2, avec double-bridge).
+  \item \texttt{compute\_graph\_metrics()} --- m\'{e}triques structurelles (densit\'{e}, SCC, betweenness approxim\'{e}e).
+\end{itemize}
+
+\textbf{Fonctions utilis\'{e}es pour l'analyse post-mission (bilan)~:}
+\begin{itemize}
+  \item \texttt{two\_opt\_routes()}, \texttt{or\_opt\_routes()} --- mesure du potentiel non exploit\'{e} par le joueur humain.
+  \item \texttt{nearest\_neighbor\_tour()} --- baseline TSP gloutonne.
+  \item \texttt{optimality\_gap()} --- \'{e}cart \`{a} la borne inf\'{e}rieure th\'{e}orique.
+\end{itemize}
+
+\textbf{Fonctions utilis\'{e}es pour la p\'{e}dagogie (visualisation)~:}
+\begin{itemize}
+  \item \texttt{dijkstra\_steps()}, \texttt{bidirectional\_astar\_steps()}, \texttt{bidirectional\_dijkstra\_steps()} --- export pas-\`{a}-pas pour la page Explore.
+  \item \texttt{floyd\_warshall()} --- calcul de tous les plus courts chemins sur la matrice de temps.
+\end{itemize}
+
+\subsubsection{Module de routage et d'\'{e}tat humain}
+
+\textbf{Fichier~:} \texttt{scripts/routing\_payloads.py} (725 lignes).
+
+Ce module g\`{e}re l'interface entre les d\'{e}cisions du joueur humain et le graphe OSM.
+
+\textbf{Fonctions principales~:}
+\begin{itemize}
+  \item \texttt{\_collect\_candidate\_routes()} --- g\'{e}n\`{e}re le pool de routes candidates pour les options humaines (A* Haversine + K plus courts chemins).
+  \item \texttt{compute\_route\_options()} --- filtre, classe et annote les routes candidates (plus rapide, plus courte, incident, diversit\'{e}).
+  \item \texttt{build\_ai\_payload()} --- reconstruit la g\'{e}om\'{e}trie de chaque segment IA sur le graphe OSM via A* (pour l'affichage carte).
+  \item \texttt{build\_human\_live\_stats()} --- calcule les statistiques en temps r\'{e}el de l'\'{e}tat humain (ETA, poids charg\'{e}, retards).
+  \item \texttt{load\_graph()} --- charge un graphe GraphML et v\'{e}rifie/compl\`{e}te les attributs de vitesse.
+\end{itemize}
+
+Ce module maintient aussi deux caches LRU thread-safe~: un cache de graphes
+(\texttt{GRAPH\_CACHE\_MAX = 32} entr\'{e}es) et un cache de routes candidates
+(\texttt{ROUTE\_CANDIDATES\_CACHE\_MAX = 2\,048} entr\'{e}es), pour \'{e}viter de
+recalculer les m\^{e}mes routes \`{a} chaque clic du joueur.
+
+\subsubsection{Module de service (orchestrateur)}
+
+\textbf{Fichier~:} \texttt{backend/app/services.py} (5\,921 lignes).
+
+C'est le module le plus volumineux du projet. Il ne contient aucun algorithme de graphe
+en propre~; son r\^{o}le est d'\textbf{orchestrer} tous les autres modules et d'exposer
+une API coh\'{e}rente au controller FastAPI.
+
+Il g\`{e}re notamment~:
+\begin{itemize}
+  \item La cr\'{e}ation de mission (appel \`{a} \texttt{generator\_engine}), la persistance en base et le cache fichier.
+  \item La r\'{e}solution VRP~: s\'{e}lection de la strat\'{e}gie (\texttt{resolve\_ai\_strategy}), appel au solveur, calcul du benchmark, construction de la r\'{e}ponse.
+  \item La recherche automatique du nombre de tra\^{i}neaux~: sondes parall\`{e}les sur plusieurs valeurs de $k$.
+  \item Le mode humain~: gestion de l'\'{e}tat (segments valid\'{e}s, routes par tra\^{i}neau), calcul des options, simulation d'incidents.
+  \item Les profils IA~: dictionnaire \texttt{AI\_PROFILE\_PRESETS} et fonction \texttt{resolve\_ai\_strategy()} qui adapte dynamiquement les param\`{e}tres selon le contexte.
+  \item Le module d'apprentissage~: entra\^{i}nement, \'{e}valuation, recommandation de profil.
+  \item Les fonctionnalit\'{e}s sociales~: amiti\'{e}s, messagerie directe, blocages.
+  \item Le mode versus~: cr\'{e}ation de matchs, matchmaking, WebSockets.
+\end{itemize}
+
+\subsubsection{Module de persistance}
+
+\textbf{Fichier~:} \texttt{backend/app/repository.py} (1\,844 lignes).
+
+G\`{e}re la base de donn\'{e}es SQLite (\texttt{cache/api\_missions/operation\_noel.db}).
+Toutes les requ\^{e}tes SQL sont isol\'{e}es dans ce module~; \texttt{services.py} ne
+manipule jamais de SQL directement.
+
+Tables principales~:
+\begin{itemize}
+  \item \texttt{players} --- profils, emails, hash de mot de passe (PBKDF2-HMAC-SHA256).
+  \item \texttt{mission\_snapshots} --- cache des missions avec toutes leurs donn\'{e}es JSON (mission, r\'{e}sultats, benchmark, \'{e}tat humain, d\'{e}briefing).
+  \item \texttt{leaderboard} --- scores tri\'{e}s par rang DESC.
+  \item \texttt{versus\_matches}, \texttt{versus\_participants}, \texttt{versus\_invites}, \texttt{versus\_queue} --- syst\`{e}me de duels et matchmaking.
+  \item \texttt{friendships}, \texttt{direct\_messages}, \texttt{user\_blocks} --- fonctionnalit\'{e}s sociales.
+\end{itemize}
+
+\subsubsection{Module API (contr\^{o}leur)}
+
+\textbf{Fichier~:} \texttt{backend/app/main.py} (848 lignes).
+
+D\'{e}finit les 70 routes HTTP REST et les 2 WebSockets. Son seul r\^{o}le est de~:
+d\'{e}s\'{e}rialiser les requ\^{e}tes (Pydantic), appeler la fonction correspondante dans
+\texttt{services.py}, et retourner la r\'{e}ponse ou une erreur HTTP structur\'{e}e.
+Il ne contient aucune logique m\'{e}tier.
+
+\subsubsection{Module de benchmark}
+
+\textbf{Fichier~:} \texttt{scripts/benchmark\_engine.py} (148 lignes).
+
+Calcule la solution na\"ive de r\'{e}f\'{e}rence (partition \'{e}gale des clients, visite
+dans l'ordre d'index) et compare ses m\'{e}triques (temps, distance, CO2) avec la solution
+OR-Tools. Produit le dictionnaire \texttt{savings} qui alimente la composante temps du score.
+
+\subsubsection{Module m\'{e}t\'{e}o}
+
+\textbf{Fichier~:} \texttt{scripts/weather\_engine.py} (83 lignes).
+
+Deux modes~:
+\begin{itemize}
+  \item \texttt{get\_real\_weather()} --- g\'{e}ocode l'adresse via OSMnx puis interroge l'API Open-Meteo pour la m\'{e}t\'{e}o actuelle. Mappe les codes WMO vers les facteurs de la table \texttt{WEATHER\_SCENARIOS}.
+  \item \texttt{get\_simulated\_weather()} --- tirage pond\'{e}r\'{e} al\'{e}atoire parmi les 7 sc\'{e}narios (plus de chances de beau temps).
+\end{itemize}
+
+\subsubsection{Module d'\'{e}l\'{e}vation SRTM (optionnel)}
+
+\textbf{Fichier~:} \texttt{scripts/elevation\_engine.py} (208 lignes).
+
+Interroge l'API OpenTopoData (donn\'{e}es SRTM NASA, r\'{e}solution 90\,m, gratuite) par
+batches de 100 points. Calcule le d\'{e}nivel\'{e} entre chaque paire de points et ajuste
+les matrices de temps et d'\'{e}nergie~:
+\begin{itemize}
+  \item Mont\'{e}e~: $\times (1 + \min(\text{pente} \times 6,\; 0{,}8))$ (jusqu'\`{a} +80\,\%)
+  \item Descente~: $\times (1 + \max(\text{pente} \times 1{,}5,\; -0{,}2))$ (jusqu'\`{a} -20\,\%)
+\end{itemize}
+Activ\'{e} uniquement si l'utilisateur coche l'option \og Relief SRTM \fg{} dans le formulaire.
+
+\subsubsection{Modules d'analyse du graphe}
+
+\begin{itemize}
+  \item \texttt{graph\_analysis.py} (110 lignes) --- calcule la centralit\'{e} de degr\'{e} et d'interm\'{e}diarit\'{e} (NetworkX). Produit le fichier \texttt{graph\_analysis\_soutenance.json}.
+  \item \texttt{graph\_robustness.py} (138 lignes) --- mesure la d\'{e}gradation de la plus grande composante fortement connexe apr\`{e}s suppression cibl\'{e}e ou al\'{e}atoire de noeuds. Produit \texttt{robustness\_report.json}.
+  \item \texttt{community\_detection.py} (103 lignes) --- Louvain sur le graphe non-orient\'{e}, enveloppes convexes Shapely.
+  \item \texttt{zone\_clustering.py} (116 lignes) --- K-Means spatial impl\'{e}ment\'{e} de z\'{e}ro (sans scikit-learn).
+\end{itemize}
+
+Ces quatre modules sont invoqu\'{e}s soit par les routes API d'analyse, soit lors de
+la g\'{e}n\'{e}ration du rapport technique automatis\'{e} (\texttt{generate\_technical\_report.py}).
+
+\subsubsection{Modules utilitaires}
+
+\begin{itemize}
+  \item \texttt{mission\_paths.py} --- dataclass \texttt{MissionPaths} qui centralise tous les chemins de fichiers d'une mission (CSV, graphe, matrices, JSON). \'{E}vite les chemins ``en dur'' dispers\'{e}s dans le code.
+  \item \texttt{osrm\_engine.py} --- script ponctuellement utilis\'{e} pour g\'{e}n\'{e}rer la matrice de temps OSRM du jeu de donn\'{e}es de r\'{e}f\'{e}rence (\texttt{live\_time\_matrix.npy}). Non utilis\'{e} pour les missions dynamiques.
+  \item \texttt{main\_visualizer.py} --- g\'{e}n\'{e}rateur de carte Folium statique (HTML). Pr\'{e}c\'{e}dait la carte Leaflet interactive du frontend~; conserv\'{e} pour la visualisation hors-web.
+\end{itemize}
+
+\begin{table}[h]
+  \begin{center}
+    \footnotesize
+    \begin{tabular}{|l|c|l|}
+      \hline
+      \textbf{Module} & \textbf{Lignes} & \textbf{R\^{o}le} \\
+      \hline
+      \texttt{services.py} & 5\,921 & Orchestrateur g\'{e}n\'{e}ral \\
+      \textbf{\texttt{solve\_santa\_final.py}} & \textbf{1\,437} & \textbf{Solveur VRP (coeur)} \\
+      \texttt{repository.py} & 1\,844 & Persistance SQLite \\
+      \texttt{ro\_improvements.py} & 1\,803 & Algorithmes graphes + ALNS/ILS \\
+      \texttt{generator\_engine.py} & 989 & G\'{e}n\'{e}ration de zone OSM \\
+      \texttt{main.py} & 848 & Contr\^{o}leur FastAPI \\
+      \texttt{routing\_payloads.py} & 725 & Routage humain + g\'{e}om\'{e}trie IA \\
+      \texttt{schemas.py} & 338 & Mod\`{e}les Pydantic \\
+      \texttt{elevation\_engine.py} & 208 & Relief SRTM \\
+      \texttt{benchmark\_engine.py} & 148 & R\'{e}f\'{e}rence na\"ive \\
+      \texttt{graph\_robustness.py} & 138 & Analyse de robustesse \\
+      \texttt{community\_detection.py} & 103 & Secteurs Louvain \\
+      \texttt{graph\_analysis.py} & 110 & Centralit\'{e} \\
+      \texttt{zone\_clustering.py} & 116 & K-Means spatial \\
+      \texttt{weather\_engine.py} & 83 & M\'{e}t\'{e}o (r\'{e}elle + simul\'{e}e) \\
+      \texttt{mission\_paths.py} & 67 & Chemins de fichiers \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Modules Python du projet, par taille}
+  \label{tab:modules}
+\end{table}
+
+\subsection{Score et formules math\'{e}matiques}
+
+\subsubsection{Solution de r\'{e}f\'{e}rence (na\"ive)}
+
+Avant de calculer le score, il faut une r\'{e}f\'{e}rence. La \textbf{solution na\"ive} est
+construite dans \texttt{scripts/benchmark\_engine.py} de la fa\c{c}on suivante~:
+\begin{enumerate}
+  \item Les $n$ clients sont r\'{e}partis en blocs \'{e}gaux entre les v\'{e}hicules avec
+        \texttt{numpy.array\_split(clients, num\_vehicles)}.
+  \item Dans chaque bloc, les clients sont visit\'{e}s dans \textbf{l'ordre de leur indice},
+        sans aucune optimisation de l'ordre de visite.
+  \item Le temps et la distance de chaque tron\c{c}on sont lus directement depuis les
+        matrices pr\'{e}-calcul\'{e}es.
+\end{enumerate}
+
+Cette solution artificielle est volontairement simple~: elle sert de r\'{e}f\'{e}rence
+non optimis\'{e}e pour mesurer le gain apport\'{e} par OR-Tools. Ce n'est pas une borne
+inf\'{e}rieure math\'{e}matique, mais une baseline reproductible.
+
+Les m\'{e}triques de la solution na\"ive sont calcul\'{e}es sur les m\^{e}mes matrices que
+la solution optimis\'{e}e, pour une comparaison homog\`{e}ne. Les \'{e}conomies sont~:
+\[
+  \text{time\_saved\_pct} = \frac{T_{\text{na\"if}} - T_{\text{opt}}}{T_{\text{na\"if}}} \times 100
+  \qquad \text{(born\'{e} \`{a} [-100, 100])}
+\]
+\[
+  \text{co2\_saved\_kg} = \frac{K_{\text{na\"if}} - K_{\text{opt}}}{1000}
+\]
+
+\subsubsection{Calcul du score --- \'{e}tapes d\'{e}taill\'{e}es}
+
+La fonction \texttt{computeScore()} du frontend et \texttt{get\_debrief()} du backend
+utilisent la m\^{e}me formule, v\'{e}rifi\'{e}e coh\'{e}rente entre les deux.
+
+\paragraph{\'Etape 1 --- Normalisation du gain temps.}
+Sur les essais de r\'{e}f\'{e}rence, OR-Tools \'{e}conomise souvent du temps par rapport
+\`{a} la solution na\"ive.
+Pour que ce gain se traduise en score maximal de 45\,pts (composante temps~: 45\,\% du total),
+on applique un facteur de normalisation de 2,5~:
+\[
+  S_t = \min\!\left(100,\; \text{time\_saved\_pct} \times 2{,}5\right)
+\]
+Ainsi, un gain de 40\,\% donne $S_t = 100$, un gain de 20\,\% donne $S_t = 50$.
+
+\paragraph{\'Etape 2 --- Score CO2.}
+Le CO2 \'{e}conom\'{e} est normalis\'{e} par une r\'{e}f\'{e}rence proportionnelle au nombre
+de clients (0,1\,kg par client, minimum 1\,kg)~:
+\[
+  \text{co2\_ref} = \max(1{,}0,\; n \times 0{,}1)
+  \qquad
+  S_c = \min\!\left(100,\; \frac{\Delta\text{CO2 (kg)}}{\text{co2\_ref}} \times 100\right)
+\]
+Ce choix de r\'{e}f\'{e}rence \'{e}vite que les petites missions (peu de CO2 en valeur absolue)
+soient syst\'{e}matiquement p\'{e}nalis\'{e}es.
+
+\paragraph{\'Etape 3 --- Autres composantes.}
+\begin{itemize}
+  \item $S_b$ (budget)~: pourcentage du budget restant apr\`{e}s d\'{e}duction du co\^{u}t
+        des tra\^{i}neaux utilis\'{e}s, born\'{e} dans $[0, 100]$.
+  \item $S_v$ (couverture)~: $\dfrac{n_{\text{servis}}}{n_{\text{total}}} \times 100$.
+        Les clients non servis (\textit{dropped}) p\'{e}nalisent directement ce score.
+\end{itemize}
+
+\paragraph{\'Etape 4 --- Score de base pond\'{e}r\'{e}.}
+\[
+  S_{\text{base}} = \underbrace{0{,}45}_{45\,\text{pts max}} \cdot S_t
+                  + \underbrace{0{,}20}_{20\,\text{pts max}} \cdot S_c
+                  + \underbrace{0{,}10}_{10\,\text{pts max}} \cdot S_b
+                  + \underbrace{0{,}25}_{25\,\text{pts max}} \cdot S_v
+\]
+Le total th\'{e}orique est 100\,pts. Le choix des poids privil\'{e}gie le gain de temps
+(45\,\%) et la couverture des livraisons (25\,\%), puis le bilan CO2 (20\,\%) et
+le budget (10\,\%).
+
+\paragraph{\'Etape 5 --- Bonus.}
+Des points suppl\'{e}mentaires r\'{e}compensent la difficult\'{e} et les performances
+sp\'{e}ciales~:
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|p{0.24\textwidth}|p{0.48\textwidth}|p{0.18\textwidth}|}
+      \hline
+      \textbf{Bonus} & \textbf{Condition} & \textbf{Valeur} \\
+      \hline
+      Profil IA & selon le profil choisi & +2 (Express) \`{a} +10 (Championne Secteurs) \\
+      Incidents & \texttt{random\_incidents = True} & +10 \\
+      Humain bat l'IA & temps humain $<$ temps IA & +5 \\
+      M\'{e}t\'{e}o difficile & $B_\text{m\'{e}t\'{e}o} = \max(0, (\text{factor}-1)\times 8)$ & 0 (clair) \`{a} +12 (tempête) \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Bonus du score final}
+  \label{tab:bonuses}
+\end{table}
+
+Le bonus m\'{e}t\'{e}o d\'{e}taille~: par temps clair (factor = 1,0), bonus = 0~; sous la
+pluie (factor = 1,3), bonus = 2,4~; sous la neige (factor = 2,0), bonus = 8~; par orage
+(factor = 2,5), bonus = 12.
+
+\paragraph{\'Etape 6 --- Score final.}
+\[
+  S_{\text{final}} = \text{clamp}\!\left(0,\;
+    S_{\text{base}} + B_{\text{profil}} + B_{\text{incidents}} + B_{\text{humain}} + B_{\text{m\'{e}t\'{e}o}},\;
+    100\right)
+\]
+
+\paragraph{Exemple concret.}
+Sur le jeu de r\'{e}f\'{e}rence (10 clients, profil Express, temps clair)~:
+\begin{itemize}
+  \item $\text{time\_saved\_pct} = 53{,}2\,\%$ $\Rightarrow$ $S_t = \min(100, 53{,}2 \times 2{,}5) = 100$
+  \item $\Delta\text{CO2} = 0{,}95$\,kg, $\text{co2\_ref} = 1{,}0$ $\Rightarrow$ $S_c = 95$
+  \item $S_{\text{base}} = 0{,}45 \times 100 + 0{,}20 \times 95 + 0{,}10 \times S_b + 0{,}25 \times 100$
+  \item $B_{\text{profil}} = +2$ (Express), m\'{e}t\'{e}o bonus = 0
+\end{itemize}
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|c|c|c|}
+      \hline
+      \textbf{Score} & \textbf{Rang} & \textbf{Titre} \\
+      \hline
+      $\geq 85$ & S & Eco-Livreur L\'{e}gendaire \\
+      $\geq 70$ & A & Chef Logisticien \\
+      $\geq 50$ & B & Livreur Efficace \\
+      $\geq 30$ & C & Apprenti P\`{e}re No\"{e}l \\
+      $< 30$ & D & En formation \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Syst\`{e}me de rangs}
+  \label{tab:ranks}
+\end{table}
+
+\subsection{Recommandation contextuelle (AI Learning v2.0)}
+
+\subsubsection{Principe et contrainte de donn\'{e}es}
+
+Le syst\`{e}me d'apprentissage tente de r\'{e}pondre \`{a} la question~: \emph{quel profil IA
+devrait produire un bon r\'{e}sultat pour une mission au contexte donn\'{e}~?} Il apprend sur
+l'historique des missions r\'{e}solues sauvegard\'{e}es en base SQLite.
+
+Il ne s'agit pas d'un mod\`{e}le de machine learning lourd de type r\'{e}gression,
+for\^{e}t al\'{e}atoire ou r\'{e}seau de neurones. Ce choix est volontaire~: un tel mod\`{e}le
+aurait besoin de beaucoup de missions r\'{e}elles, vari\'{e}es et correctement annot\'{e}es
+pour produire des recommandations fiables. Le projet utilise donc plut\^{o}t une
+recommandation statistique contextuelle, plus simple \`{a} expliquer et plus adapt\'{e}e
+\`{a} un historique encore limit\'{e}.
+
+\textbf{Contrainte importante}~: le mod\`{e}le ne peut s'entra\^{i}ner que si au moins
+8 missions ont \'{e}t\'{e} r\'{e}solues et stock\'{e}es. C'est une limitation r\'{e}aliste~:
+un mod\`{e}le entra\^{i}n\'{e} sur trop peu de donn\'{e}es ne serait pas fiable. En pratique,
+plus l'historique est riche (missions dans des contextes vari\'{e}s~: pluie, neige, incidents,
+villes diff\'{e}rentes), plus les recommandations sont pr\'{e}cises.
+
+\subsubsection{Repr\'{e}sentation du contexte}
+
+Chaque mission est r\'{e}sum\'{e}e par une cl\'{e} de contexte combinant~:
+m\'{e}t\'{e}o (bucket), pr\'{e}sence d'incidents, taille de la mission (small/medium/large),
+niveau du budget, co\^{u}t du tra\^{i}neau, densit\'{e} de clients. Cela permet de regrouper
+les missions similaires et d'en tirer des leçons.
+
+\subsubsection{Estimation bay\'{e}sienne avec lissage de Laplace}
+
+Pour \'{e}viter de tout parier sur un contexte avec peu de donn\'{e}es, un lissage de Laplace
+($\alpha = 3{,}0$) m\'{e}lange la moyenne locale (contexte sp\'{e}cifique) avec la moyenne
+globale (tous contextes confondus)~:
+\[
+  \hat{\mu} = \frac{n_c \cdot \mu_c + \alpha \cdot \mu_g}{n_c + \alpha}
+\]
+Quand $n_c = 0$ (aucune donn\'{e}e dans ce contexte), le syst\`{e}me recourt enti\`{e}rement \`{a}
+la moyenne globale. Quand $n_c$ cro\^{i}t, la moyenne locale prend progressivement le dessus.
+
+\subsubsection{Score de confiance}
+
+La recommandation est accompagn\'{e}e d'un score de confiance (0 \`{a} 0,95) qui tient compte
+du nombre d'observations et de l'\'{e}cart entre le meilleur profil recommand\'{e} et le second~;
+plus la marge est grande, plus la recommandation est fiable.
+
+\subsubsection{Tuner OR-Tools}
+
+Un second mod\`{e}le estime quels param\`{e}tres internes d'OR-Tools (strat\'{e}gie de premi\`{e}re
+solution, m\'{e}taheuristique, limites de temps, etc.) semblent les plus performants pour un contexte donn\'{e}.
+Il n\'{e}cessite au minimum 12 observations.
+
+\subsection{Benchmark et comparaison}
+
+La solution OR-Tools est syst\'{e}matiquement compar\'{e}e \`{a} une solution \textbf{na\"ive}~:
+les clients sont r\'{e}partis en blocs \'{e}gaux entre les tra\^{i}neaux, dans l'ordre de
+leur identifiant, sans aucune optimisation. Cette solution na\"ive sert de r\'{e}f\'{e}rence
+pour calculer le gain. Les valeurs ci-dessous doivent \^{e}tre interpr\'{e}t\'{e}es comme un
+exemple sur un jeu de r\'{e}f\'{e}rence donn\'{e}, et non comme une garantie de performance
+g\'{e}n\'{e}rale sur toutes les villes ou toutes les tailles de mission.
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{|l|c|c|}
+      \hline
+      & \textbf{Solution na\"ive} & \textbf{OR-Tools} \\
+      \hline
+      Temps total & 2\,660\,s & 1\,245\,s \\
+      Distance & 15\,293\,m & 7\,413\,m \\
+      Gain temps & \multicolumn{2}{c|}{53,2\,\% (23 minutes)} \\
+      CO2 \'{e}conom\'{e} & \multicolumn{2}{c|}{0,95 kg} \\
+      \hline
+    \end{tabular}
+  \end{center}
+  \caption{Benchmark sur le jeu de r\'{e}f\'{e}rence (10 clients, \texttt{core\_data/benchmark\_results.json})}
+  \label{tab:benchmark}
+\end{table}
+
+%=======================================================
+\section{Tests et validation}
+%=======================================================
+
+Le projet contient une suite de tests automatis\'{e}s qui vise surtout les parties \`{a} risque~:
+solveur, contraintes, score, cache de graphes, API et parcours utilisateur.
+
+\begin{itemize}
+  \item \textbf{Tests backend Pytest}~: 20 fichiers couvrent les profils IA, le score,
+        la s\'{e}lection du nombre de tra\^{i}neaux, le solveur grande \'{e}chelle,
+        l'int\'{e}grit\'{e} du post-traitement, les routes API, l'authentification,
+        la persistance SQLite et les options de route.
+  \item \textbf{Tests frontend Playwright}~: 7 sc\'{e}narios E2E v\'{e}rifient les parcours
+        de mission, les options de route, le routage libre, les \'{e}tats vides et une partie
+        des parcours versus exp\'{e}rimentaux.
+  \item \textbf{Tests cibl\'{e}s du solveur}~: le mode grande \'{e}chelle est test\'{e} avec
+        des invariants simples~: d\'{e}part et retour au d\'{e}p\^{o}t, pas de client servi
+        deux fois, respect de la capacit\'{e}, de la dur\'{e}e maximale et gestion possible
+        des clients non livr\'{e}s.
+\end{itemize}
+
+Ces tests ne prouvent pas l'optimalit\'{e} globale des tourn\'{e}es, ce qui serait difficile
+sur un probl\`{e}me NP-difficile. Ils servent plut\^{o}t \`{a} v\'{e}rifier que les contraintes
+principales sont respect\'{e}es et que les r\'{e}gressions les plus probables sont d\'{e}tect\'{e}es.
+
+%=======================================================
+\section{Difficult\'{e}s rencontr\'{e}es}
+%=======================================================
+
+\subsection{Disponibilit\'{e} des APIs Open Data}
+
+Les APIs publiques (Overpass, Open-Meteo) sont gratuites mais pas garanties. L'API Overpass
+peut retourner des erreurs 429 (trop de requ\^{e}tes) ou \^{e}tre lente. Des m\'{e}canismes
+de fallback ont \'{e}t\'{e} impl\'{e}ment\'{e}s~: basculement automatique entre trois endpoints
+Overpass, et repli sur un graphe par point central si le t\'{e}l\'{e}chargement par nom de lieu
+\'{e}choue.
+
+\subsection{Faisabilit\'{e} du VRPTW}
+
+Le VRPTW peut \^{e}tre infaisable si les contraintes sont trop strictes (trop peu de v\'{e}hicules
+pour le nombre de clients, budget de temps insuffisant). La solution adopt\'{e}e est d'utiliser
+un \textit{drop penalty}~: OR-Tools peut d\'{e}poser des clients plut\^{o}t que de rendre la
+mission infaisable. Le score p\'{e}nalise les clients non servis via la composante de couverture.
+
+\subsection{Contraintes arithm\'{e}tiques d'OR-Tools}
+
+La p\'{e}nalit\'{e} de non-service doit rester dans les limites int64. Pour les grandes missions,
+une formule dynamique garantit cette borne~: $\text{penalty} = \max(\text{base}, \text{horizon} \times n \times V)$,
+born\'{e}e \`{a} $2 \times 10^9$.
+
+\subsection{Apprentissage avec peu de donn\'{e}es}
+
+Le module AI Learning n\'{e}cessite 8 missions minimum pour s'entra\^{i}ner. Les premi\`{e}res
+utilisations de la plateforme ne b\'{e}n\'{e}ficient donc pas des recommandations personnalis\'{e}es.
+Le lissage de Laplace ($\alpha = 3$) att\'{e}nue ce probl\`{e}me ``cold start'' en exploitant
+la moyenne globale en l'absence de donn\'{e}es locales.
+
+\subsection{Approximation des conditions r\'{e}elles}
+
+Le projet cherche \`{a} se rapprocher du terrain, mais certaines donn\'{e}es restent
+approximatives. La m\'{e}t\'{e}o est transform\'{e}e en facteurs multiplicatifs sur les temps
+de trajet, les incidents sont simul\'{e}s, et le risque routier est estim\'{e} \`{a} partir
+du type de voie. Ces choix permettent de tester plusieurs sc\'{e}narios sans d\'{e}pendre
+de donn\'{e}es temps r\'{e}el complexes, mais ils ne remplacent pas une mesure directe de
+la circulation ou des perturbations locales.
+
+Une am\'{e}lioration importante serait donc de mieux calibrer ces facteurs~: comparer les
+temps pr\'{e}dits aux temps observ\'{e}s, apprendre l'impact moyen de la pluie, de la neige
+ou d'un incident sur plusieurs missions, puis ajuster automatiquement les coefficients.
+
+%=======================================================
+\section{Bilan}
+%=======================================================
+
+\subsection{Conclusion}
+
+Op\'{e}ration No\"{e}l est une plateforme qui couvre le pipeline principal~:
+depuis la saisie d'une adresse jusqu'\`{a} l'affichage d'une tourn\'{e}e optimis\'{e}e
+sur une carte du monde r\'{e}el.
+
+Sur le jeu de r\'{e}f\'{e}rence, les r\'{e}sultats sont encourageants~: OR-Tools r\'{e}alise
+\textbf{53,2\,\%} d'\'{e}conomie de temps et \textbf{0,95\,kg} de CO2 \'{e}conom\'{e} par rapport
+\`{a} la solution na\"ive. Ces chiffres restent li\'{e}s au sc\'{e}nario test\'{e}~; ils montrent
+que l'approche fonctionne, mais ne constituent pas une garantie universelle. La plateforme
+expose \'{e}galement plusieurs algorithmes de graphes classiques, visualisables interactivement.
+
+Le projet r\'{e}pond donc \`{a} la probl\'{e}matique en montrant que les graphes et l'open data
+permettent de construire une aide \`{a} la d\'{e}cision r\'{e}aliste pour les tourn\'{e}es du
+P\`{e}re No\"{e}l. La limite principale reste la qualit\'{e} des approximations~: m\'{e}t\'{e}o,
+incidents, vitesses et facteurs de risque doivent \^{e}tre mieux calibr\'{e}s pour rapprocher
+encore le mod\`{e}le du terrain.
+
+\subsection{Perspectives}
+
+\begin{enumerate}
+  \item \textbf{Fen\^{e}tres de temps plus r\'{e}alistes}~: les colonnes \texttt{tw\_start}
+        et \texttt{tw\_end} sont d\'{e}j\`{a} exploit\'{e}es comme contraintes VRPTW.
+        Une perspective serait de les rendre plus fines, par exemple selon le type
+        de client, la priorit\'{e} du colis ou l'heure de d\'{e}part.
+  \item \textbf{Accumulation d'historique}~: le mod\`{e}le AI Learning n\'{e}cessite un historique
+        riche~; un m\'{e}canisme de pr\'{e}-chargement avec des missions synth\'{e}tiques dans des
+        contextes vari\'{e}s am\'{e}liorerait les recommandations d\`{e}s la premi\`{e}re utilisation.
+        Avec suffisamment de donn\'{e}es r\'{e}elles, il deviendrait pertinent de tester un
+        mod\`{e}le de machine learning plus classique pour pr\'{e}dire le meilleur profil ou
+        les meilleurs param\`{e}tres du solveur.
+  \item \textbf{Calibration des approximations}~: la m\'{e}t\'{e}o, les incidents et le risque
+        sont aujourd'hui mod\'{e}lis\'{e}s par des coefficients. Une perspective naturelle
+        serait de les recalibrer \`{a} partir d'observations r\'{e}elles afin de rendre les
+        temps de trajet et les scores plus robustes.
+  \item \textbf{Passage \`{a} l'\'{e}chelle}~: le mode \textit{large scale} permet d\'{e}j\`{a}
+        de traiter de grandes missions par g\'{e}n\'{e}ration de candidates et s\'{e}lection
+        CP-SAT. La perspective principale est maintenant d'\'{e}valuer syst\'{e}matiquement
+        la qualit\'{e} des solutions sur plusieurs villes et plusieurs densit\'{e}s.
+  \item \textbf{V\'{e}hicules h\'{e}t\'{e}rog\`{e}nes}~: le solveur supporte d\'{e}j\`{a} un mode
+        multimodal par v\'{e}hicule~; une interface de configuration explicite permettrait
+        aux utilisateurs de mixer voiture, v\'{e}lo et marche dans la m\^{e}me mission.
+  \item \textbf{Exposition des profils avanc\'{e}s}~: les profils Championne et Championne Secteurs
+        ne sont pas accessibles depuis l'interface~; les exposer am\'{e}liorerait les scores
+        obtenables et d\'{e}montrerait l'int\'{e}r\^{e}t du K-Means de pr\'{e}-sectorisation.
+\end{enumerate}
+
+%=======================================================
+\section{Bibliographie}
+\renewcommand{\bibname}{}
+\renewcommand{\refname}{}
+\begin{thebibliography}{9}
+
+  \bibitem[COR09]{cormen}
+    T.\,H. Cormen, C.\,E. Leiserson, R.\,L. Rivest, C. Stein,
+    {\it Introduction to Algorithms}, 3\`{e}me \'{e}d., MIT Press, 2009.
+
+  \bibitem[TOTH02]{toth}
+    P. Toth, D. Vigo (eds.),
+    {\it The Vehicle Routing Problem},
+    SIAM, 2002.
+
+  \bibitem[BOE17]{boeing}
+    G. Boeing, ``OSMnx~: New Methods for Acquiring, Constructing, Analyzing, and
+    Visualizing Complex Street Networks'',
+    {\it Computers, Environment and Urban Systems}, 65, 2017.
+
+  \bibitem[BLOND08]{louvain}
+    V.\,D. Blondel et al.,
+    ``Fast unfolding of communities in large networks'',
+    {\it J. Stat. Mech.}, P10008, 2008.
+
+\end{thebibliography}
+
+%=======================================================
+\section{Webographie}
+\begin{thebibliography}{9}
+
+  \bibitem[OSM]{osm}
+    OpenStreetMap Foundation. \url{https://www.openstreetmap.org}
+
+  \bibitem[OSMNXDOC]{osmnxdoc}
+    G. Boeing, {\it OSMnx Documentation}. \url{https://osmnx.readthedocs.io}
+
+  \bibitem[ORTOOLS]{ortools}
+    Google Developers, {\it OR-Tools Vehicle Routing}.
+    \url{https://developers.google.com/optimization/routing}
+
+  \bibitem[OPENMETEO]{openmeteo}
+    Open-Meteo, {\it Free Weather API}. \url{https://open-meteo.com}
+
+  \bibitem[ADEME]{ademe}
+    ADEME, {\it ImpactCO2 API}. \url{https://impactco2.fr/api/v1/transport}
+
+  \bibitem[FASTAPI]{fastapi}
+    S. Ram\'{i}rez, {\it FastAPI}. \url{https://fastapi.tiangolo.com}
+
+  \bibitem[NEXTJS]{nextjs}
+    Vercel, {\it Next.js 14}. \url{https://nextjs.org}
+
+  \bibitem[NETWORKX]{networkx}
+    A. Hagberg et al., {\it NetworkX}. \url{https://networkx.org}
+
+  \bibitem[OVERPASS]{overpass}
+    Overpass API. \url{https://overpass-api.de}
+
+  \bibitem[MAPBOX]{mapbox}
+    Mapbox, {\it Geocoding API}. \url{https://docs.mapbox.com/api/search/geocoding}
+
+\end{thebibliography}
+
+%=======================================================
+\section{Annexes}
+\appendix
+\makeatletter
+\def\@seccntformat#1{Annexe~\csname the#1\endcsname:\quad}
+\makeatother
+
+\section{Commandes utiles}
+
+\begin{lstlisting}[language=bash]
+# Installation et lancement
+cd /home/bekkari/Documents/Graphes/Noel
+docker-compose up --build
+
+# Tests backend
+PYTHONPATH=. pytest -q
+
+# Tests frontend E2E
+cd frontend
+npx playwright test
+\end{lstlisting}
+
+\section{Parcours utilisateur synth\'{e}tique}
+
+\begin{enumerate}
+  \item Ouvrir \texttt{http://localhost:3000/solver}.
+  \item Taper une adresse~: l'auto-compl\'{e}tion Mapbox propose des suggestions.
+  \item R\'{e}gler le rayon, le nombre de colis, le budget, le profil IA.
+  \item Lancer le calcul de la tourn\'{e}e~: la barre de progression
+        affiche les \'{e}tapes (OSM, matrices, OR-Tools).
+  \item Consulter la carte et le score. Simuler un incident si d\'{e}sir\'{e}.
+  \item Acc\'{e}der \`{a} la page \texttt{Explore} pour visualiser Dijkstra, A* et Floyd-Warshall.
+\end{enumerate}
+
+\end{document}
